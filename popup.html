@@ -1,0 +1,172 @@
+<!DOCTYPE html>
+<html lang="en">
+  <head>
+    <meta charset="utf-8" />
+    <meta name="viewport" content="width=device-width, initial-scale=1" />
+    <title>SubSell Unread Diagnostic</title>
+    <style>
+      :root {
+        color-scheme: light dark;
+      }
+      body {
+        font-family: -apple-system, Segoe UI, Roboto, Helvetica, Arial, sans-serif;
+        width: 460px;
+        margin: 0;
+        padding: 10px 12px 14px;
+        font-size: 12px;
+        line-height: 1.4;
+      }
+      h1 {
+        font-size: 14px;
+        margin: 0 0 2px;
+      }
+      .sub {
+        color: #777;
+        margin: 0 0 10px;
+        font-size: 11px;
+      }
+      .row {
+        display: flex;
+        gap: 8px;
+        align-items: center;
+        flex-wrap: wrap;
+        margin-bottom: 8px;
+      }
+      button {
+        font-size: 12px;
+        padding: 6px 10px;
+        border-radius: 6px;
+        border: 1px solid #888;
+        background: #f4f4f4;
+        cursor: pointer;
+      }
+      button.primary {
+        background: #1877f2;
+        color: #fff;
+        border-color: #1877f2;
+      }
+      button:active {
+        transform: translateY(1px);
+      }
+      .panel {
+        border: 1px solid #ccc;
+        border-radius: 6px;
+        padding: 8px;
+        margin-bottom: 10px;
+        background: rgba(127, 127, 127, 0.06);
+      }
+      .panel h2 {
+        font-size: 12px;
+        margin: 0 0 6px;
+        text-transform: uppercase;
+        letter-spacing: 0.04em;
+        color: #555;
+      }
+      table {
+        border-collapse: collapse;
+        width: 100%;
+        font-size: 11px;
+      }
+      th,
+      td {
+        border: 1px solid #ddd;
+        padding: 3px 5px;
+        text-align: left;
+        vertical-align: top;
+      }
+      th {
+        background: rgba(127, 127, 127, 0.12);
+        position: sticky;
+        top: 0;
+      }
+      .scrollx {
+        overflow-x: auto;
+        max-height: 220px;
+        overflow-y: auto;
+      }
+      .name {
+        max-width: 120px;
+        overflow: hidden;
+        text-overflow: ellipsis;
+        white-space: nowrap;
+      }
+      .kv {
+        display: grid;
+        grid-template-columns: auto 1fr;
+        gap: 2px 8px;
+      }
+      .kv div:nth-child(odd) {
+        color: #777;
+      }
+      textarea {
+        width: 100%;
+        height: 120px;
+        font-family: ui-monospace, SFMono-Regular, Menlo, Consolas, monospace;
+        font-size: 10px;
+        box-sizing: border-box;
+      }
+      .muted {
+        color: #999;
+      }
+      .ok {
+        color: #1a8f3c;
+      }
+      .warn {
+        color: #c47f00;
+      }
+    </style>
+  </head>
+  <body>
+    <h1>SubSell — Unread Detection Diagnostic</h1>
+    <p class="sub">
+      Open this on <b>messenger.com</b> (or facebook.com/messages) with the
+      Marketplace inbox visible, then click <b>Scan now</b>.
+    </p>
+
+    <div class="row">
+      <button id="scan" class="primary">Scan now</button>
+      <button id="copy">Copy ALL</button>
+      <button id="refresh">Reload last</button>
+      <span id="status" class="muted"></span>
+    </div>
+
+    <div class="panel">
+      <h2>Debug tick</h2>
+      <div id="tick" class="kv"><div class="muted">No scan yet.</div></div>
+    </div>
+
+    <div class="panel">
+      <h2>Quick compare (one row per conversation)</h2>
+      <p class="sub" style="margin: 0 0 6px">
+        Find your known-UNREAD buyer by name, compare its row to a read one,
+        and look for the ONE column that differs.
+      </p>
+      <div class="scrollx">
+        <table id="fp">
+          <thead>
+            <tr>
+              <th>#</th>
+              <th>name</th>
+              <th>maxWeight</th>
+              <th>bold#</th>
+              <th>small#</th>
+              <th>dotBg</th>
+              <th>pseudoBg</th>
+              <th>svg#</th>
+              <th>data#</th>
+              <th>aria-label</th>
+            </tr>
+          </thead>
+          <tbody></tbody>
+        </table>
+      </div>
+    </div>
+
+    <div class="panel">
+      <h2>Full dump (paste this back)</h2>
+      <textarea id="dump" readonly placeholder="Run a scan first…"></textarea>
+    </div>
+
+    <script src="popup.js"></script>
+  </body>
+</html>

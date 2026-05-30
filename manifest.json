@@ -1,0 +1,26 @@
+{
+  "manifest_version": 3,
+  "name": "SubSell Marketplace — Unread Diagnostic",
+  "version": "0.1.0",
+  "description": "Diagnostic-first tool to discover the DOM signal that distinguishes UNREAD Facebook Marketplace conversations from read ones. No reply pipeline yet — detection only.",
+  "permissions": ["storage", "activeTab"],
+  "host_permissions": [
+    "https://*.messenger.com/*",
+    "https://*.facebook.com/*"
+  ],
+  "action": {
+    "default_popup": "popup.html",
+    "default_title": "SubSell Unread Diagnostic"
+  },
+  "content_scripts": [
+    {
+      "matches": [
+        "https://*.messenger.com/*",
+        "https://www.facebook.com/messages/*",
+        "https://www.facebook.com/marketplace/*"
+      ],
+      "js": ["content.js"],
+      "run_at": "document_idle"
+    }
+  ]
+}
