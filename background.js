@@ -357,6 +357,11 @@ chrome.runtime.onMessage.addListener((msg, _sender, sendResponse) => {
             sendResponse({ ok: true, action: "human", reason: parsed.reason, raw: result.text });
             break;
           }
+          if (parsed.kind === "empty") {
+            // Nothing to send — don't consume a rate-limit slot.
+            sendResponse({ ok: true, blocked: true, reason: "empty reply from model" });
+            break;
+          }
           // text or video both consume a rate-limit slot (they get sent)
           await incrementCounters();
           sendResponse({ ok: true, action: parsed.kind, ...parsed, raw: result.text });

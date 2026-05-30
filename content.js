@@ -497,6 +497,10 @@
       const ok = await sendVideo(reply.url, reply.caption, settings);
       updateTick({ lastAction: ok ? "video sent" : "video failed", lastReplySent: ok ? `[VIDEO] ${reply.url}` : null });
     } else {
+      if (typeof reply.text !== "string" || !reply.text.trim()) {
+        updateTick({ lastAction: "skipped: empty reply text" });
+        return;
+      }
       const composer = findComposer();
       if (!composer) {
         updateTick({ lastError: "composer not found" });
