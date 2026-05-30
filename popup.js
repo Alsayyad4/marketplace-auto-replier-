@@ -1,76 +1,52 @@
-/* SubSell — diagnostic popup. Renders the latest dump from chrome.storage
- * and lets the human trigger a fresh scan + copy the full JSON. */
+/* SubSell — popup: on/off, status, delay slider, live debug, diagnostic. */
 (() => {
   "use strict";
-
   const $ = (id) => document.getElementById(id);
-  const statusEl = $("status");
-  const dumpEl = $("dump");
-  const fpBody = document.querySelector("#fp tbody");
-  const tickEl = $("tick");
 
-  let lastDump = null;
+  let settings = null;
 
-  function setStatus(msg, cls) {
-    statusEl.textContent = msg || "";
-    statusEl.className = cls || "muted";
+  function getSettings() {
+    return new Promise((r) => chrome.storage.local.get(["settings"], (res) => r(res.settings || {})));
+  }
+  function saveSettings(s) {
+    return new Promise((r) => chrome.storage.local.set({ settings: s }, r));
   }
 
-  function cell(v) {
-    const td = document.createElement("td");
-    td.textContent = v == null ? "" : String(v);
-    return td;
+  function renderStatePill(on) {
+    const pill = $("statePill");
+    pill.textContent = on ? "ON" : "OFF";
+    pill.className = "pill " + (on ? "on" : "off");
+    $("toggle").textContent = on ? "Turn OFF" : "Turn ON";
   }
 
-  function renderFingerprints(fps) {
-    fpBody.innerHTML = "";
-    if (!fps || !fps.length) {
-      const tr = document.createElement("tr");
-      const td = document.createElement("td");
-      td.colSpan = 10;
-      td.className = "muted";
-      td.textContent = "No marketplace anchors captured.";
-      tr.appendChild(td);
-      fpBody.appendChild(tr);
-      return;
-    }
-    for (const f of fps) {
-      const tr = document.createElement("tr");
-      tr.appendChild(cell(f.index));
-      const nameTd = cell(f.name);
-      nameTd.className = "name";
-      nameTd.title = f.name || "";
-      tr.appendChild(nameTd);
-      tr.appendChild(cell(f.maxFontWeight));
-      tr.appendChild(cell(f.boldSpanCount));
-      tr.appendChild(cell(f.smallElementCount));
-      tr.appendChild(cell(f.coloredDotBg));
-      tr.appendChild(cell(f.pseudoDotBg));
-      tr.appendChild(cell(f.svgCount));
-      tr.appendChild(cell(f.dataAttrCount));
-      const aria = cell(f.ariaLabel);
-      aria.className = "name";
-      aria.title = f.ariaLabel || "";
-      tr.appendChild(aria);
-      fpBody.appendChild(tr);
-    }
+  async function refreshStatus() {
+    chrome.runtime.sendMessage({ type: "GET_STATUS" }, (s) => {
+      if (chrome.runtime.lastError || !s || !s.ok) return;
+      renderStatePill(s.enabled);
+      $("apiKey").textContent = s.apiKeySet ? "set ✓" : "NOT set";
+      $("apiKey").className = s.apiKeySet ? "ok" : "bad";
+      $("hour").textContent = `${s.hourCount} / ${s.hourlyCap}`;
+      $("day").textContent = `${s.dayCount} / ${s.dailyCap}`;
+      $("hours").textContent = s.withinHours ? "open ✓" : "closed";
+      $("hours").className = s.withinHours ? "ok" : "warn";
+    });
   }
 
   function renderTick(tick) {
-    tickEl.innerHTML = "";
+    const el = $("tick");
+    el.innerHTML = "";
     if (!tick) {
-      tickEl.innerHTML = '<div class="muted">No scan yet.</div>';
+      el.innerHTML = '<div class="muted">No scan yet.</div>';
       return;
     }
     const pairs = [
       ["last scan", tick.lastScanTime],
-      ["url", tick.url],
       ["marketplace anchors", tick.marketplaceAnchorCount],
-      ["captured", tick.capturedCount],
-      ["reason", tick.reason],
-      ["unread count", tick.unreadCount === null ? "(detection TBD)" : tick.unreadCount],
-      ["signal matched", tick.signalMatched || "(none yet)"],
-      ["last action", tick.lastAction],
+      ["unread count", tick.unreadCount],
+      ["current thread", tick.currentThread || "—"],
+      ["signal matched", tick.signalMatched || "—"],
+      ["last action", tick.lastAction || "—"],
+      ["last reply", tick.lastReplySent || "—"],
       ["last error", tick.lastError || "—"],
     ];
     for (const [k, v] of pairs) {
@@ -78,91 +54,135 @@
       a.textContent = k;
       const b = document.createElement("div");
       b.textContent = v == null ? "" : String(v);
-      tickEl.appendChild(a);
-      tickEl.appendChild(b);
+      if (k === "last error" && tick.lastError) b.className = "bad";
+      el.appendChild(a);
+      el.appendChild(b);
     }
   }
 
-  function render(dump, tick) {
-    lastDump = dump || null;
-    renderTick(tick);
-    if (dump) {
-      renderFingerprints(dump.fingerprints);
-      dumpEl.value = JSON.stringify(dump, null, 2);
+  function cell(v) {
+    const td = document.createElement("td");
+    td.textContent = v == null ? "" : String(v);
+    return td;
+  }
+  function renderFingerprints(fps) {
+    const body = document.querySelector("#fp tbody");
+    body.innerHTML = "";
+    if (!fps || !fps.length) {
+      const tr = document.createElement("tr");
+      const td = document.createElement("td");
+      td.colSpan = 9;
+      td.className = "muted";
+      td.textContent = "No marketplace anchors captured.";
+      tr.appendChild(td);
+      body.appendChild(tr);
+      return;
+    }
+    for (const f of fps) {
+      const tr = document.createElement("tr");
+      tr.appendChild(cell(f.index));
+      const n = cell(f.name);
+      n.className = "name";
+      n.title = f.name || "";
+      tr.appendChild(n);
+      tr.appendChild(cell(f.unread ? "YES" : ""));
+      tr.appendChild(cell(f.signal));
+      tr.appendChild(cell(f.maxFontWeight));
+      tr.appendChild(cell(f.coloredDotBg));
+      tr.appendChild(cell(f.pseudoDotBg));
+      tr.appendChild(cell(f.svgCount));
+      const a = cell(f.ariaLabel);
+      a.className = "name";
+      a.title = f.ariaLabel || "";
+      tr.appendChild(a);
+      body.appendChild(tr);
     }
   }
 
-  function loadFromStorage() {
-    chrome.storage.local.get(["diagnosticDump", "debugTick"], (res) => {
-      render(res.diagnosticDump, res.debugTick);
+  function loadStored() {
+    chrome.storage.local.get(["debugTick", "diagnosticDump"], (res) => {
+      renderTick(res.debugTick);
+      if (res.diagnosticDump) {
+        renderFingerprints(res.diagnosticDump.fingerprints);
+        $("dump").value = JSON.stringify(res.diagnosticDump, null, 2);
+      }
     });
   }
 
-  async function activeTab() {
-    const [tab] = await chrome.tabs.query({ active: true, currentWindow: true });
-    return tab;
+  async function toggle() {
+    settings = await getSettings();
+    settings.enabled = !settings.enabled;
+    await saveSettings(settings);
+    renderStatePill(settings.enabled);
+    refreshStatus();
   }
 
+  function activeTab() {
+    return new Promise((r) => chrome.tabs.query({ active: true, currentWindow: true }, (t) => r(t[0])));
+  }
   async function scanNow() {
-    setStatus("Scanning…");
-    try {
-      const tab = await activeTab();
-      if (!tab || !tab.id) {
-        setStatus("No active tab.", "warn");
+    $("diagStatus").textContent = "Scanning…";
+    const tab = await activeTab();
+    if (!tab) {
+      $("diagStatus").textContent = "No tab.";
+      return;
+    }
+    chrome.tabs.sendMessage(tab.id, { type: "SCAN" }, (resp) => {
+      if (chrome.runtime.lastError) {
+        $("diagStatus").textContent = "Open messenger.com & reload the tab.";
+        $("diagStatus").className = "warn";
         return;
       }
-      chrome.tabs.sendMessage(tab.id, { type: "SCAN" }, (resp) => {
-        if (chrome.runtime.lastError) {
-          setStatus(
-            "Content script not loaded here. Open messenger.com and reload the tab.",
-            "warn"
-          );
-          return;
-        }
-        if (resp && resp.ok) {
-          render(resp.dump, {
-            lastScanTime: resp.dump.capturedAt,
-            url: resp.dump.url,
-            marketplaceAnchorCount: resp.dump.anchorCount,
-            capturedCount: resp.dump.capturedCount,
-            reason: resp.dump.reason,
-            unreadCount: null,
-            signalMatched: null,
-            lastAction: "diagnostic-scan",
-            lastError: null,
-          });
-          setStatus(
-            `Captured ${resp.dump.capturedCount}/${resp.dump.anchorCount} anchors.`,
-            "ok"
-          );
-        } else {
-          setStatus("Scan returned no data.", "warn");
-        }
-      });
-    } catch (e) {
-      setStatus("Error: " + e.message, "warn");
-    }
+      if (resp && resp.ok) {
+        renderFingerprints(resp.dump.fingerprints);
+        $("dump").value = JSON.stringify(resp.dump, null, 2);
+        $("diagStatus").textContent = `Captured ${resp.dump.capturedCount}/${resp.dump.anchorCount}.`;
+        $("diagStatus").className = "ok";
+      }
+    });
   }
-
   async function copyAll() {
-    if (!dumpEl.value) {
-      setStatus("Nothing to copy — scan first.", "warn");
+    const v = $("dump").value;
+    if (!v) {
+      $("diagStatus").textContent = "Scan first.";
       return;
     }
     try {
-      await navigator.clipboard.writeText(dumpEl.value);
-      setStatus("Copied full dump to clipboard.", "ok");
+      await navigator.clipboard.writeText(v);
+      $("diagStatus").textContent = "Copied.";
+      $("diagStatus").className = "ok";
     } catch (e) {
-      // Fallback: select the textarea so the user can Ctrl+C.
-      dumpEl.focus();
-      dumpEl.select();
-      setStatus("Press Ctrl+C / Cmd+C to copy (selected).", "warn");
+      $("dump").focus();
+      $("dump").select();
+      $("diagStatus").textContent = "Press Ctrl+C.";
     }
   }
 
+  async function initDelay() {
+    settings = await getSettings();
+    const d = settings.responseDelaySec != null ? settings.responseDelaySec : 30;
+    $("delay").value = d;
+    $("delayVal").textContent = d;
+  }
+  async function onDelay() {
+    settings = await getSettings();
+    settings.responseDelaySec = Number($("delay").value);
+    $("delayVal").textContent = settings.responseDelaySec;
+    await saveSettings(settings);
+  }
+
+  $("toggle").addEventListener("click", toggle);
   $("scan").addEventListener("click", scanNow);
   $("copy").addEventListener("click", copyAll);
-  $("refresh").addEventListener("click", loadFromStorage);
+  $("delay").addEventListener("input", onDelay);
+  $("openOptions").addEventListener("click", (e) => {
+    e.preventDefault();
+    chrome.runtime.openOptionsPage();
+  });
 
-  loadFromStorage();
+  loadStored();
+  refreshStatus();
+  initDelay();
+  setInterval(loadStored, 2000);
+  setInterval(refreshStatus, 3000);
 })();

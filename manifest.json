@@ -1,17 +1,33 @@
 {
   "manifest_version": 3,
-  "name": "SubSell Marketplace — Unread Diagnostic",
-  "version": "0.1.0",
-  "description": "Diagnostic-first tool to discover the DOM signal that distinguishes UNREAD Facebook Marketplace conversations from read ones. No reply pipeline yet — detection only.",
-  "permissions": ["storage", "activeTab"],
+  "name": "SubSell Marketplace Auto-Reply",
+  "version": "0.2.0",
+  "description": "Auto-replies to Facebook Marketplace buyer messages using the Anthropic Claude API. Bilingual FR/EN, casual Quebec tone. Single-user, local, no backend.",
+  "permissions": ["storage", "alarms", "notifications", "activeTab", "tabs"],
   "host_permissions": [
     "https://*.messenger.com/*",
-    "https://*.facebook.com/*"
+    "https://*.facebook.com/*",
+    "https://api.anthropic.com/*",
+    "<all_urls>"
   ],
+  "background": {
+    "service_worker": "background.js"
+  },
+  "icons": {
+    "16": "icon16.png",
+    "48": "icon48.png",
+    "128": "icon128.png"
+  },
   "action": {
     "default_popup": "popup.html",
-    "default_title": "SubSell Unread Diagnostic"
+    "default_title": "SubSell Auto-Reply",
+    "default_icon": {
+      "16": "icon16.png",
+      "48": "icon48.png",
+      "128": "icon128.png"
+    }
   },
+  "options_page": "options.html",
   "content_scripts": [
     {
       "matches": [
