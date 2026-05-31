@@ -171,7 +171,50 @@
     await saveSettings(settings);
   }
 
+  /* ----- Open Marketplace: force-open the Messenger Marketplace inbox -----
+   * Whatever Chrome profile is signed in handles the login automatically.
+   * If a Messenger/messages tab is already open we reuse + focus it (and
+   * nudge it to the Marketplace folder) instead of stacking duplicates. */
+  const MP_INBOX_URL = "https://www.messenger.com/marketplace/";
+  const EXISTING_TAB_MATCH = [
+    "https://*.messenger.com/*",
+    "https://www.facebook.com/messages/*",
+  ];
+
+  function openMarketplace() {
+    const status = $("openMpStatus");
+    status.className = "muted";
+    status.textContent = "Opening…";
+    chrome.tabs.query({ url: EXISTING_TAB_MATCH }, (tabs) => {
+      if (chrome.runtime.lastError) {
+        // No tabs permission / query failed — just open a fresh tab.
+        chrome.tabs.create({ url: MP_INBOX_URL, active: true });
+        status.textContent = "Opened.";
+        status.className = "ok";
+        return;
+      }
+      // Prefer a tab already on the Marketplace folder; else any messages tab.
+      const onMp = tabs.find((t) => (t.url || "").includes("/marketplace"));
+      const target = onMp || tabs[0];
+      if (target) {
+        const updates = { active: true };
+        // If it's a messages tab but not on Marketplace, steer it there.
+        if (!onMp) updates.url = MP_INBOX_URL;
+        chrome.tabs.update(target.id, updates, () => {
+          if (target.windowId != null) chrome.windows.update(target.windowId, { focused: true });
+        });
+        status.textContent = onMp ? "Focused existing tab." : "Reused tab → Marketplace.";
+        status.className = "ok";
+      } else {
+        chrome.tabs.create({ url: MP_INBOX_URL, active: true });
+        status.textContent = "Opened new tab.";
+        status.className = "ok";
+      }
+    });
+  }
+
   $("toggle").addEventListener("click", toggle);
+  $("openMp").addEventListener("click", openMarketplace);
   $("scan").addEventListener("click", scanNow);
   $("copy").addEventListener("click", copyAll);
   $("delay").addEventListener("input", onDelay);
