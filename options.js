@@ -24,6 +24,16 @@
       "Used iPhone sales in Montreal. Pickup at 757 Rue Beaubien E, Montréal. Cash or e-transfer.",
     instructions:
       "Be friendly and concise. Auto-detect the buyer's language (French or English) and reply in the same language; for French use casual Quebec French. Quote prices from the listings. Never discount more than 10% without flagging a human. If the buyer is rude, scammy, or asking something unusual, return [HUMAN] with a short reason.",
+    examples: "",
+    offPlatformGuard: true,
+    humanCadence: true,
+    skipChance: 0.12,
+    breakChance: 0.05,
+    breakMinMin: 3,
+    breakMaxMin: 18,
+    warmupEnabled: true,
+    warmupDays: 7,
+    warmupStartCap: 10,
     listings: [],
     followUps: [],
     videos: [],
@@ -59,6 +69,16 @@
     ["businessHoursText", "value"],
     ["businessInfo", "value"],
     ["instructions", "value"],
+    ["examples", "value"],
+    ["offPlatformGuard", "checked"],
+    ["humanCadence", "checked"],
+    ["skipChance", "number"],
+    ["breakChance", "number"],
+    ["breakMinMin", "number"],
+    ["breakMaxMin", "number"],
+    ["warmupEnabled", "checked"],
+    ["warmupDays", "number"],
+    ["warmupStartCap", "number"],
   ];
 
   function fieldsToForm() {
@@ -236,6 +256,65 @@
       );
     });
   });
+
+  /* ----- activity log ----- */
+  function esc(v) {
+    return v == null ? "" : String(v);
+  }
+  function renderLog(entries) {
+    const tbody = document.querySelector("#logTable tbody");
+    tbody.innerHTML = "";
+    const rows = (entries || []).slice().reverse(); // most recent first
+    if (!rows.length) {
+      const tr = document.createElement("tr");
+      const td = document.createElement("td");
+      td.colSpan = 5;
+      td.textContent = "No activity logged yet.";
+      tr.appendChild(td);
+      tbody.appendChild(tr);
+      return;
+    }
+    for (const e of rows) {
+      const tr = document.createElement("tr");
+      const when = e.at ? new Date(e.at).toLocaleString() : "";
+      for (const v of [when, e.action, e.thread, e.buyer, e.reply]) {
+        const td = document.createElement("td");
+        td.textContent = esc(v);
+        tr.appendChild(td);
+      }
+      tbody.appendChild(tr);
+    }
+  }
+  function loadLog() {
+    $("logStatus").textContent = "Loading…";
+    chrome.runtime.sendMessage({ type: "GET_LOG" }, (resp) => {
+      if (chrome.runtime.lastError || !resp || !resp.ok) {
+        $("logStatus").textContent = "Could not load log.";
+        return;
+      }
+      renderLog(resp.log);
+      $("logStatus").textContent = `${resp.log.length} entr${resp.log.length === 1 ? "y" : "ies"}.`;
+    });
+  }
+  $("refreshLog").addEventListener("click", loadLog);
+  $("clearLog").addEventListener("click", () => {
+    if (!confirm("Clear the entire activity log for this account?")) return;
+    chrome.runtime.sendMessage({ type: "CLEAR_LOG" }, () => loadLog());
+  });
+  $("exportLog").addEventListener("click", () => {
+    chrome.runtime.sendMessage({ type: "GET_LOG" }, (resp) => {
+      const data = resp && resp.ok ? resp.log : [];
+      const blob = new Blob([JSON.stringify(data, null, 2)], { type: "application/json" });
+      const url = URL.createObjectURL(blob);
+      const a = document.createElement("a");
+      a.href = url;
+      a.download = "subsell-activity-log.json";
+      a.click();
+      URL.revokeObjectURL(url);
+    });
+  });
+  // Auto-load the log when its tab is opened.
+  document.querySelector('.tab[data-tab="log"]').addEventListener("click", loadLog);
 
   /* ----- save / load ----- */
   function save() {

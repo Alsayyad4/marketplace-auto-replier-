@@ -39,6 +39,18 @@ const DEFAULTS = {
     "Used iPhone sales in Montreal. Pickup at 757 Rue Beaubien E, Montréal. Cash or e-transfer.",
   instructions:
     "Be friendly and concise. Auto-detect the buyer's language (French or English) and reply in the same language; for French use casual Quebec French (tutoiement, 'allô', 'parfait', 'à+'). Quote prices from the listings. Never discount more than 10% without flagging a human. If the buyer is rude, scammy, or asking something unusual, return [HUMAN] with a short reason.",
+  examples: "", // few-shot buyer->reply pairs the user pastes to teach tone/video/escalation
+  offPlatformGuard: true, // hard rules: no phone numbers / links / "contact me elsewhere"
+  // human cadence (content.js reads these)
+  humanCadence: true,
+  skipChance: 0.12, // chance to skip a cycle even when something is unread (looks human)
+  breakChance: 0.05, // chance per cycle to start a "break"
+  breakMinMin: 3, // break length min (minutes)
+  breakMaxMin: 18, // break length max (minutes)
+  // warm-up (new accounts ramp volume over days)
+  warmupEnabled: true,
+  warmupDays: 7,
+  warmupStartCap: 10, // daily cap on day 0
   listings: [],
   followUps: [],
   videos: [],
@@ -84,11 +96,39 @@ function rollWindows(c, now) {
   return c;
 }
 
+/* First-run timestamp — used to compute warm-up day for a fresh account. */
+function getInstallTs() {
+  return new Promise((resolve) => {
+    chrome.storage.local.get(["installTs"], (res) => {
+      if (res.installTs) return resolve(res.installTs);
+      const ts = Date.now();
+      chrome.storage.local.set({ installTs: ts }, () => resolve(ts));
+    });
+  });
+}
+
+/* Effective daily cap: during warm-up, ramp linearly from warmupStartCap to
+ * the full dailyCap over warmupDays. New accounts start gentle, looks organic. */
+async function effectiveDailyCap(settings) {
+  if (!settings.warmupEnabled) return settings.dailyCap;
+  const installTs = await getInstallTs();
+  const dayNum = Math.floor((Date.now() - installTs) / 86400000); // 0-based
+  if (dayNum >= settings.warmupDays) return settings.dailyCap;
+  const start = settings.warmupStartCap || 10;
+  const full = settings.dailyCap;
+  const frac = settings.warmupDays > 0 ? dayNum / settings.warmupDays : 1;
+  return Math.max(start, Math.round(start + (full - start) * frac));
+}
+
 async function checkRateLimit(settings) {
   const now = Date.now();
   const c = rollWindows(await getCounters(), now);
   if (c.hourCount >= settings.hourlyCap) return { ok: false, reason: "hourly cap reached" };
-  if (c.dayCount >= settings.dailyCap) return { ok: false, reason: "daily cap reached" };
+  const dayCap = await effectiveDailyCap(settings);
+  if (c.dayCount >= dayCap) {
+    const warming = dayCap < settings.dailyCap;
+    return { ok: false, reason: warming ? `warm-up daily cap reached (${dayCap})` : "daily cap reached" };
+  }
   return { ok: true, counters: c };
 }
 
@@ -134,10 +174,26 @@ function buildSystemPrompt(settings) {
 
   lines.push("");
   lines.push("SPECIAL REPLY TOKENS (use at most one, alone on the first line):");
-  lines.push("- [HUMAN] <reason> — when you should NOT auto-reply: scams, hard negotiation, weird/risky requests. The human is notified instead.");
-  lines.push("- [VIDEO:<url>] <optional caption> — to send a demo video. Use a videoUrl from the listings/video library when the buyer asks to see the phone.");
+  lines.push("- [HUMAN] <reason> — when you should NOT auto-reply: scams, hard negotiation past the discount floor, payment/shipping requests, off-platform contact pressure, address/meetup logistics, or anything weird/risky. The human is notified instead.");
+  lines.push("- [VIDEO:<url>] <optional caption> — to send a demo video. Use a videoUrl from the listings/video library when the buyer asks to see the phone working/condition. VARY the caption each time; never reuse the same caption wording.");
+
+  if (settings.offPlatformGuard) {
+    lines.push("");
+    lines.push("PLATFORM SAFETY RULES (strict — Facebook flags these):");
+    lines.push("- NEVER write a phone number, email, WhatsApp, Telegram, or any external link/URL.");
+    lines.push("- NEVER say 'text me at', 'call me', 'contact me on …', or push the chat off Marketplace.");
+    lines.push("- Keep the whole conversation inside Messenger. If the buyer insists on moving off-platform or wants your number, return [HUMAN] instead of replying.");
+    lines.push("- Don't paste identical canned text; vary your wording naturally between buyers.");
+  }
+
+  if (settings.examples && settings.examples.trim()) {
+    lines.push("");
+    lines.push("EXAMPLE CONVERSATIONS (mimic this tone, format, and decisions — including when to send [VIDEO] or escalate [HUMAN]). Do not copy verbatim; adapt to the actual buyer:");
+    lines.push(settings.examples.trim());
+  }
+
   lines.push("");
-  lines.push("Reply with the message text only (or one token). Keep it short and human, like a real seller texting.");
+  lines.push("Reply with the message text only (or one token). Keep it short and human, like a real seller texting on their phone — contractions, casual, sometimes a one-word answer. Never reuse the exact same opening sentence twice.");
   return lines.join("\n");
 }
 
@@ -310,6 +366,22 @@ function notifyHuman(reason, threadName) {
   });
 }
 
+/* ---------------- reply log ---------------- */
+// Ring buffer of every send (and notable skip) so the operator can audit what
+// each account is saying. Capped so storage doesn't grow unbounded.
+const LOG_MAX = 500;
+
+function appendLog(entry) {
+  return new Promise((resolve) => {
+    chrome.storage.local.get(["replyLog"], (res) => {
+      const logArr = res.replyLog || [];
+      logArr.push(Object.assign({ at: new Date().toISOString() }, entry));
+      if (logArr.length > LOG_MAX) logArr.splice(0, logArr.length - LOG_MAX);
+      chrome.storage.local.set({ replyLog: logArr }, resolve);
+    });
+  });
+}
+
 /* ---------------- message router ---------------- */
 
 chrome.runtime.onMessage.addListener((msg, _sender, sendResponse) => {
@@ -323,6 +395,7 @@ chrome.runtime.onMessage.addListener((msg, _sender, sendResponse) => {
         case "GET_STATUS": {
           const settings = await getSettings();
           const counters = rollWindows(await getCounters(), Date.now());
+          const dayCap = await effectiveDailyCap(settings);
           sendResponse({
             ok: true,
             enabled: settings.enabled,
@@ -330,7 +403,9 @@ chrome.runtime.onMessage.addListener((msg, _sender, sendResponse) => {
             hourCount: counters.hourCount,
             dayCount: counters.dayCount,
             hourlyCap: settings.hourlyCap,
-            dailyCap: settings.dailyCap,
+            dailyCap: dayCap,
+            fullDailyCap: settings.dailyCap,
+            warming: dayCap < settings.dailyCap,
             withinHours: withinBusinessHours(settings),
           });
           break;
@@ -354,6 +429,12 @@ chrome.runtime.onMessage.addListener((msg, _sender, sendResponse) => {
           const parsed = parseReply(result.text);
           if (parsed.kind === "human") {
             notifyHuman(parsed.reason, msg.threadName);
+            await appendLog({
+              thread: msg.threadName,
+              buyer: msg.buyerMessage,
+              action: "human",
+              reply: "[HUMAN] " + parsed.reason,
+            });
             sendResponse({ ok: true, action: "human", reason: parsed.reason, raw: result.text });
             break;
           }
@@ -364,6 +445,12 @@ chrome.runtime.onMessage.addListener((msg, _sender, sendResponse) => {
           }
           // text or video both consume a rate-limit slot (they get sent)
           await incrementCounters();
+          await appendLog({
+            thread: msg.threadName,
+            buyer: msg.buyerMessage,
+            action: parsed.kind,
+            reply: parsed.kind === "video" ? `[VIDEO ${parsed.url}] ${parsed.caption || ""}` : parsed.text,
+          });
           sendResponse({ ok: true, action: parsed.kind, ...parsed, raw: result.text });
           break;
         }
@@ -393,6 +480,22 @@ chrome.runtime.onMessage.addListener((msg, _sender, sendResponse) => {
           notifyHuman(msg.reason, msg.threadName);
           sendResponse({ ok: true });
           break;
+        }
+        case "LOG_EVENT": {
+          // content.js logs follow-ups and failures here.
+          await appendLog(msg.entry || {});
+          sendResponse({ ok: true });
+          break;
+        }
+        case "GET_LOG": {
+          chrome.storage.local.get(["replyLog"], (res) =>
+            sendResponse({ ok: true, log: res.replyLog || [] })
+          );
+          return true; // async storage callback
+        }
+        case "CLEAR_LOG": {
+          chrome.storage.local.set({ replyLog: [] }, () => sendResponse({ ok: true }));
+          return true;
         }
         default:
           sendResponse({ ok: false, error: "unknown message type" });
