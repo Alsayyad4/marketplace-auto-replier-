@@ -1,0 +1,141 @@
+<!DOCTYPE html>
+<html lang="en">
+  <head>
+    <meta charset="utf-8" />
+    <meta name="viewport" content="width=device-width, initial-scale=1" />
+    <title>SubSell — Settings</title>
+    <style>
+      :root { color-scheme: light dark; }
+      body { font-family: -apple-system, Segoe UI, Roboto, Arial, sans-serif; margin: 0; font-size: 13px; line-height: 1.5; }
+      header { padding: 12px 16px; border-bottom: 1px solid #ccc; display: flex; align-items: center; gap: 12px; }
+      header h1 { font-size: 16px; margin: 0; }
+      .tabs { display: flex; gap: 4px; padding: 8px 16px 0; flex-wrap: wrap; border-bottom: 1px solid #ccc; }
+      .tab { padding: 8px 14px; border: 1px solid #ccc; border-bottom: none; border-radius: 6px 6px 0 0; cursor: pointer; background: rgba(127,127,127,.06); }
+      .tab.active { background: #1877f2; color: #fff; border-color: #1877f2; }
+      main { padding: 16px; max-width: 920px; }
+      section { display: none; }
+      section.active { display: block; }
+      label { display: block; margin: 10px 0 3px; font-weight: 600; }
+      .hint { font-weight: 400; color: #888; font-size: 12px; }
+      input[type="text"], input[type="password"], input[type="number"], select, textarea { width: 100%; max-width: 520px; box-sizing: border-box; padding: 6px 8px; border: 1px solid #aaa; border-radius: 6px; font-size: 13px; }
+      textarea { min-height: 90px; font-family: inherit; }
+      .inline { display: flex; gap: 16px; flex-wrap: wrap; }
+      .inline > div { flex: 1; min-width: 160px; }
+      table { border-collapse: collapse; width: 100%; margin-top: 8px; }
+      th, td { border: 1px solid #ccc; padding: 4px 6px; text-align: left; }
+      th { background: rgba(127,127,127,.12); }
+      td input, td textarea { max-width: none; width: 100%; }
+      button { font-size: 13px; padding: 7px 12px; border-radius: 6px; border: 1px solid #888; background: #f4f4f4; cursor: pointer; }
+      button.primary { background: #1877f2; color: #fff; border-color: #1877f2; }
+      button.danger { color: #c0392b; }
+      .bar { position: sticky; bottom: 0; background: var(--bg, #fff); padding: 10px 16px; border-top: 1px solid #ccc; display: flex; gap: 10px; align-items: center; }
+      .saved { color: #1a8f3c; }
+      .row { display: flex; gap: 8px; align-items: center; margin: 8px 0; flex-wrap: wrap; }
+      pre { background: rgba(127,127,127,.1); padding: 10px; border-radius: 6px; white-space: pre-wrap; word-break: break-word; }
+      .check { display: inline-flex; align-items: center; gap: 6px; font-weight: 400; }
+    </style>
+  </head>
+  <body>
+    <header><h1>SubSell Auto-Reply — Settings</h1></header>
+    <div class="tabs">
+      <div class="tab active" data-tab="general">General</div>
+      <div class="tab" data-tab="business">Business prompt</div>
+      <div class="tab" data-tab="listings">Listings</div>
+      <div class="tab" data-tab="followups">Follow-ups</div>
+      <div class="tab" data-tab="videos">Videos</div>
+      <div class="tab" data-tab="test">Test responses</div>
+    </div>
+
+    <main>
+      <!-- GENERAL -->
+      <section id="general" class="active">
+        <label>Anthropic API key <span class="hint">stored locally in chrome.storage</span></label>
+        <input type="password" id="apiKey" placeholder="sk-ant-…" />
+        <label>Model</label>
+        <select id="model">
+          <option value="claude-sonnet-4-6">claude-sonnet-4-6</option>
+          <option value="claude-opus-4-8">claude-opus-4-8</option>
+          <option value="claude-haiku-4-5-20251001">claude-haiku-4-5</option>
+        </select>
+        <div class="inline">
+          <div><label>Response delay (s)</label><input type="number" id="responseDelaySec" min="0" /></div>
+          <div><label>Jitter (s)</label><input type="number" id="jitterSec" min="0" /></div>
+        </div>
+        <div class="inline">
+          <div><label>Hourly cap</label><input type="number" id="hourlyCap" min="0" /></div>
+          <div><label>Daily cap</label><input type="number" id="dailyCap" min="0" /></div>
+        </div>
+        <div class="inline">
+          <div><label>Typing WPM min</label><input type="number" id="wpmMin" min="1" /></div>
+          <div><label>Typing WPM max</label><input type="number" id="wpmMax" min="1" /></div>
+        </div>
+        <label class="check"><input type="checkbox" id="businessHoursEnabled" /> Respect business hours</label>
+        <div class="inline">
+          <div><label>Open hour (0–23)</label><input type="number" id="businessHoursStart" min="0" max="23" /></div>
+          <div><label>Close hour (0–23)</label><input type="number" id="businessHoursEnd" min="0" max="23" /></div>
+        </div>
+      </section>
+
+      <!-- BUSINESS -->
+      <section id="business">
+        <label>Business name</label>
+        <input type="text" id="businessName" />
+        <label>Address</label>
+        <input type="text" id="businessAddress" />
+        <label>Hours (text shown to Claude)</label>
+        <input type="text" id="businessHoursText" />
+        <label>Business info <span class="hint">included in the system prompt</span></label>
+        <textarea id="businessInfo"></textarea>
+        <label>Instructions / tone</label>
+        <textarea id="instructions"></textarea>
+      </section>
+
+      <!-- LISTINGS -->
+      <section id="listings">
+        <div class="row">
+          <button id="addListing">+ Add listing</button>
+          <button id="exportListings">Export JSON</button>
+          <button id="importListings">Import JSON</button>
+        </div>
+        <table id="listingsTable">
+          <thead><tr><th>Title</th><th>Model</th><th>Storage</th><th>Condition</th><th>Price CAD</th><th>Video URL</th><th>Avail.</th><th></th></tr></thead>
+          <tbody></tbody>
+        </table>
+      </section>
+
+      <!-- FOLLOWUPS -->
+      <section id="followups">
+        <div class="row"><button id="addFollowUp">+ Add follow-up</button></div>
+        <table id="followupsTable">
+          <thead><tr><th>Name</th><th>After (min)</th><th>Message</th><th>On</th><th></th></tr></thead>
+          <tbody></tbody>
+        </table>
+      </section>
+
+      <!-- VIDEOS -->
+      <section id="videos">
+        <div class="row"><button id="addVideo">+ Add video</button></div>
+        <table id="videosTable">
+          <thead><tr><th>Name</th><th>URL</th><th>Notes</th><th></th></tr></thead>
+          <tbody></tbody>
+        </table>
+      </section>
+
+      <!-- TEST -->
+      <section id="test">
+        <label>Fake buyer message</label>
+        <textarea id="testInput" placeholder="Bonjour, le iPhone 13 est encore dispo?"></textarea>
+        <div class="row"><button id="runTest" class="primary">Get Claude's reply</button> <span id="testStatus"></span></div>
+        <label>Result</label>
+        <pre id="testResult">—</pre>
+      </section>
+    </main>
+
+    <div class="bar">
+      <button id="save" class="primary">Save settings</button>
+      <span id="savedMsg" class="saved"></span>
+    </div>
+
+    <script src="options.js"></script>
+  </body>
+</html>
