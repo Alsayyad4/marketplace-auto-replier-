@@ -336,16 +336,19 @@
   /* ----- save / load ----- */
   function save() {
     formToFields();
-    chrome.storage.local.set({ settings }, () => {
-      $("savedMsg").textContent = "Saved ✓";
-      setTimeout(() => ($("savedMsg").textContent = ""), 1500);
+    // Synced across all computers on the same Google account (via background).
+    chrome.runtime.sendMessage({ type: "SAVE_SETTINGS", settings }, () => {
+      $("savedMsg").textContent = "Saved ✓ (syncs to your other computers)";
+      setTimeout(() => ($("savedMsg").textContent = ""), 2500);
     });
   }
   $("save").addEventListener("click", save);
 
   function load() {
-    chrome.storage.local.get(["settings"], (res) => {
-      settings = Object.assign({}, DEFAULTS, res.settings || {});
+    // Read the merged (synced) settings from the background.
+    chrome.runtime.sendMessage({ type: "GET_SETTINGS" }, (res) => {
+      const got = (res && res.settings) || {};
+      settings = Object.assign({}, DEFAULTS, got);
       // ensure arrays exist
       settings.listings = settings.listings || [];
       settings.followUps = settings.followUps || [];

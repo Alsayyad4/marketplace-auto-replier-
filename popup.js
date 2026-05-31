@@ -112,7 +112,8 @@
   async function toggle() {
     settings = await getSettings();
     settings.enabled = !settings.enabled;
-    await saveSettings(settings);
+    // On/off is PER-MACHINE — cheap local write, not a full config sync.
+    await new Promise((r) => chrome.runtime.sendMessage({ type: "SET_ENABLED", enabled: settings.enabled }, r));
     renderStatePill(settings.enabled);
     refreshStatus();
   }

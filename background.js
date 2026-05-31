@@ -72,10 +72,67 @@ const LOG = (...a) => console.log("[SubSell-BG]", ...a);
 
 /* ---------------- settings ---------------- */
 
+/* ---------------- cross-computer settings sync ----------------
+ * Config syncs across every Chrome signed into the SAME Google account via
+ * chrome.storage.sync. That API caps each item at ~8KB, but our config is
+ * bigger, so we split the JSON into <=7KB chunks: cfg_0..cfg_(n-1) plus a
+ * cfg_count marker. Per-machine state (enabled toggle, rate-limit counters,
+ * logs, debug, visits) stays in storage.local on purpose. */
+const SYNC_CHUNK = 7000;
+const SYNC_PREFIX = "cfg_";
+
+function syncedConfigRead(cb) {
+  chrome.storage.sync.get(["cfg_count"], (meta) => {
+    const n = meta && typeof meta.cfg_count === "number" ? meta.cfg_count : 0;
+    if (!n) return cb({}, false);
+    const keys = [];
+    for (let i = 0; i < n; i++) keys.push(SYNC_PREFIX + i);
+    chrome.storage.sync.get(keys, (parts) => {
+      try {
+        let s = "";
+        for (let i = 0; i < n; i++) s += parts[SYNC_PREFIX + i] || "";
+        cb(JSON.parse(s), true);
+      } catch (e) {
+        LOG("sync config parse failed:", e.message);
+        cb({}, false);
+      }
+    });
+  });
+}
+
+// Write a config object across sync chunks (drops `enabled` — that's local).
+function syncedConfigWrite(config) {
+  return new Promise((resolve) => {
+    const clean = Object.assign({}, config);
+    delete clean.enabled;
+    const json = JSON.stringify(clean);
+    const chunks = [];
+    for (let i = 0; i < json.length; i += SYNC_CHUNK) chunks.push(json.slice(i, i + SYNC_CHUNK));
+    chrome.storage.sync.get(null, (all) => {
+      const stale = Object.keys(all || {}).filter((k) => k.startsWith(SYNC_PREFIX));
+      chrome.storage.sync.remove(stale, () => {
+        const payload = { cfg_count: chunks.length };
+        chunks.forEach((c, i) => (payload[SYNC_PREFIX + i] = c));
+        chrome.storage.sync.set(payload, () => {
+          if (chrome.runtime.lastError) LOG("sync write error:", chrome.runtime.lastError.message);
+          resolve(!chrome.runtime.lastError);
+        });
+      });
+    });
+  });
+}
+
 function getSettings() {
   return new Promise((resolve) => {
-    chrome.storage.local.get(["settings"], (res) => {
-      resolve(Object.assign({}, DEFAULTS, res.settings || {}));
+    syncedConfigRead((cfg, hadSync) => {
+      chrome.storage.local.get(["settings", "enabledLocal"], (res) => {
+        // Config priority: synced (cross-computer) > legacy local 'settings'.
+        // `enabled` is PER-MACHINE: enabledLocal first, then config, then DEFAULTS.
+        const base = hadSync ? cfg : (res.settings || {});
+        const merged = Object.assign({}, DEFAULTS, base);
+        if (typeof res.enabledLocal === "boolean") merged.enabled = res.enabledLocal;
+        resolve(merged);
+      });
     });
   });
 }
@@ -525,6 +582,22 @@ chrome.runtime.onMessage.addListener((msg, _sender, sendResponse) => {
           sendResponse({ ok: true, settings: await getSettings() });
           break;
         }
+        case "SAVE_SETTINGS": {
+          // Full config save (from options) -> synced chunks across computers.
+          const s = msg.settings || {};
+          const ok = await syncedConfigWrite(s);
+          if (typeof s.enabled === "boolean") {
+            await new Promise((r) => chrome.storage.local.set({ enabledLocal: s.enabled }, r));
+          }
+          sendResponse({ ok });
+          break;
+        }
+        case "SET_ENABLED": {
+          // Per-machine on/off toggle — local only, no sync writes (cheap).
+          await new Promise((r) => chrome.storage.local.set({ enabledLocal: !!msg.enabled }, r));
+          sendResponse({ ok: true });
+          break;
+        }
         case "GET_STATUS": {
           const settings = await getSettings();
           const counters = rollWindows(await getCounters(), Date.now());
@@ -699,6 +772,17 @@ async function heartbeat() {
 // Fold the heartbeat into the existing alarm listener path.
 chrome.alarms.onAlarm.addListener((alarm) => {
   if (alarm && alarm.name === HEARTBEAT_ALARM) heartbeat();
+});
+
+/* One-time migration: if this machine has legacy local 'settings' but sync is
+ * empty, seed sync from it so other computers inherit the existing config. */
+chrome.storage.sync.get(["cfg_count"], (meta) => {
+  if (meta && typeof meta.cfg_count === "number") return; // already syncing
+  chrome.storage.local.get(["settings"], (res) => {
+    if (res && res.settings && Object.keys(res.settings).length) {
+      syncedConfigWrite(res.settings).then(() => LOG("migrated local settings -> sync"));
+    }
+  });
 });
 
 LOG("service worker started");
