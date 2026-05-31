@@ -248,7 +248,8 @@
   /* ----- test responses ----- */
   $("runTest").addEventListener("click", () => {
     formToFields();
-    chrome.storage.local.set({ settings }, () => {
+    // Persist (synced) before testing so the test uses the current form values.
+    chrome.runtime.sendMessage({ type: "SAVE_SETTINGS", settings }, () => {
       $("testStatus").textContent = "Calling Claude…";
       chrome.runtime.sendMessage(
         { type: "TEST_REPLY", buyerMessage: $("testInput").value },
