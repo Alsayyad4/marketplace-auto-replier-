@@ -67,6 +67,19 @@
           <div><label>Daily cap</label><input type="number" id="dailyCap" min="0" /></div>
         </div>
         <div class="inline">
+          <div>
+            <label>Max replies per conversation <span class="hint">total bot replies in one chat (0 = unlimited)</span></label>
+            <input type="number" id="maxRepliesPerConvo" min="0" />
+          </div>
+          <div>
+            <label>When that cap is hit</label>
+            <select id="convoCapBehavior">
+              <option value="stop">Go quiet (stop replying)</option>
+              <option value="notify">Notify me to take over</option>
+            </select>
+          </div>
+        </div>
+        <div class="inline">
           <div><label>Typing WPM min</label><input type="number" id="wpmMin" min="1" /></div>
           <div><label>Typing WPM max</label><input type="number" id="wpmMax" min="1" /></div>
         </div>

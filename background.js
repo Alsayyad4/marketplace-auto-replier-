@@ -41,6 +41,9 @@ const DEFAULTS = {
     "Be friendly and concise. Auto-detect the buyer's language (French or English) and reply in the same language; for French use casual Quebec French (tutoiement, 'allô', 'parfait', 'à+'). Quote prices from the listings. Never discount more than 10% without flagging a human. If the buyer is rude, scammy, or asking something unusual, return [HUMAN] with a short reason.",
   examples: "", // few-shot buyer->reply pairs the user pastes to teach tone/video/escalation
   offPlatformGuard: true, // hard rules: no phone numbers / links / "contact me elsewhere"
+  // per-conversation reply cap
+  maxRepliesPerConvo: 5, // total bot replies allowed in one conversation (0 = unlimited)
+  convoCapBehavior: "stop", // "stop" = go quiet, "notify" = fire a [HUMAN] notification once
   // human cadence (content.js reads these)
   humanCadence: true,
   skipChance: 0.12, // chance to skip a cycle even when something is unread (looks human)
@@ -141,6 +144,30 @@ async function incrementCounters() {
   return c;
 }
 
+/* Per-conversation reply counter (persisted, keyed by threadId). Counts how
+ * many times the bot has replied in each thread so we can cap it. Reset when
+ * the buyer comes back is intentionally NOT done — the cap is a lifetime guard
+ * against over-messaging a single person. */
+function getConvoReplies() {
+  return new Promise((resolve) => {
+    chrome.storage.local.get(["convoReplies"], (res) => resolve(res.convoReplies || {}));
+  });
+}
+async function convoReplyCount(threadId) {
+  const map = await getConvoReplies();
+  return map[threadId] || 0;
+}
+async function bumpConvoReply(threadId) {
+  const map = await getConvoReplies();
+  map[threadId] = (map[threadId] || 0) + 1;
+  return new Promise((resolve) => chrome.storage.local.set({ convoReplies: map }, () => resolve(map[threadId])));
+}
+function getCapNotified() {
+  return new Promise((resolve) => {
+    chrome.storage.local.get(["capNotified"], (res) => resolve(res.capNotified || {}));
+  });
+}
+
 function withinBusinessHours(settings) {
   if (!settings.businessHoursEnabled) return true;
   const h = new Date().getHours();
@@ -175,7 +202,7 @@ function buildSystemPrompt(settings) {
   lines.push("");
   lines.push("SPECIAL REPLY TOKENS (use at most one, alone on the first line):");
   lines.push("- [HUMAN] <reason> — when you should NOT auto-reply: scams, hard negotiation past the discount floor, payment/shipping requests, off-platform contact pressure, address/meetup logistics, or anything weird/risky. The human is notified instead.");
-  lines.push("- [VIDEO:<url>] <optional caption> — to send a demo video. Use a videoUrl from the listings/video library when the buyer asks to see the phone working/condition. VARY the caption each time; never reuse the same caption wording.");
+  lines.push("- [VIDEO:<url>] <optional caption> — to send a demo video. Use a videoUrl from the listings/video library when the buyer asks to see the phone working/condition. The app UPLOADS the actual mp4 file as a native video attachment — the URL is never shown to the buyer, so this is safe to use. Keep the caption short and ALWAYS vary the wording; never reuse the same caption.");
 
   if (settings.offPlatformGuard) {
     lines.push("");
@@ -416,6 +443,24 @@ chrome.runtime.onMessage.addListener((msg, _sender, sendResponse) => {
             sendResponse({ ok: true, blocked: true, reason: "outside business hours" });
             break;
           }
+          // per-conversation reply cap (0 = unlimited)
+          const cap = Number(settings.maxRepliesPerConvo) || 0;
+          if (cap > 0 && msg.threadId) {
+            const used = await convoReplyCount(msg.threadId);
+            if (used >= cap) {
+              if (settings.convoCapBehavior === "notify") {
+                // fire the notification only once per conversation, not every cycle
+                const notified = await getCapNotified();
+                if (!notified[msg.threadId]) {
+                  notifyHuman(`conversation hit ${cap}-reply cap — your turn`, msg.threadName);
+                  notified[msg.threadId] = true;
+                  await new Promise((r) => chrome.storage.local.set({ capNotified: notified }, r));
+                }
+              }
+              sendResponse({ ok: true, blocked: true, reason: `convo reply cap (${used}/${cap})` });
+              break;
+            }
+          }
           const rl = await checkRateLimit(settings);
           if (!rl.ok) {
             sendResponse({ ok: true, blocked: true, reason: rl.reason });
@@ -445,11 +490,14 @@ chrome.runtime.onMessage.addListener((msg, _sender, sendResponse) => {
           }
           // text or video both consume a rate-limit slot (they get sent)
           await incrementCounters();
+          let convoUsed = null;
+          if (msg.threadId) convoUsed = await bumpConvoReply(msg.threadId);
           await appendLog({
             thread: msg.threadName,
             buyer: msg.buyerMessage,
             action: parsed.kind,
             reply: parsed.kind === "video" ? `[VIDEO ${parsed.url}] ${parsed.caption || ""}` : parsed.text,
+            convoReplyNum: convoUsed,
           });
           sendResponse({ ok: true, action: parsed.kind, ...parsed, raw: result.text });
           break;
