@@ -5,11 +5,15 @@
 
   let settings = null;
 
+  // Read merged (synced) settings from the background.
   function getSettings() {
-    return new Promise((r) => chrome.storage.local.get(["settings"], (res) => r(res.settings || {})));
+    return new Promise((r) =>
+      chrome.runtime.sendMessage({ type: "GET_SETTINGS" }, (res) => r((res && res.settings) || {}))
+    );
   }
+  // Full config save -> syncs across computers via the background.
   function saveSettings(s) {
-    return new Promise((r) => chrome.storage.local.set({ settings: s }, r));
+    return new Promise((r) => chrome.runtime.sendMessage({ type: "SAVE_SETTINGS", settings: s }, r));
   }
 
   function renderStatePill(on) {
