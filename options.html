@@ -109,6 +109,14 @@
 
         <hr />
         <label class="check"><input type="checkbox" id="offPlatformGuard" /> Off-platform guardrails <span class="hint">forbid phone numbers, links, "contact me elsewhere"; escalate instead</span></label>
+
+        <hr />
+        <label class="check"><input type="checkbox" id="closerMode" /> Closer mode <span class="hint">drive buyers to the shop; mention exchange / buyback / liquidation</span></label>
+        <label class="check"><input type="checkbox" id="noExactPrices" /> Never quote exact prices in chat <span class="hint">promise the best deal in person instead (avoids price disputes)</span></label>
+
+        <hr />
+        <label class="check"><input type="checkbox" id="visitConfirmEnabled" /> Silent visit confirmation <span class="hint">after a buyer says they'll come, ask "still coming?"; records yes/no WITHOUT notifying you</span></label>
+        <div><label>Ask after (minutes)</label><input type="number" id="visitConfirmAfterMin" min="0" /></div>
       </section>
 
       <!-- BUSINESS -->
@@ -125,6 +133,10 @@
         <textarea id="instructions"></textarea>
         <label>Example conversations <span class="hint">few-shot teaching — paste real buyer→ideal-reply pairs, including when to send [VIDEO:url] or escalate [HUMAN]. The model copies your voice from these far better than from rules.</span></label>
         <textarea id="examples" style="min-height:200px;" placeholder="Buyer: Le 13 est encore dispo?&#10;You: Allô! Oui tjs dispo 👍 256Go, batterie 91%. 420$ cash, pickup Beaubien.&#10;&#10;Buyer: Can I see it working?&#10;You: [VIDEO:https://…/iphone13.mp4] Here's a quick demo 🙂&#10;&#10;Buyer: Can you ship it and I'll e-transfer first?&#10;You: [HUMAN] buyer wants shipping + pay-first, possible scam"></textarea>
+        <label>Closer goals <span class="hint">how the bot sells the in-person visit (used when Closer mode is on)</span></label>
+        <textarea id="closerGoals"></textarea>
+        <label>Visit-confirm message <span class="hint">blank = bilingual default. Sent silently to confirm a buyer is still coming.</span></label>
+        <textarea id="visitConfirmMessage" placeholder="(blank uses the built-in FR/EN default)"></textarea>
       </section>
 
       <!-- LISTINGS -->
