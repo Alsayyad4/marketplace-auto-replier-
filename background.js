@@ -678,4 +678,27 @@ chrome.runtime.onMessage.addListener((msg, _sender, sendResponse) => {
   return true; // async
 });
 
+/* ---------------- background heartbeat ----------------
+ * Backgrounded tabs throttle setInterval to ~once/minute, which would slow the
+ * scan loop while the operator works in other tabs. A chrome.alarms heartbeat
+ * (not throttled) pings the messenger tab every minute to force a scan. The
+ * content script's own 8s interval still drives things when the tab is focused;
+ * this just guarantees progress when it is not. Alarms also wake the MV3 worker.
+ * Note: alarms fire at most once/minute — that's the floor Chrome allows. */
+const HEARTBEAT_ALARM = "subsell-heartbeat";
+chrome.alarms.create(HEARTBEAT_ALARM, { periodInMinutes: 1 });
+
+async function heartbeat() {
+  const settings = await getSettings();
+  if (!settings.enabled) return;
+  const tab = await findMessagesTab();
+  if (!tab) return;
+  chrome.tabs.sendMessage(tab.id, { type: "TICK_NOW" }, () => void chrome.runtime.lastError);
+}
+
+// Fold the heartbeat into the existing alarm listener path.
+chrome.alarms.onAlarm.addListener((alarm) => {
+  if (alarm && alarm.name === HEARTBEAT_ALARM) heartbeat();
+});
+
 LOG("service worker started");

@@ -142,6 +142,32 @@
     return first || null;
   }
 
+  /* Is this anchor a REAL conversation row (not the left-rail "Marketplace"
+   * nav button)? The diagnostic showed the sidebar nav button also matches
+   * a[href*="/marketplace/t/"] but has id="left-sidebar-button-*",
+   * aria-label "Marketplace · N unread", and is NOT inside a [role="row"].
+   * Real conversation rows sit inside a [role="row"] and their aria-label
+   * starts with "Group chat:" or the buyer's name. */
+  function isConversationAnchor(anchor) {
+    const id = safe(() => anchor.id, "") || "";
+    if (/left-sidebar-button/i.test(id)) return false;
+    const label = (safe(() => anchor.getAttribute("aria-label"), "") || "");
+    if (/^Marketplace\b/.test(label)) return false; // the nav button label
+    if (/^(Chats|Requests|Marketplace)\b/i.test(label)) return false;
+    // must live inside a real conversation row
+    const inRow = safe(() => anchor.closest('[role="row"]'), null);
+    if (!inRow) return false;
+    // href must point at a specific thread id
+    const href = safe(() => anchor.getAttribute("href"), "") || "";
+    if (!/\/marketplace\/t\/\d+/.test(href)) return false;
+    return true;
+  }
+
+  function marketplaceAnchors() {
+    const all = safe(() => Array.from(document.querySelectorAll(MP_SELECTOR)), []);
+    return all.filter(isConversationAnchor);
+  }
+
   /* =================================================================
    * SELF-LEARNING DETECTION
    * signalSnapshot() reduces a row to a small comparable feature vector.
@@ -262,20 +288,30 @@
   }
 
   function isUnreadHeuristic(anchor) {
+    // Never treat the left-rail nav button as a conversation.
+    if (!isConversationAnchor(anchor)) {
+      anchor.__subsellSignal = null;
+      return false;
+    }
     const row = resolveRow(anchor).el;
-    // 1) bold text — unread convos render name/snippet heavier
+    // CONFIRMED SIGNAL (from diagnostic dump): unread conversation rows render
+    // their name/snippet at fontWeight 600-700; read rows cap at 500. This is
+    // the single cleanest separator. The small blue dot (rgb(33,111,219)) is a
+    // secondary confirmation but the nav button also has one, so weight leads.
     let boldSignal = false;
+    let maxW = 0;
     const spans = safe(() => row.querySelectorAll("span"), []);
     for (const sp of spans) {
       const txt = safe(() => (sp.textContent || "").trim(), "");
       if (!txt) continue;
       const w = parseInt(safe(() => getComputedStyle(sp).fontWeight, "400"), 10);
+      if (!isNaN(w) && w > maxW) maxW = w;
       if (w >= 600) {
         boldSignal = true;
         break;
       }
     }
-    // 2) small colored dot
+    // secondary: small blue unread dot
     let dotSignal = false;
     const all = safe(() => row.querySelectorAll("*"), []);
     for (const d of all) {
@@ -296,7 +332,10 @@
     if (dotSignal) matched.push("dot");
     if (ariaSignal) matched.push("aria");
     anchor.__subsellSignal = matched.join("+") || null;
-    return boldSignal || dotSignal || ariaSignal;
+    // Require the BOLD signal (confirmed separator). The dot alone is not
+    // enough — the nav button has a dot at weight 400. aria 'unread' is a
+    // strong positive on its own if Facebook ever exposes it on a row.
+    return boldSignal || ariaSignal;
   }
 
   /* ---------------- diagnostic capture (kept) ---------------- */
@@ -746,8 +785,11 @@
 
   async function tick(reason) {
     if (busy) return;
-    const anchors = safe(() => Array.from(document.querySelectorAll(MP_SELECTOR)), []);
-    writeDiagnostic(anchors, reason);
+    // Diagnostic captures EVERYTHING (incl. the nav button) for debugging,
+    // but the pipeline only ever acts on real conversation rows.
+    const allAnchors = safe(() => Array.from(document.querySelectorAll(MP_SELECTOR)), []);
+    writeDiagnostic(allAnchors, reason);
+    const anchors = allAnchors.filter(isConversationAnchor);
 
     const settings = (await ask({ type: "GET_SETTINGS" })).settings || {};
     const unread = anchors.filter(isUnread);
@@ -822,6 +864,14 @@
       sendResponse({ ok: true, dump: writeDiagnostic(anchors, "manual") });
       return true;
     }
+    if (msg && msg.type === "TICK_NOW") {
+      // Background heartbeat — fires even when this tab is backgrounded, where
+      // setInterval is throttled to ~1/min. Keeps the bot replying while you
+      // work in other tabs (as long as Chrome + this tab stay open).
+      tick("alarm");
+      sendResponse({ ok: true });
+      return true;
+    }
     if (msg && msg.type === "PING") {
       sendResponse({ ok: true, url: location.href, anchorCount: document.querySelectorAll(MP_SELECTOR).length });
       return true;
@@ -853,7 +903,7 @@
     if (msg && msg.type === "SEND_FOLLOWUP") {
       (async () => {
         const settings = (await ask({ type: "GET_SETTINGS" })).settings || {};
-        const anchor = Array.from(document.querySelectorAll(MP_SELECTOR)).find((a) => threadId(a) === msg.threadId);
+        const anchor = marketplaceAnchors().find((a) => threadId(a) === msg.threadId);
         if (!anchor) {
           updateTick({ lastError: "follow-up: thread not found " + msg.threadId });
           sendResponse({ ok: false, error: "thread not found" });
