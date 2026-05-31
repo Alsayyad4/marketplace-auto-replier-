@@ -41,6 +41,15 @@ const DEFAULTS = {
     "Be friendly and concise. Auto-detect the buyer's language (French or English) and reply in the same language; for French use casual Quebec French (tutoiement, 'allô', 'parfait', 'à+'). Quote prices from the listings. Never discount more than 10% without flagging a human. If the buyer is rude, scammy, or asking something unusual, return [HUMAN] with a short reason.",
   examples: "", // few-shot buyer->reply pairs the user pastes to teach tone/video/escalation
   offPlatformGuard: true, // hard rules: no phone numbers / links / "contact me elsewhere"
+  // closer mode — drive buyers to the physical shop, no exact prices in chat
+  closerMode: true,
+  noExactPrices: true, // never quote a number; promise the best price in person
+  closerGoals:
+    "Your #1 goal is to get the buyer to come visit the shop in person. We give better prices in person than online. We also do trade-ins/exchanges, buyback of their old phone, and have liquidation deals — mention these naturally when relevant. Build excitement and urgency (popular model, moves fast) without being pushy. Always steer toward 'come by the shop and we'll take care of you'.",
+  // silent visit confirmation follow-up (does NOT notify the operator)
+  visitConfirmEnabled: true,
+  visitConfirmAfterMin: 120, // ask "still coming?" this long after a pickup intent
+  visitConfirmMessage: "", // blank = use the built-in bilingual default
   // per-conversation reply cap
   maxRepliesPerConvo: 5, // total bot replies allowed in one conversation (0 = unlimited)
   convoCapBehavior: "stop", // "stop" = go quiet, "notify" = fire a [HUMAN] notification once
@@ -168,6 +177,26 @@ function getCapNotified() {
   });
 }
 
+/* Visit intent per conversation — recorded SILENTLY (no operator notification).
+ * Shape: { [threadId]: { status, thread, at, history:[{status,at}] } } */
+function getVisits() {
+  return new Promise((resolve) => {
+    chrome.storage.local.get(["visits"], (res) => resolve(res.visits || {}));
+  });
+}
+async function recordVisit(threadId, threadName, status) {
+  if (!threadId || !status) return;
+  const map = await getVisits();
+  const prev = map[threadId] || { history: [] };
+  prev.status = status;
+  prev.thread = threadName || prev.thread || null;
+  prev.at = new Date().toISOString();
+  prev.history = (prev.history || []).concat([{ status, at: prev.at }]);
+  map[threadId] = prev;
+  await new Promise((r) => chrome.storage.local.set({ visits: map }, r));
+  LOG("visit recorded (silent):", threadName, status);
+}
+
 function withinBusinessHours(settings) {
   if (!settings.businessHoursEnabled) return true;
   const h = new Date().getHours();
@@ -191,18 +220,39 @@ function buildSystemPrompt(settings) {
 
   if (Array.isArray(settings.listings) && settings.listings.length) {
     lines.push("");
-    lines.push("CURRENT LISTINGS (only quote available items):");
-    for (const l of settings.listings) {
-      lines.push(
-        `- ${l.title || l.model || "item"} | ${l.storage || ""} | ${l.condition || ""} | $${l.price || "?"} CAD | available: ${l.available === false ? "no" : "yes"}${l.videoUrl ? " | video: " + l.videoUrl : ""}`
-      );
+    if (settings.noExactPrices) {
+      // Hide the numbers entirely so the model literally cannot quote a price.
+      lines.push("CURRENT INVENTORY (availability + video only — do NOT state any price):");
+      for (const l of settings.listings) {
+        lines.push(
+          `- ${l.title || l.model || "item"} | ${l.storage || ""} | ${l.condition || ""} | available: ${l.available === false ? "no" : "yes"}${l.videoUrl ? " | video: " + l.videoUrl : ""}`
+        );
+      }
+    } else {
+      lines.push("CURRENT LISTINGS (only quote available items):");
+      for (const l of settings.listings) {
+        lines.push(
+          `- ${l.title || l.model || "item"} | ${l.storage || ""} | ${l.condition || ""} | $${l.price || "?"} CAD | available: ${l.available === false ? "no" : "yes"}${l.videoUrl ? " | video: " + l.videoUrl : ""}`
+        );
+      }
     }
+  }
+
+  if (settings.closerMode) {
+    lines.push("");
+    lines.push("CLOSER MODE — your job is to turn this chat into a shop visit:");
+    lines.push(settings.closerGoals || "");
+    if (settings.noExactPrices) {
+      lines.push("PRICING RULE (critical): NEVER state an exact price, number, or dollar amount in chat — not even a range, not even the listed price. If asked the price, say the listed price is on the post but you give your BEST deal in person, and invite them to come by the shop. This avoids any price confusion or disputes. If they push hard for a number, return [HUMAN].");
+    }
+    lines.push("Mention trade-ins/exchange, buyback of their old device, and liquidation deals when natural. Keep it warm and low-pressure; the goal is 'come to the shop and we'll take care of you.'");
   }
 
   lines.push("");
   lines.push("SPECIAL REPLY TOKENS (use at most one, alone on the first line):");
-  lines.push("- [HUMAN] <reason> — when you should NOT auto-reply: scams, hard negotiation past the discount floor, payment/shipping requests, off-platform contact pressure, address/meetup logistics, or anything weird/risky. The human is notified instead.");
-  lines.push("- [VIDEO:<url>] <optional caption> — to send a demo video. Use a videoUrl from the listings/video library when the buyer asks to see the phone working/condition. The app UPLOADS the actual mp4 file as a native video attachment — the URL is never shown to the buyer, so this is safe to use. Keep the caption short and ALWAYS vary the wording; never reuse the same caption.");
+  lines.push("- [HUMAN] <reason> — when you should NOT auto-reply: scams, payment/shipping requests, off-platform contact pressure, or anything weird/risky. The human is notified.");
+  lines.push("- [VIDEO:<url>] <optional caption> — to send a demo video. Use a videoUrl from the inventory when the buyer asks to see the phone working/condition. The app UPLOADS the actual mp4 file as a native video attachment — the URL is never shown to the buyer, so this is safe. Keep the caption short and ALWAYS vary the wording.");
+  lines.push("- [VISIT:yes|no|maybe] <your normal reply text> — put this at the very start of your message ONLY when the buyer's latest message reveals whether they intend to come to the shop. yes = they confirm coming / are on their way / agreed to come; no = they decline, bought elsewhere, or back out; maybe = unsure/hesitant. The token is recorded silently and STRIPPED before sending — the buyer only sees your reply text after it. Use it in addition to replying normally; do not let it replace a real, persuasive reply.");
 
   if (settings.offPlatformGuard) {
     lines.push("");
@@ -219,6 +269,8 @@ function buildSystemPrompt(settings) {
     lines.push(settings.examples.trim());
   }
 
+  lines.push("");
+  lines.push("HOW TO READ THE INPUT: you are given the recent conversation and the buyer's latest message. Respond ONLY to what the buyer actually wrote. If their message is empty, a sticker/emoji only, a system line, or makes no sense, reply with a short friendly greeting that invites them to say what they're looking for — do NOT invent a topic, and never react to UI words like 'Privacy & support', 'Marketplace', or menu labels. If you are unsure what they meant, ask a brief clarifying question in their language.");
   lines.push("");
   lines.push("Reply with the message text only (or one token). Keep it short and human, like a real seller texting on their phone — contractions, casual, sometimes a one-word answer. Never reuse the exact same opening sentence twice.");
   return lines.join("\n");
@@ -274,15 +326,27 @@ async function callClaude(settings, buyerMessage, extraContext) {
 
 function parseReply(text) {
   if (!text) return { kind: "empty" };
+  text = text.trim();
+
+  // [VISIT:yes|no|maybe] is a silent prefix — capture it, strip it, then parse
+  // whatever real reply follows (text or even a video).
+  let visit = null;
+  const visitMatch = text.match(/^\[VISIT:\s*(yes|no|maybe)\s*\]\s*([\s\S]*)$/i);
+  if (visitMatch) {
+    visit = visitMatch[1].toLowerCase();
+    text = visitMatch[2].trim();
+    if (!text) return { kind: "empty", visit }; // nothing left to send, but still record visit
+  }
+
   const human = text.match(/\[HUMAN\]\s*([\s\S]*)/i);
-  if (human && text.trim().toUpperCase().startsWith("[HUMAN]")) {
-    return { kind: "human", reason: human[1].trim() };
+  if (human && text.toUpperCase().startsWith("[HUMAN]")) {
+    return { kind: "human", reason: human[1].trim(), visit };
   }
   const video = text.match(/\[VIDEO:([^\]]+)\]\s*([\s\S]*)/i);
-  if (video && text.trim().toUpperCase().startsWith("[VIDEO")) {
-    return { kind: "video", url: video[1].trim(), caption: (video[2] || "").trim() };
+  if (video && text.toUpperCase().startsWith("[VIDEO")) {
+    return { kind: "video", url: video[1].trim(), caption: (video[2] || "").trim(), visit };
   }
-  return { kind: "text", text: text.trim() };
+  return { kind: "text", text: text.trim(), visit };
 }
 
 /* ---------------- video fetch ---------------- */
@@ -312,6 +376,10 @@ async function fetchVideo(url) {
 /* ---------------- follow-ups (alarms) ---------------- */
 
 const ALARM_PREFIX = "followup:";
+const VISIT_PREFIX = "visitconfirm:";
+
+const DEFAULT_VISIT_MSG =
+  "Allô! 😊 Juste pour confirmer — tu passes toujours au shop? On va te faire un bon deal en personne! / Hey! Just confirming you're still coming by — we'll hook you up with a great deal in person 🙌";
 
 async function scheduleFollowUps(threadId) {
   const settings = await getSettings();
@@ -326,35 +394,73 @@ async function scheduleFollowUps(threadId) {
   }
 }
 
+/* Silent visit-confirmation: scheduled when a buyer signals they'll come.
+ * Fires a gentle "still coming?" — the buyer's reply flows back through the
+ * normal pipeline and is recorded as a [VISIT:…] status WITHOUT notifying the
+ * operator. One pending confirm per thread. */
+async function scheduleVisitConfirm(threadId) {
+  const settings = await getSettings();
+  if (!settings.visitConfirmEnabled) return;
+  const mins = Number(settings.visitConfirmAfterMin) || 0;
+  if (mins <= 0) return;
+  const name = `${VISIT_PREFIX}${threadId}`;
+  chrome.alarms.clear(name); // replace any pending one
+  chrome.alarms.create(name, { when: Date.now() + mins * 60 * 1000 });
+  LOG("scheduled visit-confirm", name, "in", mins, "min");
+}
+
 function cancelFollowUps(threadId) {
   chrome.alarms.getAll((alarms) => {
     for (const a of alarms) {
-      if (a.name.startsWith(`${ALARM_PREFIX}${threadId}:`)) {
+      if (
+        a.name.startsWith(`${ALARM_PREFIX}${threadId}:`) ||
+        a.name === `${VISIT_PREFIX}${threadId}`
+      ) {
         chrome.alarms.clear(a.name);
-        LOG("cancelled follow-up", a.name);
+        LOG("cancelled pending alarm", a.name);
       }
     }
   });
 }
 
 chrome.alarms.onAlarm.addListener(async (alarm) => {
+  const settings = await getSettings();
+  if (!settings.enabled) return;
+  if (!withinBusinessHours(settings)) {
+    LOG("alarm skipped: outside business hours", alarm.name);
+    return;
+  }
+  const rl = await checkRateLimit(settings);
+  if (!rl.ok) {
+    LOG("alarm skipped:", rl.reason);
+    return;
+  }
+
+  // Silent visit-confirmation alarm
+  if (alarm.name.startsWith(VISIT_PREFIX)) {
+    const threadId = alarm.name.slice(VISIT_PREFIX.length);
+    const tab = await findMessagesTab();
+    if (!tab) {
+      LOG("visit-confirm skipped: no messenger tab open");
+      return;
+    }
+    const text = (settings.visitConfirmMessage || DEFAULT_VISIT_MSG);
+    chrome.tabs.sendMessage(
+      tab.id,
+      { type: "SEND_FOLLOWUP", threadId, text, kind: "visitconfirm" },
+      () => {
+        if (chrome.runtime.lastError) LOG("visit-confirm send error", chrome.runtime.lastError.message);
+      }
+    );
+    return;
+  }
+
   if (!alarm.name.startsWith(ALARM_PREFIX)) return;
   const rest = alarm.name.slice(ALARM_PREFIX.length);
   const sep = rest.lastIndexOf(":");
   const threadId = rest.slice(0, sep);
   const idx = Number(rest.slice(sep + 1));
 
-  const settings = await getSettings();
-  if (!settings.enabled) return;
-  if (!withinBusinessHours(settings)) {
-    LOG("follow-up skipped: outside business hours", alarm.name);
-    return;
-  }
-  const rl = await checkRateLimit(settings);
-  if (!rl.ok) {
-    LOG("follow-up skipped:", rl.reason);
-    return;
-  }
   const f = (settings.followUps || [])[idx];
   if (!f || !f.enabled) return;
 
@@ -472,6 +578,13 @@ chrome.runtime.onMessage.addListener((msg, _sender, sendResponse) => {
             break;
           }
           const parsed = parseReply(result.text);
+          // Record visit intent silently (no operator notification) regardless of reply kind.
+          if (parsed.visit) {
+            await recordVisit(msg.threadId, msg.threadName, parsed.visit);
+            // A fresh "yes" schedules a silent confirm; "no" cancels any pending one.
+            if (parsed.visit === "yes") await scheduleVisitConfirm(msg.threadId);
+            else if (parsed.visit === "no") chrome.alarms.clear(`${VISIT_PREFIX}${msg.threadId}`);
+          }
           if (parsed.kind === "human") {
             notifyHuman(parsed.reason, msg.threadName);
             await appendLog({
@@ -479,12 +592,13 @@ chrome.runtime.onMessage.addListener((msg, _sender, sendResponse) => {
               buyer: msg.buyerMessage,
               action: "human",
               reply: "[HUMAN] " + parsed.reason,
+              visit: parsed.visit || null,
             });
             sendResponse({ ok: true, action: "human", reason: parsed.reason, raw: result.text });
             break;
           }
           if (parsed.kind === "empty") {
-            // Nothing to send — don't consume a rate-limit slot.
+            // Nothing to send — don't consume a rate-limit slot. Visit (if any) already recorded.
             sendResponse({ ok: true, blocked: true, reason: "empty reply from model" });
             break;
           }
@@ -498,9 +612,18 @@ chrome.runtime.onMessage.addListener((msg, _sender, sendResponse) => {
             action: parsed.kind,
             reply: parsed.kind === "video" ? `[VIDEO ${parsed.url}] ${parsed.caption || ""}` : parsed.text,
             convoReplyNum: convoUsed,
+            visit: parsed.visit || null,
           });
           sendResponse({ ok: true, action: parsed.kind, ...parsed, raw: result.text });
           break;
+        }
+        case "GET_VISITS": {
+          chrome.storage.local.get(["visits"], (res) => sendResponse({ ok: true, visits: res.visits || {} }));
+          return true; // async storage callback
+        }
+        case "CLEAR_VISITS": {
+          chrome.storage.local.set({ visits: {} }, () => sendResponse({ ok: true }));
+          return true;
         }
         case "TEST_REPLY": {
           // Options "Test responses" tab — does not touch rate limits/Facebook.

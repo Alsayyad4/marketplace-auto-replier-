@@ -23,6 +23,7 @@
   const MP_SELECTOR = 'a[href*="/marketplace/t/"]';
   const STORAGE_KEY_DUMP = "diagnosticDump";
   const STORAGE_KEY_TICK = "debugTick";
+  const STORAGE_KEY_RULE = "learnedUnreadRule"; // self-learning detection
   const SCAN_MS = 8000;
   const COOLDOWN_MS = 90 * 1000;
   const MAX_HTML = 1500;
@@ -32,6 +33,7 @@
 
   /* in-memory state (per page session) */
   let busy = false;
+  let learnedRule = null; // { kind, ... } derived from a user-tagged unread row
   const cooldowns = {}; // threadId -> until-timestamp
   const repliedThreads = {}; // threadId -> timestamp (awaiting buyer reply)
   let lastTick = {};
@@ -141,12 +143,125 @@
   }
 
   /* =================================================================
-   * isUnread() — BEST-EFFORT until the confirmed signal lands.
-   * Combines three independent heuristics; records which matched so the
-   * debug panel shows it. To finalise: replace the body with the single
-   * confirmed signal from the diagnostic dump.
+   * SELF-LEARNING DETECTION
+   * signalSnapshot() reduces a row to a small comparable feature vector.
+   * learnUnreadByIndex() takes the row the user tagged as unread, compares
+   * it against all the read rows, and stores the FIRST feature that cleanly
+   * separates it. isUnread() then prefers that learned rule. When the DOM
+   * drifts, the user just re-tags one unread row and the rule re-derives.
+   * ================================================================= */
+  function signalSnapshot(anchor) {
+    const row = resolveRow(anchor).el;
+    // max font weight among text spans
+    let maxWeight = 400;
+    for (const sp of safe(() => row.querySelectorAll("span"), [])) {
+      const txt = safe(() => (sp.textContent || "").trim(), "");
+      if (!txt) continue;
+      const w = parseInt(safe(() => getComputedStyle(sp).fontWeight, "400"), 10);
+      if (!isNaN(w) && w > maxWeight) maxWeight = w;
+    }
+    // small colored dot present?
+    let dot = false;
+    let dotBg = null;
+    for (const d of safe(() => row.querySelectorAll("*"), [])) {
+      const r = rect(d);
+      if (r && r.w > 0 && r.h > 0 && r.w < SMALL_PX && r.h < SMALL_PX) {
+        const bg = safe(() => getComputedStyle(d).backgroundColor, null);
+        if (isColored(bg)) {
+          dot = true;
+          dotBg = bg;
+          break;
+        }
+      }
+    }
+    const label = (safe(() => anchor.getAttribute("aria-label"), "") || "").toLowerCase();
+    const aria = label.includes("unread") || label.includes("non lu");
+    // any descendant class containing a hint token
+    let hintClass = null;
+    for (const d of safe(() => row.querySelectorAll("*"), [])) {
+      for (const c of classList(d)) {
+        if (/unread|unseen|bold|nonlu/i.test(c)) {
+          hintClass = c;
+          break;
+        }
+      }
+      if (hintClass) break;
+    }
+    return { maxWeight, dot, dotBg, aria, hintClass };
+  }
+
+  // Derive a rule from the tagged-unread row vs. the rest. Returns a rule object
+  // or null if nothing cleanly separates it.
+  function deriveRule(anchors, unreadIndex) {
+    const snaps = anchors.map(signalSnapshot);
+    const target = snaps[unreadIndex];
+    if (!target) return null;
+    const others = snaps.filter((_, i) => i !== unreadIndex);
+
+    // 1) aria-label is the gold standard if present and unique
+    if (target.aria && others.every((o) => !o.aria)) {
+      return { kind: "aria", note: "aria-label says unread" };
+    }
+    // 2) a distinctive class token only the unread row has
+    if (target.hintClass && others.every((o) => o.hintClass !== target.hintClass)) {
+      return { kind: "class", value: target.hintClass };
+    }
+    // 3) a colored dot only the unread row has
+    if (target.dot && others.every((o) => !o.dot)) {
+      return { kind: "dot" };
+    }
+    // 4) font weight strictly heavier than every read row
+    const maxOther = others.length ? Math.max(...others.map((o) => o.maxWeight)) : 0;
+    if (target.maxWeight > maxOther) {
+      // pick a threshold halfway between, clamped to a sane min
+      const threshold = Math.max(500, Math.floor((target.maxWeight + maxOther) / 2));
+      return { kind: "weight", threshold };
+    }
+    return null;
+  }
+
+  function applyRule(rule, anchor) {
+    if (!rule) return null;
+    const s = signalSnapshot(anchor);
+    switch (rule.kind) {
+      case "aria":
+        return s.aria;
+      case "class":
+        return s.hintClass === rule.value || (function () {
+          // re-check directly in case snapshot only kept the first hint
+          const row = resolveRow(anchor).el;
+          for (const d of safe(() => row.querySelectorAll("*"), [])) {
+            if (classList(d).includes(rule.value)) return true;
+          }
+          return false;
+        })();
+      case "dot":
+        return s.dot;
+      case "weight":
+        return s.maxWeight >= rule.threshold;
+      default:
+        return null;
+    }
+  }
+
+  /* =================================================================
+   * isUnread() — prefers a LEARNED rule (self-learning detection); falls
+   * back to the combined heuristics. Records which matched for the debug
+   * panel.
    * ================================================================= */
   function isUnread(anchor) {
+    // learned rule wins when present
+    if (learnedRule) {
+      const r = applyRule(learnedRule, anchor);
+      if (r !== null) {
+        anchor.__subsellSignal = "learned:" + learnedRule.kind;
+        return r;
+      }
+    }
+    return isUnreadHeuristic(anchor);
+  }
+
+  function isUnreadHeuristic(anchor) {
     const row = resolveRow(anchor).el;
     // 1) bold text — unread convos render name/snippet heavier
     let boldSignal = false;
@@ -330,22 +445,6 @@
   function getMain() {
     return document.querySelector('[role="main"]');
   }
-  function getLastBuyerMessage() {
-    const main = getMain();
-    if (!main) return "";
-    const rows = main.querySelectorAll('[role="row"]');
-    for (let i = rows.length - 1; i >= 0; i--) {
-      const t = safe(() => rows[i].innerText.trim(), "");
-      if (t) return trunc(t, 1000);
-    }
-    // fallback: any dir=auto text
-    const bubbles = main.querySelectorAll('[dir="auto"]');
-    for (let i = bubbles.length - 1; i >= 0; i--) {
-      const t = safe(() => bubbles[i].innerText.trim(), "");
-      if (t) return trunc(t, 1000);
-    }
-    return "";
-  }
   function findComposer() {
     const main = getMain() || document;
     return (
@@ -353,6 +452,80 @@
       main.querySelector('div[aria-label][contenteditable="true"]') ||
       main.querySelector('[contenteditable="true"]')
     );
+  }
+
+  // UI labels / chrome that must never be mistaken for a buyer message.
+  const UI_NOISE = [
+    "privacy & support", "customize chat", "chat members", "media, files and links",
+    "rate seller", "more options", "marketplace", "mute", "search", "block",
+    "you sent", "enter", "sent", "delivered", "seen", "active now", "view profile",
+  ];
+  function looksLikeNoise(text) {
+    const t = text.trim().toLowerCase();
+    if (!t) return true;
+    if (/^ca\$|^\$\d|^\d+\s*(go|gb|tb)\b/.test(t)) return true; // price/spec card
+    if (/^\d{1,2}:\d{2}\s*(am|pm)?$/i.test(t)) return true; // timestamps
+    for (const n of UI_NOISE) if (t === n || t.startsWith(n)) return true;
+    return false;
+  }
+
+  /* Read the conversation as a labeled transcript.
+   * Returns [{ role: "buyer"|"me", text }] in chronological order.
+   * Classification is by horizontal alignment inside the message column:
+   * your messages sit on the right, the buyer's on the left. Only elements
+   * that are real message bubbles (inside a [role="row"], within the column,
+   * above the composer) are considered — this excludes the right info panel,
+   * the listing card, the left sidebar, and all menu chrome. */
+  function readConversation() {
+    const main = getMain();
+    if (!main) return [];
+    const composer = findComposer();
+    // Column bounds: prefer the composer's x-range; fall back to main.
+    const cRect = composer ? composer.getBoundingClientRect() : main.getBoundingClientRect();
+    const colLeft = cRect.left;
+    const colRight = cRect.right;
+    const colCenter = (colLeft + colRight) / 2;
+    const colTop = composer ? cRect.top : Infinity; // messages are above the input
+
+    const bubbles = [];
+    const seen = new Set();
+    const nodes = safe(() => Array.from(main.querySelectorAll('[role="row"] [dir="auto"]')), []);
+    for (const el of nodes) {
+      // take leaf-ish text nodes only (skip wrappers that contain another dir=auto)
+      if (safe(() => el.querySelector('[dir="auto"]'), null)) continue;
+      const text = safe(() => (el.innerText || el.textContent || "").trim(), "");
+      if (!text || text.length < 1) continue;
+      if (looksLikeNoise(text)) continue;
+      const r = safe(() => el.getBoundingClientRect(), null);
+      if (!r || r.width <= 0 || r.height <= 0) continue;
+      // must be inside the message column and above the composer
+      const center = r.left + r.width / 2;
+      if (center < colLeft - 40 || center > colRight + 40) continue;
+      if (r.top >= colTop) continue;
+      const key = text + "@" + Math.round(r.top);
+      if (seen.has(key)) continue;
+      seen.add(key);
+      // align: right side => me, left side => buyer
+      const role = center > colCenter ? "me" : "buyer";
+      bubbles.push({ role, text, top: r.top });
+    }
+    bubbles.sort((a, b) => a.top - b.top);
+    return bubbles.map((b) => ({ role: b.role, text: b.text }));
+  }
+
+  // The buyer message we should actually respond to: the last bubble, and only
+  // if it's the buyer's. Returns { buyerMessage, transcript } or null when the
+  // last turn isn't a fresh buyer message (so we DON'T reply to ourselves/noise).
+  function getBuyerTurn() {
+    const convo = readConversation();
+    if (!convo.length) return null;
+    const last = convo[convo.length - 1];
+    if (last.role !== "buyer") return null; // last message is ours (or none) → skip
+    const transcript = convo
+      .slice(-12)
+      .map((m) => (m.role === "buyer" ? "Buyer: " : "You: ") + m.text)
+      .join("\n");
+    return { buyerMessage: last.text, transcript };
   }
 
   /* ---------------- human-like typing ---------------- */
@@ -368,14 +541,30 @@
       });
     }
   }
+  function composerText(el) {
+    return safe(() => (el.innerText || el.textContent || "").replace(/ /g, " ").trim(), "");
+  }
+  // Type word-by-word (not char-by-char) — far more reliable on Messenger's
+  // Lexical editor, which dropped/reordered single chars in char mode. Newlines
+  // are normalised to spaces so a stray Enter never splits the message.
   async function typeHuman(el, text, settings) {
+    text = String(text).replace(/\s*\n\s*/g, " ").trim();
     const wpm = rand(settings.wpmMin || 38, settings.wpmMax || 78);
-    const perChar = 60000 / (wpm * 5); // ~5 chars per word
-    for (const ch of text) {
-      insertText(el, ch);
-      await sleep(perChar * rand(0.6, 1.4));
-      if (Math.random() < 0.04) await sleep(rand(300, 900)); // occasional pause
+    const perChar = 60000 / (wpm * 5);
+    const words = text.split(" ");
+    for (let i = 0; i < words.length; i++) {
+      const chunk = (i === 0 ? "" : " ") + words[i];
+      insertText(el, chunk);
+      await sleep(perChar * chunk.length * rand(0.6, 1.4));
+      if (Math.random() < 0.06) await sleep(rand(300, 900)); // occasional think-pause
     }
+  }
+  // Replace whatever is in the composer with `text` in one shot (reliable path
+  // used when verification fails). Selects-all then inserts.
+  function setComposerText(el, text) {
+    el.focus();
+    safe(() => document.execCommand("selectAll", false, null));
+    safe(() => document.execCommand("insertText", false, text));
   }
   function pressEnter(el) {
     el.focus();
@@ -384,6 +573,27 @@
         new KeyboardEvent(type, { key: "Enter", code: "Enter", keyCode: 13, which: 13, bubbles: true, cancelable: true })
       );
     }
+  }
+  // Type, then verify the composer actually holds the intended text before
+  // sending. If it's garbled/empty, fix it with a single insert. Only then Enter.
+  async function typeAndSend(el, text, settings) {
+    const want = String(text).replace(/\s*\n\s*/g, " ").trim();
+    await typeHuman(el, want, settings);
+    await sleep(rand(200, 500));
+    let have = composerText(el);
+    if (have !== want) {
+      // one corrective pass — clear and insert the whole thing at once
+      setComposerText(el, want);
+      await sleep(rand(150, 350));
+      have = composerText(el);
+    }
+    if (!have) {
+      updateTick({ lastError: "composer empty after typing — not sending" });
+      return false;
+    }
+    await sleep(rand(150, 400));
+    pressEnter(el);
+    return true;
   }
 
   /* ---------------- video paste-to-upload ---------------- */
@@ -468,14 +678,26 @@
       return;
     }
 
-    const buyerMessage = getLastBuyerMessage();
-    updateTick({ lastAction: "got buyer message", currentThread: name });
-    if (!buyerMessage) {
-      updateTick({ lastError: "no buyer message found" });
+    // Let the thread render, then read a labeled transcript and pull the
+    // buyer's actual last message. If the last turn isn't the buyer's (it's
+    // ours, or only UI noise), DO NOT reply — this is what stops the bot from
+    // talking to itself or to menu labels like "Privacy & support".
+    await sleep(1200);
+    const turn = getBuyerTurn();
+    if (!turn) {
+      updateTick({ lastAction: "skip: last message isn't a fresh buyer message", currentThread: name });
       return;
     }
+    const buyerMessage = turn.buyerMessage;
+    updateTick({ lastAction: "buyer said: " + trunc(buyerMessage, 80), currentThread: name });
 
-    const reply = await ask({ type: "GET_REPLY", buyerMessage, threadId: id, threadName: name });
+    const reply = await ask({
+      type: "GET_REPLY",
+      buyerMessage,
+      context: "Conversation so far (most recent last):\n" + turn.transcript,
+      threadId: id,
+      threadName: name,
+    });
     if (!reply || !reply.ok) {
       updateTick({ lastError: "reply error: " + (reply && reply.error), lastAction: "api error" });
       return;
@@ -507,9 +729,8 @@
         updateTick({ lastError: "composer not found" });
         return;
       }
-      await typeHuman(composer, reply.text, settings);
-      await sleep(rand(200, 600));
-      pressEnter(composer);
+      const sent = await typeAndSend(composer, reply.text, settings);
+      if (!sent) return; // composer was empty/garbled — don't mark replied
       updateTick({ lastAction: "reply sent", lastReplySent: trunc(reply.text, 200) });
     }
 
@@ -605,6 +826,30 @@
       sendResponse({ ok: true, url: location.href, anchorCount: document.querySelectorAll(MP_SELECTOR).length });
       return true;
     }
+    if (msg && msg.type === "LEARN_UNREAD") {
+      // msg.index = the row the user tagged as unread in the popup table
+      const anchors = safe(() => Array.from(document.querySelectorAll(MP_SELECTOR)), []);
+      const rule = deriveRule(anchors, msg.index);
+      if (rule) {
+        learnedRule = rule;
+        safe(() => chrome.storage.local.set({ [STORAGE_KEY_RULE]: rule }));
+        updateTick({ lastAction: "learned unread rule: " + rule.kind, signalMatched: "learned:" + rule.kind });
+        sendResponse({ ok: true, rule });
+      } else {
+        sendResponse({ ok: false, error: "no feature cleanly separated that row — need a real unread row + at least one read row visible" });
+      }
+      return true;
+    }
+    if (msg && msg.type === "CLEAR_RULE") {
+      learnedRule = null;
+      safe(() => chrome.storage.local.remove(STORAGE_KEY_RULE));
+      sendResponse({ ok: true });
+      return true;
+    }
+    if (msg && msg.type === "GET_RULE") {
+      sendResponse({ ok: true, rule: learnedRule });
+      return true;
+    }
     if (msg && msg.type === "SEND_FOLLOWUP") {
       (async () => {
         const settings = (await ask({ type: "GET_SETTINGS" })).settings || {};
@@ -622,14 +867,13 @@
         try {
           safe(() => anchor.click());
           await sleep(2000);
+          await sleep(1200);
           const composer = findComposer();
           if (composer) {
-            await typeHuman(composer, msg.text, settings);
-            await sleep(rand(200, 600));
-            pressEnter(composer);
-            updateTick({ lastAction: "follow-up sent", lastReplySent: trunc(msg.text, 200) });
-            ask({ type: "LOG_EVENT", entry: { thread: msg.threadId, action: "followup", reply: trunc(msg.text, 200) } });
-            sendResponse({ ok: true });
+            const sent = await typeAndSend(composer, msg.text, settings);
+            updateTick({ lastAction: sent ? "follow-up sent" : "follow-up failed", lastReplySent: sent ? trunc(msg.text, 200) : null });
+            if (sent) ask({ type: "LOG_EVENT", entry: { thread: msg.threadId, action: "followup", reply: trunc(msg.text, 200) } });
+            sendResponse({ ok: sent });
           } else {
             sendResponse({ ok: false, error: "composer not found" });
           }
@@ -646,6 +890,15 @@
 
   /* ---------------- boot ---------------- */
   log("content script loaded on", location.href);
+  // Restore any learned unread rule before the first scan.
+  safe(() =>
+    chrome.storage.local.get([STORAGE_KEY_RULE], (res) => {
+      if (res && res[STORAGE_KEY_RULE]) {
+        learnedRule = res[STORAGE_KEY_RULE];
+        log("restored learned unread rule:", learnedRule);
+      }
+    })
+  );
   setTimeout(() => tick("boot"), 2500);
   setInterval(() => tick("auto"), SCAN_MS);
 })();
