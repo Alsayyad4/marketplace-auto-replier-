@@ -35,6 +35,7 @@
   const cooldowns = {}; // threadId -> until-timestamp
   const repliedThreads = {}; // threadId -> timestamp (awaiting buyer reply)
   let lastTick = {};
+  let breakUntil = 0; // human-cadence: timestamp until which we're "on a break"
 
   /* ---------------- tiny safe helpers (inlined) ---------------- */
   const sleep = (ms) => new Promise((r) => setTimeout(r, ms));
@@ -552,6 +553,31 @@
       return;
     }
 
+    // --- human cadence: breaks + occasional skips (less metronomic) ---
+    if (settings.humanCadence !== false) {
+      const now = Date.now();
+      if (breakUntil > now) {
+        updateTick({ lastAction: `on break (${Math.ceil((breakUntil - now) / 60000)}m left)` });
+        return;
+      }
+      // only roll a new break / skip when there is actually work to do
+      if (unread.length) {
+        const breakChance = settings.breakChance != null ? settings.breakChance : 0.05;
+        if (Math.random() < breakChance) {
+          const minM = settings.breakMinMin != null ? settings.breakMinMin : 3;
+          const maxM = settings.breakMaxMin != null ? settings.breakMaxMin : 18;
+          breakUntil = now + rand(minM, maxM) * 60000;
+          updateTick({ lastAction: `taking a break (${Math.ceil((breakUntil - now) / 60000)}m)` });
+          return;
+        }
+        const skipChance = settings.skipChance != null ? settings.skipChance : 0.12;
+        if (Math.random() < skipChance) {
+          updateTick({ lastAction: "skipped a cycle (human cadence)" });
+          return;
+        }
+      }
+    }
+
     const target = unread.find((a) => {
       const id = threadId(a);
       return !cooldowns[id] || Date.now() > cooldowns[id];
@@ -602,6 +628,7 @@
             await sleep(rand(200, 600));
             pressEnter(composer);
             updateTick({ lastAction: "follow-up sent", lastReplySent: trunc(msg.text, 200) });
+            ask({ type: "LOG_EVENT", entry: { thread: msg.threadId, action: "followup", reply: trunc(msg.text, 200) } });
             sendResponse({ ok: true });
           } else {
             sendResponse({ ok: false, error: "composer not found" });

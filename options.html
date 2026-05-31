@@ -44,6 +44,7 @@
       <div class="tab" data-tab="followups">Follow-ups</div>
       <div class="tab" data-tab="videos">Videos</div>
       <div class="tab" data-tab="test">Test responses</div>
+      <div class="tab" data-tab="log">Activity log</div>
     </div>
 
     <main>
@@ -74,6 +75,27 @@
           <div><label>Open hour (0–23)</label><input type="number" id="businessHoursStart" min="0" max="23" /></div>
           <div><label>Close hour (0–23)</label><input type="number" id="businessHoursEnd" min="0" max="23" /></div>
         </div>
+
+        <hr />
+        <label class="check"><input type="checkbox" id="humanCadence" /> Human cadence <span class="hint">random breaks + occasional skipped cycles (less robotic, less suspicious)</span></label>
+        <div class="inline">
+          <div><label>Skip chance (0–1)</label><input type="number" id="skipChance" min="0" max="1" step="0.01" /></div>
+          <div><label>Break chance / cycle (0–1)</label><input type="number" id="breakChance" min="0" max="1" step="0.01" /></div>
+        </div>
+        <div class="inline">
+          <div><label>Break min (min)</label><input type="number" id="breakMinMin" min="0" /></div>
+          <div><label>Break max (min)</label><input type="number" id="breakMaxMin" min="0" /></div>
+        </div>
+
+        <hr />
+        <label class="check"><input type="checkbox" id="warmupEnabled" /> Warm-up mode <span class="hint">new account ramps daily volume up over N days</span></label>
+        <div class="inline">
+          <div><label>Warm-up days</label><input type="number" id="warmupDays" min="0" /></div>
+          <div><label>Day-0 daily cap</label><input type="number" id="warmupStartCap" min="1" /></div>
+        </div>
+
+        <hr />
+        <label class="check"><input type="checkbox" id="offPlatformGuard" /> Off-platform guardrails <span class="hint">forbid phone numbers, links, "contact me elsewhere"; escalate instead</span></label>
       </section>
 
       <!-- BUSINESS -->
@@ -88,6 +110,8 @@
         <textarea id="businessInfo"></textarea>
         <label>Instructions / tone</label>
         <textarea id="instructions"></textarea>
+        <label>Example conversations <span class="hint">few-shot teaching — paste real buyer→ideal-reply pairs, including when to send [VIDEO:url] or escalate [HUMAN]. The model copies your voice from these far better than from rules.</span></label>
+        <textarea id="examples" style="min-height:200px;" placeholder="Buyer: Le 13 est encore dispo?&#10;You: Allô! Oui tjs dispo 👍 256Go, batterie 91%. 420$ cash, pickup Beaubien.&#10;&#10;Buyer: Can I see it working?&#10;You: [VIDEO:https://…/iphone13.mp4] Here's a quick demo 🙂&#10;&#10;Buyer: Can you ship it and I'll e-transfer first?&#10;You: [HUMAN] buyer wants shipping + pay-first, possible scam"></textarea>
       </section>
 
       <!-- LISTINGS -->
@@ -128,6 +152,21 @@
         <div class="row"><button id="runTest" class="primary">Get Claude's reply</button> <span id="testStatus"></span></div>
         <label>Result</label>
         <pre id="testResult">—</pre>
+      </section>
+
+      <!-- ACTIVITY LOG -->
+      <section id="log">
+        <div class="row">
+          <button id="refreshLog">Refresh</button>
+          <button id="exportLog">Export JSON</button>
+          <button id="clearLog" class="danger">Clear log</button>
+          <span id="logStatus" class="hint"></span>
+        </div>
+        <p class="hint">Every reply, video, follow-up, and [HUMAN] escalation this account sent (most recent first, last 500). Review it to make sure each account sounds right.</p>
+        <table id="logTable">
+          <thead><tr><th>When</th><th>Action</th><th>Thread</th><th>Buyer said</th><th>Reply sent</th></tr></thead>
+          <tbody></tbody>
+        </table>
       </section>
     </main>
 
