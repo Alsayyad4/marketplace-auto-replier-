@@ -363,6 +363,10 @@
     const rowInfo = resolveRow(anchor);
     const row = rowInfo.el;
     const text = safe(() => anchor.innerText || anchor.textContent || "", "");
+    // who-spoke-last preview (independent of the unread dot) — lets the dump
+    // show whether buyer-spoke-last detection would flag this row.
+    const preview = safe(() => rowPreview(anchor), { snippet: "", fromBuyer: false });
+    const isConvo = safe(() => isConversationAnchor(anchor), false);
 
     const descendants = safe(() => Array.from(row.querySelectorAll("*")), []);
     const descClasses = [];
@@ -415,6 +419,10 @@
       textPreview: trunc(text.replace(/\n/g, " | "), 300),
       detectedUnread: isUnread(anchor),
       matchedSignal: anchor.__subsellSignal,
+      isConversation: isConvo,
+      previewSnippet: trunc(preview.snippet, 120),
+      fromBuyer: preview.fromBuyer,
+      wouldReply: isConvo && (isUnread(anchor) || preview.fromBuyer),
       rowResolvedVia: rowInfo.via,
       anchorOuterHTML: trunc(safe(() => anchor.outerHTML, ""), MAX_HTML),
       rowOuterHTML: trunc(safe(() => row.outerHTML, ""), MAX_HTML),
@@ -436,6 +444,9 @@
       index: cap.index,
       name: cap.name,
       unread: cap.detectedUnread,
+      fromBuyer: cap.fromBuyer,
+      wouldReply: cap.wouldReply,
+      snippet: cap.previewSnippet,
       signal: cap.matchedSignal,
       maxFontWeight: weights.length ? Math.max(...weights) : null,
       smallElementCount: cap.smallElements.length,
@@ -451,13 +462,20 @@
       const c = safe(() => captureAnchor(anchors[i], i), null);
       if (c) captures.push(c);
     }
+    const convos = captures.filter((c) => c.isConversation);
     const dump = {
-      version: "0.2.0",
+      version: "0.3.0",
       capturedAt: new Date().toISOString(),
       url: location.href,
       reason: reason || "auto",
       anchorCount: anchors.length,
       capturedCount: captures.length,
+      // headline summary: what the auto-replier would actually act on
+      conversationCount: convos.length,
+      unreadCount: convos.filter((c) => c.detectedUnread).length,
+      buyerSpokeLastCount: convos.filter((c) => !c.detectedUnread && c.fromBuyer).length,
+      wouldReplyCount: convos.filter((c) => c.wouldReply).length,
+      wouldReplyNames: convos.filter((c) => c.wouldReply).map((c) => c.name),
       fingerprints: captures.map(fingerprint),
       anchors: captures,
     };
