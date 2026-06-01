@@ -168,6 +168,26 @@
     return all.filter(isConversationAnchor);
   }
 
+  /* Read a conversation row's preview snippet to tell who spoke last — WITHOUT
+   * relying on the unread dot. When a thread is open/focused, Messenger marks
+   * new messages read instantly (no bold/dot), so unread detection misses them.
+   * The snippet is the longest grey (rgb(101,103,107)) text in the row; if it
+   * doesn't start with "You:"/"Vous:" the buyer spoke last and likely needs a
+   * reply. handleThread re-verifies against the real transcript before sending. */
+  function rowPreview(anchor) {
+    const row = resolveRow(anchor).el;
+    let snippet = "";
+    for (const sp of safe(() => row.querySelectorAll("span"), [])) {
+      const c = safe(() => getComputedStyle(sp).color, "");
+      // grey snippet text; the name is near-black, so this isolates the preview
+      if (c !== "rgb(101, 103, 107)" && c !== "rgb(101,103,107)") continue;
+      const t = safe(() => (sp.textContent || "").trim(), "");
+      if (t.length > snippet.length) snippet = t;
+    }
+    const fromBuyer = !!snippet && !/^(you|vous)\s*:/i.test(snippet) && snippet !== "·";
+    return { snippet, fromBuyer };
+  }
+
   /* =================================================================
    * SELF-LEARNING DETECTION
    * signalSnapshot() reduces a row to a small comparable feature vector.
@@ -793,11 +813,22 @@
 
     const settings = (await ask({ type: "GET_SETTINGS" })).settings || {};
     const unread = anchors.filter(isUnread);
+    // Also pick up threads where the BUYER spoke last even if not marked unread
+    // (open/auto-read threads). Union, de-duped by thread id.
+    const buyerLast = anchors.filter((a) => !isUnread(a) && rowPreview(a).fromBuyer);
+    const seen = new Set();
+    const pending = [];
+    for (const a of [...unread, ...buyerLast]) {
+      const id = threadId(a);
+      if (seen.has(id)) continue;
+      seen.add(id);
+      pending.push(a);
+    }
 
     // Detect buyer replies on threads we already answered -> cancel follow-ups
     for (const a of anchors) {
       const id = threadId(a);
-      if (repliedThreads[id] && isUnread(a)) {
+      if (repliedThreads[id] && (isUnread(a) || rowPreview(a).fromBuyer)) {
         delete repliedThreads[id];
         ask({ type: "BUYER_REPLIED", threadId: id });
       }
@@ -805,7 +836,7 @@
 
     updateTick({
       marketplaceAnchorCount: anchors.length,
-      unreadCount: unread.length,
+      unreadCount: pending.length,
       lastAction: settings.enabled ? "scanning" : "idle (disabled)",
       lastError: null,
     });
@@ -824,7 +855,7 @@
         return;
       }
       // only roll a new break / skip when there is actually work to do
-      if (unread.length) {
+      if (pending.length) {
         const breakChance = settings.breakChance != null ? settings.breakChance : 0.05;
         if (Math.random() < breakChance) {
           const minM = settings.breakMinMin != null ? settings.breakMinMin : 3;
@@ -841,7 +872,7 @@
       }
     }
 
-    const target = unread.find((a) => {
+    const target = pending.find((a) => {
       const id = threadId(a);
       return !cooldowns[id] || Date.now() > cooldowns[id];
     });
