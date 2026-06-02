@@ -883,7 +883,12 @@
     const buyerLast = anchors.filter((a) => !isUnread(a) && rowPreview(a).fromBuyer);
     const seen = new Set();
     const pending = [];
-    for (const a of [...unread, ...buyerLast]) {
+    // PRIORITY: real buyer-spoke-last threads FIRST, unread dot second. The blue
+    // "unread" dot often sits on a thread where WE actually spoke last (Facebook
+    // marks our own just-sent message unread), so processing unread first made
+    // the bot loop on an already-answered chat (e.g. Justice) and never reach the
+    // genuine buyers (e.g. Tedy "hey"). Buyer messages now win the queue.
+    for (const a of [...buyerLast, ...unread]) {
       const id = threadId(a);
       if (seen.has(id)) continue;
       seen.add(id);
