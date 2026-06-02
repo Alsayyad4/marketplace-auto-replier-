@@ -184,7 +184,14 @@
       const t = safe(() => (sp.textContent || "").trim(), "");
       if (t.length > snippet.length) snippet = t;
     }
-    const fromBuyer = !!snippet && !/^(you|vous)\s*:/i.test(snippet) && snippet !== "·";
+    // Strip Facebook's "Unread message:" prefix before judging who spoke.
+    const s = snippet.replace(/^unread message:\s*/i, "").trim();
+    // Facebook/Meta system rows that are NOT a real buyer message — reactions,
+    // "automated suggestion" placeholders, Meta scam notices, rating prompts.
+    // These were inflating the work list and wasting open/skip cycles.
+    const SYSTEM_SNIPPET = /(reacted\b.*\bto your message|reacted to your message|this is an automated suggestion|to help identify and reduce scams|you have a rating waiting|^you sent\b|sent an attachment)/i;
+    const fromBuyer =
+      !!s && !/^(you|vous)\s*:/i.test(s) && s !== "·" && !SYSTEM_SNIPPET.test(s);
     return { snippet, fromBuyer };
   }
 
