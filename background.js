@@ -772,11 +772,34 @@ chrome.runtime.onMessage.addListener((msg, _sender, sendResponse) => {
 const HEARTBEAT_ALARM = "subsell-heartbeat";
 chrome.alarms.create(HEARTBEAT_ALARM, { periodInMinutes: 1 });
 
+const MP_INBOX = "https://www.messenger.com/marketplace/";
+let lastAutoOpen = 0;
+
 async function heartbeat() {
   const settings = await getSettings();
   if (!settings.enabled) return;
   const tab = await findMessagesTab();
-  if (!tab) return;
+  if (!tab) {
+    // FORCE-OPEN: the bot is ON but no Messenger tab exists. Open the
+    // Marketplace inbox in the BACKGROUND (does not steal focus) so the bot
+    // runs without the operator ever opening it. Rate-limited to one attempt
+    // per ~minute so we never spam duplicate tabs while it loads.
+    const now = Date.now();
+    if (now - lastAutoOpen > 55000) {
+      lastAutoOpen = now;
+      chrome.tabs.create({ url: MP_INBOX, active: false }, () => void chrome.runtime.lastError);
+    }
+    return; // next heartbeat will tick the freshly opened tab
+  }
+  // A Messenger tab exists but isn't on the Marketplace folder — steer it there
+  // (rate-limited) so detection always sees the buyer inbox, then tick it.
+  if (!/\/marketplace/.test(tab.url || "")) {
+    const now = Date.now();
+    if (now - lastAutoOpen > 55000) {
+      lastAutoOpen = now;
+      chrome.tabs.update(tab.id, { url: MP_INBOX }, () => void chrome.runtime.lastError);
+    }
+  }
   chrome.tabs.sendMessage(tab.id, { type: "TICK_NOW" }, () => void chrome.runtime.lastError);
 }
 
