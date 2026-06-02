@@ -747,10 +747,38 @@
     cooldowns[id] = Date.now() + COOLDOWN_MS;
     updateTick({ currentThread: name, signalMatched: anchor.__subsellSignal, lastAction: "opening thread" });
 
-    safe(() => anchor.click());
-    await sleep(2000);
-    if (id && !location.href.includes(id)) {
-      // URL didn't change to this thread; bail to avoid replying to the wrong one.
+    // Open the conversation. A bare anchor.click() often does NOT trigger
+    // Messenger's in-app (SPA) navigation, which is why threads were aborting
+    // with "URL did not change". Drive a full pointer/mouse event sequence on
+    // the anchor, then POLL for up to ~7s (Messenger can be slow), retrying the
+    // click once. Only bail if it truly never navigates.
+    function openThread() {
+      const clickTarget = safe(() => anchor.querySelector("div") || anchor, anchor);
+      safe(() => {
+        for (const type of ["pointerover", "pointerenter", "pointerdown", "mousedown", "pointerup", "mouseup", "click"]) {
+          clickTarget.dispatchEvent(new MouseEvent(type, { bubbles: true, cancelable: true, view: window }));
+        }
+      });
+      // belt-and-suspenders: also fire the element's native click()
+      safe(() => anchor.click());
+    }
+    openThread();
+    let opened = !id || location.href.includes(id);
+    for (let i = 0; i < 14 && !opened; i++) {
+      await sleep(500);
+      if (!id || location.href.includes(id)) { opened = true; break; }
+      if (i === 5) openThread(); // one retry partway through
+    }
+    if (!opened) {
+      // Last resort: navigate straight to the thread URL (full SPA route load).
+      const href = safe(() => anchor.getAttribute("href"), null);
+      if (href) {
+        safe(() => { location.href = href.startsWith("http") ? href : location.origin + href; });
+        await sleep(2500);
+        opened = !id || location.href.includes(id);
+      }
+    }
+    if (!opened) {
       updateTick({ lastError: "URL did not change to thread " + id, lastAction: "aborted" });
       return;
     }
