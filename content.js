@@ -864,6 +864,15 @@
       updateTick({ lastAction: "idle (not on messages page)" });
       return;
     }
+    // Loud, explicit blockers — so the popup shows WHY nothing is sending
+    // instead of silently doing nothing. The API key is the usual culprit.
+    if (!settings.apiKey) {
+      updateTick({
+        lastAction: "BLOCKED — no API key",
+        lastError: "API key not set. Open Settings, paste your sk-ant-… key, Save. Replies are blocked until then.",
+      });
+      return;
+    }
 
     // --- human cadence (anti-detection pacing) ---
     // CRITICAL FIX: pacing must NEVER strand a waiting buyer. The old logic
