@@ -578,16 +578,30 @@
     const colCenter = (colLeft + colRight) / 2;
     const colTop = composer ? cRect.top : Infinity; // messages are above the input
 
+    // Locate Facebook's "Send a quick response" suggestion block and exclude its
+    // ENTIRE subtree. Those grey chips ("Yes. Are you interested?", "In talks…",
+    // "Sorry, it's not available.") render right under the buyer's message and
+    // were being read as our own last turn — so the bot saw a fake "we replied"
+    // and skipped a real buyer message like "hey". Matching the block container
+    // is robust to wording/punctuation (curly vs straight apostrophes) changes.
+    const quickBlocks = [];
+    for (const d of safe(() => Array.from(main.querySelectorAll("div")), [])) {
+      const t = safe(() => (d.textContent || "").trim(), "");
+      if (/^Send a quick response/i.test(t) || /^Tap a response to send it to the buyer/i.test(t)) {
+        quickBlocks.push(d);
+      }
+    }
+    const inQuickBlock = (el) => quickBlocks.some((b) => safe(() => b.contains(el), false));
+
     const bubbles = [];
     const seen = new Set();
     const nodes = safe(() => Array.from(main.querySelectorAll('[role="row"] [dir="auto"]')), []);
     for (const el of nodes) {
       // take leaf-ish text nodes only (skip wrappers that contain another dir=auto)
       if (safe(() => el.querySelector('[dir="auto"]'), null)) continue;
-      // Skip Facebook's "quick response" suggestion chips and any button UI —
-      // these are seller-side SUGGESTIONS, not messages. They render right after
-      // the buyer's text and were being read as our own last turn, making the
-      // bot skip a fresh buyer message. Structural guard (covers wording changes).
+      // Skip the quick-response suggestion subtree and any button UI — seller-side
+      // SUGGESTIONS, not messages.
+      if (inQuickBlock(el)) continue;
       if (safe(() => el.closest('[role="button"]'), null)) continue;
       const text = safe(() => (el.innerText || el.textContent || "").trim(), "");
       if (!text || text.length < 1) continue;
