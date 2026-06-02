@@ -21,6 +21,7 @@
   "use strict";
 
   const MP_SELECTOR = 'a[href*="/marketplace/t/"]';
+  const BUILD = "2026-06-02-forcereply"; // visible in DEBUG so we know it's loaded
   const STORAGE_KEY_DUMP = "diagnosticDump";
   const STORAGE_KEY_TICK = "debugTick";
   const STORAGE_KEY_RULE = "learnedUnreadRule"; // self-learning detection
@@ -506,7 +507,7 @@
       },
       lastTick,
       patch,
-      { lastScanTime: new Date().toISOString() }
+      { lastScanTime: new Date().toISOString(), build: BUILD }
     );
     safe(() => chrome.storage.local.set({ [STORAGE_KEY_TICK]: lastTick }));
   }
@@ -636,6 +637,23 @@
       .map((m) => (m.role === "buyer" ? "Buyer: " : "You: ") + m.text)
       .join("\n");
     return { buyerMessage: last.text, transcript };
+  }
+
+  // FORCE-REPLY read: return the LAST buyer message anywhere in the visible
+  // transcript, even if a stray non-buyer bubble (an unfiltered suggestion chip,
+  // a system line) sits after it. Used only when the conversation list already
+  // says the buyer spoke last — so "skip" never silently drops a real buyer.
+  function getBuyerTurnLoose() {
+    const convo = readConversation();
+    if (!convo.length) return null;
+    let lastBuyer = null;
+    for (const m of convo) if (m.role === "buyer") lastBuyer = m;
+    if (!lastBuyer) return null;
+    const transcript = convo
+      .slice(-12)
+      .map((m) => (m.role === "buyer" ? "Buyer: " : "You: ") + m.text)
+      .join("\n");
+    return { buyerMessage: lastBuyer.text, transcript };
   }
 
   /* ---------------- human-like typing ---------------- */
@@ -821,10 +839,22 @@
     // ours, or only UI noise), DO NOT reply — this is what stops the bot from
     // talking to itself or to menu labels like "Privacy & support".
     await sleep(1200);
-    const turn = getBuyerTurn();
+    let turn = getBuyerTurn();
     if (!turn) {
-      updateTick({ lastAction: "skip: last message isn't a fresh buyer message", currentThread: name });
-      return;
+      // FORCE-REPLY: the strict reader didn't confirm a fresh buyer turn. If the
+      // conversation LIST said the buyer spoke last (fromBuyer), trust it and
+      // reply to the last buyer message we can see, rather than silently
+      // skipping. This is what makes it answer "hey"/openers under FB's
+      // suggestion box and odd layouts.
+      const listSaysBuyer = safe(() => rowPreview(anchor).fromBuyer, false);
+      const loose = listSaysBuyer ? getBuyerTurnLoose() : null;
+      if (loose) {
+        turn = loose;
+        updateTick({ lastAction: "force-reply (loose read): " + trunc(loose.buyerMessage, 60), currentThread: name });
+      } else {
+        updateTick({ lastAction: "skip: last message isn't a fresh buyer message", currentThread: name });
+        return;
+      }
     }
     const buyerMessage = turn.buyerMessage;
     updateTick({ lastAction: "buyer said: " + trunc(buyerMessage, 80), currentThread: name });

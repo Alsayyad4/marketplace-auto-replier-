@@ -44,6 +44,7 @@
       return;
     }
     const pairs = [
+      ["build", tick.build || "—"],
       ["last scan", tick.lastScanTime],
       ["marketplace anchors", tick.marketplaceAnchorCount],
       ["unread count", tick.unreadCount],
