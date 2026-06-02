@@ -169,7 +169,14 @@
     $("delay").value = d;
     $("delayVal").textContent = d;
   }
-  async function onDelay() {
+  // Live label update only — do NOT save on every drag tick. Saving routes
+  // through synced storage, which has a write-rate quota; hammering it on each
+  // 'input' event was exhausting the quota and silently dropping later writes
+  // (including the API key). We persist once, on release ('change').
+  function onDelayInput() {
+    $("delayVal").textContent = $("delay").value;
+  }
+  async function onDelayCommit() {
     settings = await getSettings();
     settings.responseDelaySec = Number($("delay").value);
     $("delayVal").textContent = settings.responseDelaySec;
@@ -222,7 +229,8 @@
   $("openMp").addEventListener("click", openMarketplace);
   $("scan").addEventListener("click", scanNow);
   $("copy").addEventListener("click", copyAll);
-  $("delay").addEventListener("input", onDelay);
+  $("delay").addEventListener("input", onDelayInput);
+  $("delay").addEventListener("change", onDelayCommit);
   $("openOptions").addEventListener("click", (e) => {
     e.preventDefault();
     chrome.runtime.openOptionsPage();

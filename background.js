@@ -125,12 +125,17 @@ function syncedConfigWrite(config) {
 function getSettings() {
   return new Promise((resolve) => {
     syncedConfigRead((cfg, hadSync) => {
-      chrome.storage.local.get(["settings", "enabledLocal"], (res) => {
+      chrome.storage.local.get(["settings", "enabledLocal", "apiKeyLocal"], (res) => {
         // Config priority: synced (cross-computer) > legacy local 'settings'.
         // `enabled` is PER-MACHINE: enabledLocal first, then config, then DEFAULTS.
         const base = hadSync ? cfg : (res.settings || {});
         const merged = Object.assign({}, DEFAULTS, base);
         if (typeof res.enabledLocal === "boolean") merged.enabled = res.enabledLocal;
+        // The API key lives in LOCAL storage (per-machine). chrome.storage.sync
+        // has a write-rate quota that silently drops writes (e.g. when the delay
+        // slider saves repeatedly), which is why the key kept resetting to NOT
+        // set. Local storage has no such quota — it's the reliable source here.
+        if (res.apiKeyLocal) merged.apiKey = res.apiKeyLocal;
         resolve(merged);
       });
     });
@@ -586,8 +591,14 @@ chrome.runtime.onMessage.addListener((msg, _sender, sendResponse) => {
           // Full config save (from options) -> synced chunks across computers.
           const s = msg.settings || {};
           const ok = await syncedConfigWrite(s);
-          if (typeof s.enabled === "boolean") {
-            await new Promise((r) => chrome.storage.local.set({ enabledLocal: s.enabled }, r));
+          // Mirror the per-machine bits into local storage so they survive even
+          // if a sync write is throttled/dropped. The API key in particular is
+          // the source of truth here — never let a flaky sync write lose it.
+          const localPatch = {};
+          if (typeof s.enabled === "boolean") localPatch.enabledLocal = s.enabled;
+          if (s.apiKey) localPatch.apiKeyLocal = s.apiKey;
+          if (Object.keys(localPatch).length) {
+            await new Promise((r) => chrome.storage.local.set(localPatch, r));
           }
           sendResponse({ ok });
           break;

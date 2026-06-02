@@ -865,28 +865,27 @@
       return;
     }
 
-    // --- human cadence: breaks + occasional skips (less metronomic) ---
-    if (settings.humanCadence !== false) {
+    // --- human cadence (anti-detection pacing) ---
+    // CRITICAL FIX: pacing must NEVER strand a waiting buyer. The old logic
+    // rolled multi-minute "breaks" precisely when pending.length > 0, which is
+    // exactly why the bot sat "on break (13m left)" while 15 customers went
+    // unanswered. Now a waiting buyer ALWAYS wins (force-reply): breaks/skips
+    // are only ever considered while the inbox is already empty, where they're
+    // invisible and harmless. Per-reply delay + jitter + the 90s per-thread
+    // cooldown still keep replies from looking robotic/metronomic.
+    if (pending.length) {
+      breakUntil = 0; // cancel any lingering rest — someone is waiting
+    } else if (settings.humanCadence !== false) {
       const now = Date.now();
       if (breakUntil > now) {
-        updateTick({ lastAction: `on break (${Math.ceil((breakUntil - now) / 60000)}m left)` });
+        updateTick({ lastAction: `resting (${Math.ceil((breakUntil - now) / 60000)}m left)` });
         return;
       }
-      // only roll a new break / skip when there is actually work to do
-      if (pending.length) {
-        const breakChance = settings.breakChance != null ? settings.breakChance : 0.05;
-        if (Math.random() < breakChance) {
-          const minM = settings.breakMinMin != null ? settings.breakMinMin : 3;
-          const maxM = settings.breakMaxMin != null ? settings.breakMaxMin : 18;
-          breakUntil = now + rand(minM, maxM) * 60000;
-          updateTick({ lastAction: `taking a break (${Math.ceil((breakUntil - now) / 60000)}m)` });
-          return;
-        }
-        const skipChance = settings.skipChance != null ? settings.skipChance : 0.12;
-        if (Math.random() < skipChance) {
-          updateTick({ lastAction: "skipped a cycle (human cadence)" });
-          return;
-        }
+      const breakChance = settings.breakChance != null ? settings.breakChance : 0.05;
+      if (Math.random() < breakChance) {
+        const minM = settings.breakMinMin != null ? settings.breakMinMin : 3;
+        const maxM = settings.breakMaxMin != null ? settings.breakMaxMin : 18;
+        breakUntil = now + rand(minM, maxM) * 60000;
       }
     }
 
