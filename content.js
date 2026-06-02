@@ -21,6 +21,7 @@
   "use strict";
 
   const MP_SELECTOR = 'a[href*="/marketplace/t/"]';
+  const BUILD = "2026-06-02-forcereply"; // visible in DEBUG so we know it's loaded
   const STORAGE_KEY_DUMP = "diagnosticDump";
   const STORAGE_KEY_TICK = "debugTick";
   const STORAGE_KEY_RULE = "learnedUnreadRule"; // self-learning detection
@@ -184,7 +185,14 @@
       const t = safe(() => (sp.textContent || "").trim(), "");
       if (t.length > snippet.length) snippet = t;
     }
-    const fromBuyer = !!snippet && !/^(you|vous)\s*:/i.test(snippet) && snippet !== "·";
+    // Strip Facebook's "Unread message:" prefix before judging who spoke.
+    const s = snippet.replace(/^unread message:\s*/i, "").trim();
+    // Facebook/Meta system rows that are NOT a real buyer message — reactions,
+    // "automated suggestion" placeholders, Meta scam notices, rating prompts.
+    // These were inflating the work list and wasting open/skip cycles.
+    const SYSTEM_SNIPPET = /(reacted\b.*\bto your message|reacted to your message|this is an automated suggestion|to help identify and reduce scams|you have a rating waiting|^you sent\b|sent an attachment)/i;
+    const fromBuyer =
+      !!s && !/^(you|vous)\s*:/i.test(s) && s !== "·" && !SYSTEM_SNIPPET.test(s);
     return { snippet, fromBuyer };
   }
 
@@ -363,6 +371,10 @@
     const rowInfo = resolveRow(anchor);
     const row = rowInfo.el;
     const text = safe(() => anchor.innerText || anchor.textContent || "", "");
+    // who-spoke-last preview (independent of the unread dot) — lets the dump
+    // show whether buyer-spoke-last detection would flag this row.
+    const preview = safe(() => rowPreview(anchor), { snippet: "", fromBuyer: false });
+    const isConvo = safe(() => isConversationAnchor(anchor), false);
 
     const descendants = safe(() => Array.from(row.querySelectorAll("*")), []);
     const descClasses = [];
@@ -415,6 +427,10 @@
       textPreview: trunc(text.replace(/\n/g, " | "), 300),
       detectedUnread: isUnread(anchor),
       matchedSignal: anchor.__subsellSignal,
+      isConversation: isConvo,
+      previewSnippet: trunc(preview.snippet, 120),
+      fromBuyer: preview.fromBuyer,
+      wouldReply: isConvo && (isUnread(anchor) || preview.fromBuyer),
       rowResolvedVia: rowInfo.via,
       anchorOuterHTML: trunc(safe(() => anchor.outerHTML, ""), MAX_HTML),
       rowOuterHTML: trunc(safe(() => row.outerHTML, ""), MAX_HTML),
@@ -436,6 +452,9 @@
       index: cap.index,
       name: cap.name,
       unread: cap.detectedUnread,
+      fromBuyer: cap.fromBuyer,
+      wouldReply: cap.wouldReply,
+      snippet: cap.previewSnippet,
       signal: cap.matchedSignal,
       maxFontWeight: weights.length ? Math.max(...weights) : null,
       smallElementCount: cap.smallElements.length,
@@ -451,13 +470,20 @@
       const c = safe(() => captureAnchor(anchors[i], i), null);
       if (c) captures.push(c);
     }
+    const convos = captures.filter((c) => c.isConversation);
     const dump = {
-      version: "0.2.0",
+      version: "0.3.0",
       capturedAt: new Date().toISOString(),
       url: location.href,
       reason: reason || "auto",
       anchorCount: anchors.length,
       capturedCount: captures.length,
+      // headline summary: what the auto-replier would actually act on
+      conversationCount: convos.length,
+      unreadCount: convos.filter((c) => c.detectedUnread).length,
+      buyerSpokeLastCount: convos.filter((c) => !c.detectedUnread && c.fromBuyer).length,
+      wouldReplyCount: convos.filter((c) => c.wouldReply).length,
+      wouldReplyNames: convos.filter((c) => c.wouldReply).map((c) => c.name),
       fingerprints: captures.map(fingerprint),
       anchors: captures,
     };
@@ -481,7 +507,7 @@
       },
       lastTick,
       patch,
-      { lastScanTime: new Date().toISOString() }
+      { lastScanTime: new Date().toISOString(), build: BUILD }
     );
     safe(() => chrome.storage.local.set({ [STORAGE_KEY_TICK]: lastTick }));
   }
@@ -518,6 +544,13 @@
     "privacy & support", "customize chat", "chat members", "media, files and links",
     "rate seller", "more options", "marketplace", "mute", "search", "block",
     "you sent", "enter", "sent", "delivered", "seen", "active now", "view profile",
+    // Facebook "Send a quick response" suggestion UI + automated placeholders.
+    // These render near the buyer's message and were being mistaken for OUR
+    // reply, causing "skip: last message isn't a fresh buyer message".
+    "send a quick response", "tap a response to send it to the buyer",
+    "yes. are you interested?", "yes, are you interested?",
+    "in talks. i'll let you know.", "sorry, it's not available.",
+    "this is an automated suggestion", "add video", "allow other buyers",
   ];
   function looksLikeNoise(text) {
     const t = text.trim().toLowerCase();
@@ -546,12 +579,31 @@
     const colCenter = (colLeft + colRight) / 2;
     const colTop = composer ? cRect.top : Infinity; // messages are above the input
 
+    // Locate Facebook's "Send a quick response" suggestion block and exclude its
+    // ENTIRE subtree. Those grey chips ("Yes. Are you interested?", "In talks…",
+    // "Sorry, it's not available.") render right under the buyer's message and
+    // were being read as our own last turn — so the bot saw a fake "we replied"
+    // and skipped a real buyer message like "hey". Matching the block container
+    // is robust to wording/punctuation (curly vs straight apostrophes) changes.
+    const quickBlocks = [];
+    for (const d of safe(() => Array.from(main.querySelectorAll("div")), [])) {
+      const t = safe(() => (d.textContent || "").trim(), "");
+      if (/^Send a quick response/i.test(t) || /^Tap a response to send it to the buyer/i.test(t)) {
+        quickBlocks.push(d);
+      }
+    }
+    const inQuickBlock = (el) => quickBlocks.some((b) => safe(() => b.contains(el), false));
+
     const bubbles = [];
     const seen = new Set();
     const nodes = safe(() => Array.from(main.querySelectorAll('[role="row"] [dir="auto"]')), []);
     for (const el of nodes) {
       // take leaf-ish text nodes only (skip wrappers that contain another dir=auto)
       if (safe(() => el.querySelector('[dir="auto"]'), null)) continue;
+      // Skip the quick-response suggestion subtree and any button UI — seller-side
+      // SUGGESTIONS, not messages.
+      if (inQuickBlock(el)) continue;
+      if (safe(() => el.closest('[role="button"]'), null)) continue;
       const text = safe(() => (el.innerText || el.textContent || "").trim(), "");
       if (!text || text.length < 1) continue;
       if (looksLikeNoise(text)) continue;
@@ -585,6 +637,23 @@
       .map((m) => (m.role === "buyer" ? "Buyer: " : "You: ") + m.text)
       .join("\n");
     return { buyerMessage: last.text, transcript };
+  }
+
+  // FORCE-REPLY read: return the LAST buyer message anywhere in the visible
+  // transcript, even if a stray non-buyer bubble (an unfiltered suggestion chip,
+  // a system line) sits after it. Used only when the conversation list already
+  // says the buyer spoke last — so "skip" never silently drops a real buyer.
+  function getBuyerTurnLoose() {
+    const convo = readConversation();
+    if (!convo.length) return null;
+    let lastBuyer = null;
+    for (const m of convo) if (m.role === "buyer") lastBuyer = m;
+    if (!lastBuyer) return null;
+    const transcript = convo
+      .slice(-12)
+      .map((m) => (m.role === "buyer" ? "Buyer: " : "You: ") + m.text)
+      .join("\n");
+    return { buyerMessage: lastBuyer.text, transcript };
   }
 
   /* ---------------- human-like typing ---------------- */
@@ -729,10 +798,38 @@
     cooldowns[id] = Date.now() + COOLDOWN_MS;
     updateTick({ currentThread: name, signalMatched: anchor.__subsellSignal, lastAction: "opening thread" });
 
-    safe(() => anchor.click());
-    await sleep(2000);
-    if (id && !location.href.includes(id)) {
-      // URL didn't change to this thread; bail to avoid replying to the wrong one.
+    // Open the conversation. A bare anchor.click() often does NOT trigger
+    // Messenger's in-app (SPA) navigation, which is why threads were aborting
+    // with "URL did not change". Drive a full pointer/mouse event sequence on
+    // the anchor, then POLL for up to ~7s (Messenger can be slow), retrying the
+    // click once. Only bail if it truly never navigates.
+    function openThread() {
+      const clickTarget = safe(() => anchor.querySelector("div") || anchor, anchor);
+      safe(() => {
+        for (const type of ["pointerover", "pointerenter", "pointerdown", "mousedown", "pointerup", "mouseup", "click"]) {
+          clickTarget.dispatchEvent(new MouseEvent(type, { bubbles: true, cancelable: true, view: window }));
+        }
+      });
+      // belt-and-suspenders: also fire the element's native click()
+      safe(() => anchor.click());
+    }
+    openThread();
+    let opened = !id || location.href.includes(id);
+    for (let i = 0; i < 14 && !opened; i++) {
+      await sleep(500);
+      if (!id || location.href.includes(id)) { opened = true; break; }
+      if (i === 5) openThread(); // one retry partway through
+    }
+    if (!opened) {
+      // Last resort: navigate straight to the thread URL (full SPA route load).
+      const href = safe(() => anchor.getAttribute("href"), null);
+      if (href) {
+        safe(() => { location.href = href.startsWith("http") ? href : location.origin + href; });
+        await sleep(2500);
+        opened = !id || location.href.includes(id);
+      }
+    }
+    if (!opened) {
       updateTick({ lastError: "URL did not change to thread " + id, lastAction: "aborted" });
       return;
     }
@@ -742,10 +839,22 @@
     // ours, or only UI noise), DO NOT reply — this is what stops the bot from
     // talking to itself or to menu labels like "Privacy & support".
     await sleep(1200);
-    const turn = getBuyerTurn();
+    let turn = getBuyerTurn();
     if (!turn) {
-      updateTick({ lastAction: "skip: last message isn't a fresh buyer message", currentThread: name });
-      return;
+      // FORCE-REPLY: the strict reader didn't confirm a fresh buyer turn. If the
+      // conversation LIST said the buyer spoke last (fromBuyer), trust it and
+      // reply to the last buyer message we can see, rather than silently
+      // skipping. This is what makes it answer "hey"/openers under FB's
+      // suggestion box and odd layouts.
+      const listSaysBuyer = safe(() => rowPreview(anchor).fromBuyer, false);
+      const loose = listSaysBuyer ? getBuyerTurnLoose() : null;
+      if (loose) {
+        turn = loose;
+        updateTick({ lastAction: "force-reply (loose read): " + trunc(loose.buyerMessage, 60), currentThread: name });
+      } else {
+        updateTick({ lastAction: "skip: last message isn't a fresh buyer message", currentThread: name });
+        return;
+      }
     }
     const buyerMessage = turn.buyerMessage;
     updateTick({ lastAction: "buyer said: " + trunc(buyerMessage, 80), currentThread: name });
@@ -818,7 +927,12 @@
     const buyerLast = anchors.filter((a) => !isUnread(a) && rowPreview(a).fromBuyer);
     const seen = new Set();
     const pending = [];
-    for (const a of [...unread, ...buyerLast]) {
+    // PRIORITY: real buyer-spoke-last threads FIRST, unread dot second. The blue
+    // "unread" dot often sits on a thread where WE actually spoke last (Facebook
+    // marks our own just-sent message unread), so processing unread first made
+    // the bot loop on an already-answered chat (e.g. Justice) and never reach the
+    // genuine buyers (e.g. Tedy "hey"). Buyer messages now win the queue.
+    for (const a of [...buyerLast, ...unread]) {
       const id = threadId(a);
       if (seen.has(id)) continue;
       seen.add(id);
@@ -846,29 +960,37 @@
       updateTick({ lastAction: "idle (not on messages page)" });
       return;
     }
+    // Loud, explicit blockers — so the popup shows WHY nothing is sending
+    // instead of silently doing nothing. The API key is the usual culprit.
+    if (!settings.apiKey) {
+      updateTick({
+        lastAction: "BLOCKED — no API key",
+        lastError: "API key not set. Open Settings, paste your sk-ant-… key, Save. Replies are blocked until then.",
+      });
+      return;
+    }
 
-    // --- human cadence: breaks + occasional skips (less metronomic) ---
-    if (settings.humanCadence !== false) {
+    // --- human cadence (anti-detection pacing) ---
+    // CRITICAL FIX: pacing must NEVER strand a waiting buyer. The old logic
+    // rolled multi-minute "breaks" precisely when pending.length > 0, which is
+    // exactly why the bot sat "on break (13m left)" while 15 customers went
+    // unanswered. Now a waiting buyer ALWAYS wins (force-reply): breaks/skips
+    // are only ever considered while the inbox is already empty, where they're
+    // invisible and harmless. Per-reply delay + jitter + the 90s per-thread
+    // cooldown still keep replies from looking robotic/metronomic.
+    if (pending.length) {
+      breakUntil = 0; // cancel any lingering rest — someone is waiting
+    } else if (settings.humanCadence !== false) {
       const now = Date.now();
       if (breakUntil > now) {
-        updateTick({ lastAction: `on break (${Math.ceil((breakUntil - now) / 60000)}m left)` });
+        updateTick({ lastAction: `resting (${Math.ceil((breakUntil - now) / 60000)}m left)` });
         return;
       }
-      // only roll a new break / skip when there is actually work to do
-      if (pending.length) {
-        const breakChance = settings.breakChance != null ? settings.breakChance : 0.05;
-        if (Math.random() < breakChance) {
-          const minM = settings.breakMinMin != null ? settings.breakMinMin : 3;
-          const maxM = settings.breakMaxMin != null ? settings.breakMaxMin : 18;
-          breakUntil = now + rand(minM, maxM) * 60000;
-          updateTick({ lastAction: `taking a break (${Math.ceil((breakUntil - now) / 60000)}m)` });
-          return;
-        }
-        const skipChance = settings.skipChance != null ? settings.skipChance : 0.12;
-        if (Math.random() < skipChance) {
-          updateTick({ lastAction: "skipped a cycle (human cadence)" });
-          return;
-        }
+      const breakChance = settings.breakChance != null ? settings.breakChance : 0.05;
+      if (Math.random() < breakChance) {
+        const minM = settings.breakMinMin != null ? settings.breakMinMin : 3;
+        const maxM = settings.breakMaxMin != null ? settings.breakMaxMin : 18;
+        breakUntil = now + rand(minM, maxM) * 60000;
       }
     }
 

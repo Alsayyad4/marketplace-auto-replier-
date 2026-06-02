@@ -29,12 +29,12 @@ const DEFAULTS = {
   dailyCap: 200,
   wpmMin: 38,
   wpmMax: 78,
-  businessHoursEnabled: true,
-  businessHoursStart: 9, // 9 AM
+  businessHoursEnabled: false, // off = reply 24/7
+  businessHoursStart: 9, // 9 AM (only used when the toggle is on)
   businessHoursEnd: 22, // 10 PM
   businessName: "SubSell",
   businessAddress: "757 Rue Beaubien E, Montréal",
-  businessHoursText: "9AM–10PM, 7 days",
+  businessHoursText: "24/7",
   businessInfo:
     "Used iPhone sales in Montreal. Pickup at 757 Rue Beaubien E, Montréal. Cash or e-transfer.",
   instructions:
@@ -125,12 +125,17 @@ function syncedConfigWrite(config) {
 function getSettings() {
   return new Promise((resolve) => {
     syncedConfigRead((cfg, hadSync) => {
-      chrome.storage.local.get(["settings", "enabledLocal"], (res) => {
+      chrome.storage.local.get(["settings", "enabledLocal", "apiKeyLocal"], (res) => {
         // Config priority: synced (cross-computer) > legacy local 'settings'.
         // `enabled` is PER-MACHINE: enabledLocal first, then config, then DEFAULTS.
         const base = hadSync ? cfg : (res.settings || {});
         const merged = Object.assign({}, DEFAULTS, base);
         if (typeof res.enabledLocal === "boolean") merged.enabled = res.enabledLocal;
+        // The API key lives in LOCAL storage (per-machine). chrome.storage.sync
+        // has a write-rate quota that silently drops writes (e.g. when the delay
+        // slider saves repeatedly), which is why the key kept resetting to NOT
+        // set. Local storage has no such quota — it's the reliable source here.
+        if (res.apiKeyLocal) merged.apiKey = res.apiKeyLocal;
         resolve(merged);
       });
     });
@@ -586,8 +591,14 @@ chrome.runtime.onMessage.addListener((msg, _sender, sendResponse) => {
           // Full config save (from options) -> synced chunks across computers.
           const s = msg.settings || {};
           const ok = await syncedConfigWrite(s);
-          if (typeof s.enabled === "boolean") {
-            await new Promise((r) => chrome.storage.local.set({ enabledLocal: s.enabled }, r));
+          // Mirror the per-machine bits into local storage so they survive even
+          // if a sync write is throttled/dropped. The API key in particular is
+          // the source of truth here — never let a flaky sync write lose it.
+          const localPatch = {};
+          if (typeof s.enabled === "boolean") localPatch.enabledLocal = s.enabled;
+          if (s.apiKey) localPatch.apiKeyLocal = s.apiKey;
+          if (Object.keys(localPatch).length) {
+            await new Promise((r) => chrome.storage.local.set(localPatch, r));
           }
           sendResponse({ ok });
           break;
@@ -761,11 +772,34 @@ chrome.runtime.onMessage.addListener((msg, _sender, sendResponse) => {
 const HEARTBEAT_ALARM = "subsell-heartbeat";
 chrome.alarms.create(HEARTBEAT_ALARM, { periodInMinutes: 1 });
 
+const MP_INBOX = "https://www.messenger.com/marketplace/";
+let lastAutoOpen = 0;
+
 async function heartbeat() {
   const settings = await getSettings();
   if (!settings.enabled) return;
   const tab = await findMessagesTab();
-  if (!tab) return;
+  if (!tab) {
+    // FORCE-OPEN: the bot is ON but no Messenger tab exists. Open the
+    // Marketplace inbox in the BACKGROUND (does not steal focus) so the bot
+    // runs without the operator ever opening it. Rate-limited to one attempt
+    // per ~minute so we never spam duplicate tabs while it loads.
+    const now = Date.now();
+    if (now - lastAutoOpen > 55000) {
+      lastAutoOpen = now;
+      chrome.tabs.create({ url: MP_INBOX, active: false }, () => void chrome.runtime.lastError);
+    }
+    return; // next heartbeat will tick the freshly opened tab
+  }
+  // A Messenger tab exists but isn't on the Marketplace folder — steer it there
+  // (rate-limited) so detection always sees the buyer inbox, then tick it.
+  if (!/\/marketplace/.test(tab.url || "")) {
+    const now = Date.now();
+    if (now - lastAutoOpen > 55000) {
+      lastAutoOpen = now;
+      chrome.tabs.update(tab.id, { url: MP_INBOX }, () => void chrome.runtime.lastError);
+    }
+  }
   chrome.tabs.sendMessage(tab.id, { type: "TICK_NOW" }, () => void chrome.runtime.lastError);
 }
 
