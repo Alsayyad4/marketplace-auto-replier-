@@ -536,6 +536,13 @@
     "privacy & support", "customize chat", "chat members", "media, files and links",
     "rate seller", "more options", "marketplace", "mute", "search", "block",
     "you sent", "enter", "sent", "delivered", "seen", "active now", "view profile",
+    // Facebook "Send a quick response" suggestion UI + automated placeholders.
+    // These render near the buyer's message and were being mistaken for OUR
+    // reply, causing "skip: last message isn't a fresh buyer message".
+    "send a quick response", "tap a response to send it to the buyer",
+    "yes. are you interested?", "yes, are you interested?",
+    "in talks. i'll let you know.", "sorry, it's not available.",
+    "this is an automated suggestion", "add video", "allow other buyers",
   ];
   function looksLikeNoise(text) {
     const t = text.trim().toLowerCase();
@@ -570,6 +577,11 @@
     for (const el of nodes) {
       // take leaf-ish text nodes only (skip wrappers that contain another dir=auto)
       if (safe(() => el.querySelector('[dir="auto"]'), null)) continue;
+      // Skip Facebook's "quick response" suggestion chips and any button UI —
+      // these are seller-side SUGGESTIONS, not messages. They render right after
+      // the buyer's text and were being read as our own last turn, making the
+      // bot skip a fresh buyer message. Structural guard (covers wording changes).
+      if (safe(() => el.closest('[role="button"]'), null)) continue;
       const text = safe(() => (el.innerText || el.textContent || "").trim(), "");
       if (!text || text.length < 1) continue;
       if (looksLikeNoise(text)) continue;
