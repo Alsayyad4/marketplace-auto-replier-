@@ -14,12 +14,12 @@
     dailyCap: 200,
     wpmMin: 38,
     wpmMax: 78,
-    businessHoursEnabled: true,
+    businessHoursEnabled: false,
     businessHoursStart: 9,
     businessHoursEnd: 22,
     businessName: "SubSell",
     businessAddress: "757 Rue Beaubien E, Montréal",
-    businessHoursText: "9AM–10PM, 7 days",
+    businessHoursText: "24/7",
     businessInfo:
       "Used iPhone sales in Montreal. Pickup at 757 Rue Beaubien E, Montréal. Cash or e-transfer.",
     instructions:

@@ -29,12 +29,12 @@ const DEFAULTS = {
   dailyCap: 200,
   wpmMin: 38,
   wpmMax: 78,
-  businessHoursEnabled: true,
-  businessHoursStart: 9, // 9 AM
+  businessHoursEnabled: false, // off = reply 24/7
+  businessHoursStart: 9, // 9 AM (only used when the toggle is on)
   businessHoursEnd: 22, // 10 PM
   businessName: "SubSell",
   businessAddress: "757 Rue Beaubien E, Montréal",
-  businessHoursText: "9AM–10PM, 7 days",
+  businessHoursText: "24/7",
   businessInfo:
     "Used iPhone sales in Montreal. Pickup at 757 Rue Beaubien E, Montréal. Cash or e-transfer.",
   instructions:
