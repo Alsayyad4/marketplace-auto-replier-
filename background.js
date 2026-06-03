@@ -893,9 +893,18 @@ chrome.alarms.create(HEARTBEAT_ALARM, { periodInMinutes: 1 });
 async function heartbeat() {
   const settings = await getSettings();
   if (!settings.enabled) return;
-  const tab = await findMessagesTab();
-  if (!tab) return;
-  chrome.tabs.sendMessage(tab.id, { type: "TICK_NOW" }, () => void chrome.runtime.lastError);
+  // Ping EVERY open Messenger tab (not just the first) so multiple windows in the
+  // same profile all keep scanning while backgrounded. Each separate Chrome
+  // profile runs its own independent copy of this worker.
+  const tabs = await new Promise((resolve) => {
+    chrome.tabs.query(
+      { url: ["https://*.messenger.com/*", "https://www.facebook.com/messages/*", "https://www.facebook.com/marketplace/*"] },
+      (t) => resolve(t || [])
+    );
+  });
+  for (const tab of tabs) {
+    chrome.tabs.sendMessage(tab.id, { type: "TICK_NOW" }, () => void chrome.runtime.lastError);
+  }
 }
 
 // Fold the heartbeat into the existing alarm listener path.

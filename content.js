@@ -867,8 +867,12 @@
 
     let reply = null;
 
-    // 1) Read the SCREEN with vision (preferred).
-    if (settings.visionMode !== false) {
+    // 1) Read the SCREEN with vision — ONLY when this tab is actually visible.
+    //    Chrome cannot screenshot a hidden / background / minimized tab, so for
+    //    unattended multi-window setups we skip straight to DOM reading (step 2),
+    //    which works regardless of visibility. document.hidden is true whenever
+    //    this isn't the visible active tab of a non-minimized window.
+    if (settings.visionMode !== false && !document.hidden) {
       updateTick({ lastAction: "reading the screen…", currentThread: name });
       const v = await ask({ type: "GET_REPLY_FROM_SCREEN", threadId: id, threadName: name });
       if (v && v.ok && !v.fallback) {

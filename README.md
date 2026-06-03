@@ -5,6 +5,16 @@ Marketplace buyer messages using the Anthropic Claude API. Bilingual FR/EN
 (casual Quebec French), built for used-iPhone sales in Montréal. No backend, no
 cloud — runs locally, one Chrome profile per Facebook account.
 
+> 🖥️ **v0.6.0 — runs unattended across many background Chromes.** Vision needs a
+> *visible* tab (Chrome can't screenshot a hidden/minimized/background tab), so the
+> bot now checks `document.hidden` and **automatically uses DOM reading whenever the
+> tab isn't on screen** — which is the normal case when you run multiple Chrome
+> windows/profiles unattended. DOM reading still sends the conversation to Claude to
+> interpret, and works fully in the background. Each Chrome **profile** runs its own
+> independent copy; the heartbeat now keeps **every** open Messenger tab scanning.
+> Net effect: vision when you're watching a tab, robust DOM-read-by-Claude when
+> you're not — no configuration needed.
+>
 > 👁️ **v0.5.0 — reads the screen with Claude vision.** Instead of guessing which
 > on-page text is a message (the fragile DOM parsing that caused the bug below),
 > the bot now **screenshots the open conversation and lets Claude read it** the way
