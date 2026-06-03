@@ -5,29 +5,34 @@ Marketplace buyer messages using the Anthropic Claude API. Bilingual FR/EN
 (casual Quebec French), built for used-iPhone sales in Montréal. No backend, no
 cloud — runs locally, one Chrome profile per Facebook account.
 
-> ✅ **v0.3.0 — works on messenger.com, no longer depends on unread detection.**
-> The old build only matched `a[href*="/marketplace/t/"]` (a *facebook.com* URL
-> scheme) and required a `[role="row"]` ancestor, so on **messenger.com** — where
-> every thread is `/t/<id>` — it matched **zero** conversations and never replied.
-> The pipeline is now resilient by design:
+> ✅ **v0.4.0 — confirmed against the live messenger.com DOM.** Root cause (seen
+> in a real screenshot): the bot replied repeatedly to **"Privacy & support"** —
+> a label in the right-hand info panel — because `readConversation()` fell back to
+> the *whole* `[role="main"]` for column bounds whenever the composer hadn't
+> rendered yet. That pulled in the info panel and shifted the left/right midpoint,
+> so **menu chrome was read as the buyer's message.** Fixes:
 >
-> - Matches the broad `/t/<id>` form, so it works on messenger.com **and**
->   facebook.com.
-> - **Transcript is the source of truth.** If unread styling / preview heuristics
->   flag nothing, it rotates through every visible thread, opens each, and replies
->   only when the buyer genuinely spoke last — so a broken `isUnread()` can't stop
->   it, and it still can't reply to the wrong thing.
+> - **Reads the real message, never UI chrome.** The composer is now *required* to
+>   bound the message column (no full-main fallback); we wait for it to render;
+>   link-wrapped text (listing card, profile) and an expanded noise list (incl.
+>   Meta's safety footer, date headers) are excluded.
+> - **Opens every conversation.** It no longer trusts fragile "unread" styling — it
+>   queues **every** visible thread (fresh-looking ones first), opens each, and
+>   replies only when the buyer genuinely spoke last (`getBuyerTurn`). Threads
+>   where you spoke last are parked on a 10-min re-check; a new buyer message pulls
+>   them back into rotation promptly.
 > - **Open-thread observer.** A `MutationObserver` on `[role="main"]` replies to
->   whatever conversation is open the moment the buyer's message is the latest —
->   works even if list detection breaks entirely.
-> - **Send is verified.** It confirms the composer emptied (the message really
->   went out) and falls back to clicking **Send**; synthetic Enter is often
->   ignored by Messenger's editor, which used to leave replies sitting unsent.
+>   whatever conversation is open the moment the buyer's message is the latest.
+> - **Send is verified.** It confirms the composer emptied (the message really went
+>   out) and falls back to clicking **Send**; synthetic Enter is often ignored by
+>   Messenger's editor, which used to leave replies sitting unsent.
+> - Also matches the broad `/t/<id>` link form so it works on messenger.com **and**
+>   facebook.com.
 >
 > ⚠️ The bot replies to **every thread in the open list / the open thread** — keep
 > the **Marketplace folder** selected so it never messages a personal chat. The
 > `isUnread()` heuristics + permanent **Scan now → Copy ALL** diagnostic are kept
-> for tuning, but they're no longer required for the bot to function.
+> for prioritisation/tuning, but are no longer required for the bot to function.
 
 ## Install (Load unpacked)
 
@@ -60,14 +65,15 @@ Two complementary paths feed the same reply engine (`respondToTurn`):
 **A) Inbox sweep** (every 8s, only on messages pages):
 
 1. Find `a[href*="/t/"]` anchors → keep real conversations (`isConversationAnchor`).
-2. Build the work list: threads flagged by `isUnread()` **or** "buyer spoke last".
-   If *nothing* is flagged (brittle heuristics drift), fall back to rotating
-   through **every** visible thread.
-3. Human-cadence gate: maybe take a random break or skip this cycle.
-4. Pick one thread off-cooldown (90s per thread), click it, verify the URL changed.
-5. Read a labeled transcript from `[role="main"]`; reply **only if the buyer
-   actually spoke last** (`getBuyerTurn`). This is the guard that makes the full
-   sweep safe.
+2. Queue **every** visible conversation, with fresh-looking ones first (marked
+   unread, or the buyer spoke last in the row preview). Styling is only used to
+   *prioritise* — never to gate — so drift can't stop the bot.
+3. Human-cadence gate (only on genuinely fresh bursts): maybe break or skip.
+4. Pick the next thread off-cooldown, click it, verify the URL changed, and
+   **wait for the composer** to render.
+5. Read a labeled transcript from `[role="main"]` (composer-bounded column,
+   noise/anchor-filtered); reply **only if the buyer actually spoke last**
+   (`getBuyerTurn`). Threads where you spoke last are parked on a 10-min re-check.
 
 **B) Open-thread observer** (event-driven): a `MutationObserver` on
 `[role="main"]` fires (debounced) when the open conversation changes, and replies

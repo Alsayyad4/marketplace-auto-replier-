@@ -30,7 +30,8 @@
   const STORAGE_KEY_TICK = "debugTick";
   const STORAGE_KEY_RULE = "learnedUnreadRule"; // self-learning detection
   const SCAN_MS = 8000;
-  const COOLDOWN_MS = 90 * 1000;
+  const COOLDOWN_MS = 90 * 1000; // re-check delay after a reply / failure
+  const IDLE_COOLDOWN_MS = 10 * 60 * 1000; // longer re-check for threads where we spoke last
   const MAX_HTML = 1500;
   const SMALL_PX = 20;
 
@@ -523,18 +524,38 @@
       main.querySelector('[contenteditable="true"]')
     );
   }
+  // Poll until the composer is present (the thread has finished rendering), so we
+  // never read a half-loaded pane. Returns the composer or null on timeout.
+  async function waitForComposer(timeoutMs) {
+    const t = timeoutMs || 6000;
+    const start = Date.now();
+    while (Date.now() - start < t) {
+      const c = findComposer();
+      if (c) return c;
+      await sleep(300);
+    }
+    return null;
+  }
 
-  // UI labels / chrome that must never be mistaken for a buyer message.
+  // UI labels / chrome that must never be mistaken for a buyer message. These are
+  // the exact strings Messenger renders around a Marketplace thread (right info
+  // panel, listing card buttons, header).
   const UI_NOISE = [
-    "privacy & support", "customize chat", "chat members", "media, files and links",
+    "privacy & support", "privacy and support", "customize chat", "chat members",
+    "media, files and links", "media files and links",
     "rate seller", "more options", "marketplace", "mute", "search", "block",
     "you sent", "enter", "sent", "delivered", "seen", "active now", "view profile",
+    "view seller profile", "see listing", "is typing", "typing", "report", "archive",
   ];
   function looksLikeNoise(text) {
-    const t = text.trim().toLowerCase();
+    const t = text.trim().toLowerCase().replace(/\s+/g, " ");
     if (!t) return true;
     if (/^ca\$|^\$\d|^\d+\s*(go|gb|tb)\b/.test(t)) return true; // price/spec card
-    if (/^\d{1,2}:\d{2}\s*(am|pm)?$/i.test(t)) return true; // timestamps
+    if (/^\d{1,2}:\d{2}\s*(am|pm)?$/i.test(t)) return true; // bare time
+    if (/^(mon|tue|wed|thu|fri|sat|sun)\b/i.test(t)) return true; // "Sat 7:11 PM" date headers
+    if (/^(yesterday|today|hier|aujourd)/i.test(t)) return true; // relative date headers
+    // Meta's "To help identify and reduce scams and fraud…" safety footer.
+    if (/^to help identify/.test(t) || t.includes("meta may use technology")) return true;
     for (const n of UI_NOISE) if (t === n || t.startsWith(n)) return true;
     return false;
   }
@@ -550,12 +571,17 @@
     const main = getMain();
     if (!main) return [];
     const composer = findComposer();
-    // Column bounds: prefer the composer's x-range; fall back to main.
-    const cRect = composer ? composer.getBoundingClientRect() : main.getBoundingClientRect();
+    // The composer defines the message column's x-range AND its bottom edge.
+    // Without it we CANNOT bound the column — and the old full-main fallback was
+    // the core "Privacy & support" bug: it pulled in the right info panel and
+    // shifted the left/right midpoint, so menu labels got read as buyer messages.
+    // So if the composer isn't up yet, return nothing and let the caller wait.
+    if (!composer) return [];
+    const cRect = composer.getBoundingClientRect();
     const colLeft = cRect.left;
     const colRight = cRect.right;
     const colCenter = (colLeft + colRight) / 2;
-    const colTop = composer ? cRect.top : Infinity; // messages are above the input
+    const colTop = cRect.top; // messages are strictly above the input
 
     const bubbles = [];
     const seen = new Set();
@@ -569,6 +595,10 @@
     for (const el of nodes) {
       // take leaf-ish text nodes only (skip wrappers that contain another dir=auto)
       if (safe(() => el.querySelector('[dir="auto"]'), null)) continue;
+      // Real chat text is NOT inside a link. The listing-card title, seller
+      // profile, and nav chrome ARE anchors — skip them so the bot never reads
+      // the product title as the buyer's message in a thread with no messages yet.
+      if (safe(() => el.closest("a[href]"), null)) continue;
       const text = safe(() => (el.innerText || el.textContent || "").trim(), "");
       if (!text || text.length < 1) continue;
       if (looksLikeNoise(text)) continue;
@@ -806,14 +836,23 @@
       return;
     }
 
-    // Let the thread render, then read a labeled transcript and pull the
-    // buyer's actual last message. If the last turn isn't the buyer's (it's
-    // ours, or only UI noise), DO NOT reply — this is what stops the bot from
-    // talking to itself or to menu labels like "Privacy & support".
-    await sleep(1200);
+    // Wait for the composer (= thread finished rendering) before reading, then
+    // pull a labeled transcript and the buyer's actual last message. If the last
+    // turn isn't the buyer's (it's ours, or only UI noise), DO NOT reply — this is
+    // what stops the bot talking to itself or to menu labels like "Privacy & support".
+    const composer = await waitForComposer();
+    if (!composer) {
+      updateTick({ lastError: "composer never appeared — thread not ready", currentThread: name });
+      cooldowns[id] = Date.now() + COOLDOWN_MS;
+      return;
+    }
+    await sleep(600); // let the last bubbles settle
     const turn = getBuyerTurn();
     if (!turn) {
-      updateTick({ lastAction: "skip: last message isn't a fresh buyer message", currentThread: name });
+      // Nothing for us to do here (we spoke last, or only UI noise). Park this
+      // thread on a longer cooldown so the full sweep doesn't keep re-opening it.
+      cooldowns[id] = Date.now() + IDLE_COOLDOWN_MS;
+      updateTick({ lastAction: "skip: buyer didn't speak last", currentThread: name });
       return;
     }
     await respondToTurn(id, name, turn, settings);
@@ -953,51 +992,46 @@
     const anchors = allAnchors.filter(isConversationAnchor);
 
     const settings = (await ask({ type: "GET_SETTINGS" })).settings || {};
+    // SIMPLE + ROBUST: don't depend on fragile "unread" styling. Queue EVERY
+    // visible conversation; just prioritise the ones that look fresh (marked
+    // unread, or the buyer spoke last in the row preview) so they're answered
+    // first. We open them in rotation and let the REAL transcript decide whether
+    // to reply — getBuyerTurn() skips any thread where we already spoke last, and
+    // per-thread cooldowns + rate/convo caps keep the volume human.
     const unread = anchors.filter(isUnread);
-    // Also pick up threads where the BUYER spoke last even if not marked unread
-    // (open/auto-read threads). Union, de-duped by thread id.
     const buyerLast = anchors.filter((a) => !isUnread(a) && rowPreview(a).fromBuyer);
     const seen = new Set();
     const pending = [];
-    for (const a of [...unread, ...buyerLast]) {
+    for (const a of [...unread, ...buyerLast, ...anchors]) {
       const id = threadId(a);
       if (seen.has(id)) continue;
       seen.add(id);
       pending.push(a);
     }
-    // RESILIENCE: if neither unread styling nor the preview heuristic flagged
-    // anything (both are brittle against Messenger DOM drift), don't give up —
-    // rotate through every visible conversation. Opening a thread and reading its
-    // REAL transcript is the ground truth; getBuyerTurn() skips any thread where
-    // the buyer didn't actually speak last, so a full sweep can't make us reply to
-    // the wrong thing. Per-thread cooldowns + rate/convo caps keep volume sane.
-    let sweepFallback = false;
-    if (!pending.length && anchors.length) {
-      sweepFallback = true;
-      for (const a of anchors) {
-        const id = threadId(a);
-        if (seen.has(id)) continue;
-        seen.add(id);
-        pending.push(a);
-      }
-    }
+    const freshCount = unread.length + buyerLast.length;
 
-    // Detect buyer replies on threads we already answered -> cancel follow-ups
+    // Detect buyer replies on threads we already answered -> cancel follow-ups,
+    // and pull threads we'd parked on the long idle cooldown back into rotation
+    // promptly when the buyer speaks again (without disturbing the short
+    // post-reply / blocked cooldown, so we never hammer a thread).
+    const now0 = Date.now();
     for (const a of anchors) {
       const id = threadId(a);
-      if (repliedThreads[id] && (isUnread(a) || rowPreview(a).fromBuyer)) {
+      const looksFresh = isUnread(a) || rowPreview(a).fromBuyer;
+      if (repliedThreads[id] && looksFresh) {
         delete repliedThreads[id];
         ask({ type: "BUYER_REPLIED", threadId: id });
+      }
+      if (looksFresh && cooldowns[id] && cooldowns[id] - now0 > COOLDOWN_MS) {
+        cooldowns[id] = now0; // make it eligible again on the next pick
       }
     }
 
     updateTick({
       marketplaceAnchorCount: anchors.length,
-      unreadCount: pending.length,
+      unreadCount: freshCount,
       lastAction: settings.enabled
-        ? sweepFallback
-          ? "scanning (full sweep: nothing flagged unread)"
-          : "scanning"
+        ? `scanning (${freshCount} look fresh / ${anchors.length} total)`
         : "idle (disabled)",
       lastError: null,
     });
@@ -1015,8 +1049,10 @@
         updateTick({ lastAction: `on break (${Math.ceil((breakUntil - now) / 60000)}m left)` });
         return;
       }
-      // only roll a new break / skip when there is actually work to do
-      if (pending.length) {
+      // Only roll a break / skip when there's genuinely FRESH work (a burst of new
+      // messages) — not on the routine full-sweep re-checks, or the bot would be on
+      // break almost permanently now that every thread is queued every cycle.
+      if (freshCount) {
         const breakChance = settings.breakChance != null ? settings.breakChance : 0.05;
         if (Math.random() < breakChance) {
           const minM = settings.breakMinMin != null ? settings.breakMinMin : 3;
