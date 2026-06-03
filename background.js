@@ -41,9 +41,6 @@ const DEFAULTS = {
     "Be friendly and concise. Auto-detect the buyer's language (French or English) and reply in the same language; for French use casual Quebec French (tutoiement, 'allô', 'parfait', 'à+'). Quote prices from the listings. Never discount more than 10% without flagging a human. If the buyer is rude, scammy, or asking something unusual, return [HUMAN] with a short reason.",
   examples: "", // few-shot buyer->reply pairs the user pastes to teach tone/video/escalation
   offPlatformGuard: true, // hard rules: no phone numbers / links / "contact me elsewhere"
-  // READ THE SCREEN with Claude vision (a screenshot of the open thread) instead
-  // of brittle DOM parsing. Falls back to DOM reading when the tab isn't visible.
-  visionMode: true,
   // closer mode — drive buyers to the physical shop, no exact prices in chat
   closerMode: true,
   noExactPrices: true, // never quote a number; promise the best price in person
@@ -409,151 +406,6 @@ function parseReply(text) {
   return { kind: "text", text: text.trim(), visit };
 }
 
-/* ---------------- screen reading (Claude vision) ----------------
- * Capture the visible Messenger tab and let the model READ THE SCREEN the way you
- * would — no brittle DOM parsing, no mistaking a menu label ("Privacy & support")
- * for a buyer message. Chrome can only screenshot the ACTIVE/visible tab, so the
- * content script falls back to DOM reading when Messenger isn't the front tab. */
-function captureTab(windowId) {
-  return new Promise((resolve) => {
-    try {
-      const opts = { format: "jpeg", quality: 80 };
-      const cb = (dataUrl) => {
-        if (chrome.runtime.lastError || !dataUrl) {
-          resolve({ error: (chrome.runtime.lastError && chrome.runtime.lastError.message) || "no image" });
-        } else resolve({ dataUrl });
-      };
-      if (windowId == null) chrome.tabs.captureVisibleTab(opts, cb);
-      else chrome.tabs.captureVisibleTab(windowId, opts, cb);
-    } catch (e) {
-      resolve({ error: e.message });
-    }
-  });
-}
-
-async function callClaudeVision(settings, dataUrl) {
-  if (!settings.apiKey) return { error: "No API key set." };
-  const m = /^data:(image\/[a-zA-Z]+);base64,(.*)$/.exec(dataUrl || "");
-  if (!m) return { error: "bad screenshot data" };
-  const body = {
-    model: settings.model || "claude-sonnet-4-6",
-    max_tokens: 1024,
-    system: buildSystemPrompt(settings),
-    messages: [
-      {
-        role: "user",
-        content: [
-          { type: "image", source: { type: "base64", media_type: m[1], data: m[2] } },
-          {
-            type: "text",
-            text:
-              "This image is a screenshot of a Facebook Messenger Marketplace conversation. " +
-              "YOUR (the seller's) messages are the coloured bubbles on the RIGHT; the buyer's are on the LEFT. " +
-              "Ignore the listing card, the right-hand info panel (e.g. 'Privacy & support', 'Customize chat', 'Chat members'), menu buttons, timestamps, and any 'Meta may use technology…' notice — those are NOT chat messages.\n\n" +
-              "Respond in EXACTLY this format, nothing else:\n" +
-              "BUYER: <the buyer's most recent message, copied as text — or NONE if the most recent message is yours/the seller's, or there is no real buyer message yet>\n" +
-              "REPLY: <your reply, following all the rules in the system prompt; OR a single token such as [HUMAN] reason, [VIDEO:url] caption, [VISIT:yes|no|maybe] text; OR exactly SKIP when BUYER is NONE>",
-          },
-        ],
-      },
-    ],
-  };
-  try {
-    const resp = await fetch("https://api.anthropic.com/v1/messages", {
-      method: "POST",
-      headers: {
-        "content-type": "application/json",
-        "x-api-key": settings.apiKey,
-        "anthropic-version": "2023-06-01",
-        "anthropic-dangerous-direct-browser-access": "true",
-      },
-      body: JSON.stringify(body),
-    });
-    if (!resp.ok) {
-      const t = await resp.text();
-      return { error: `Anthropic ${resp.status}: ${t.slice(0, 300)}` };
-    }
-    const data = await resp.json();
-    const text = (data.content || [])
-      .filter((b) => b.type === "text")
-      .map((b) => b.text)
-      .join("")
-      .trim();
-    return { text };
-  } catch (e) {
-    return { error: "Fetch failed: " + e.message };
-  }
-}
-
-// Pull BUYER/REPLY out of the vision response. Degrades gracefully if the model
-// omits the labels (treats the whole text as the reply).
-function parseVision(text) {
-  if (!text) return { skip: true, reason: "empty vision response" };
-  const t = text.trim();
-  const buyerM = t.match(/BUYER:\s*([\s\S]*?)(?:\n\s*REPLY:|$)/i);
-  const replyM = t.match(/REPLY:\s*([\s\S]*)$/i);
-  const buyer = buyerM ? buyerM[1].trim() : "";
-  const reply = (replyM ? replyM[1] : t).trim();
-  if (!reply || /^skip\b/i.test(reply)) return { skip: true, buyer, reason: "model returned SKIP" };
-  return { skip: false, buyer, reply };
-}
-
-/* Shared gating + finalization so GET_REPLY (text) and GET_REPLY_FROM_SCREEN
- * (vision) behave identically: business hours, per-conversation cap, rate limit,
- * then visit recording / [HUMAN] / counters / activity log. */
-async function applyGates(settings, msg) {
-  if (!withinBusinessHours(settings)) return { blocked: true, reason: "outside business hours" };
-  const cap = Number(settings.maxRepliesPerConvo) || 0;
-  if (cap > 0 && msg.threadId) {
-    const used = await convoReplyCount(msg.threadId);
-    if (used >= cap) {
-      if (settings.convoCapBehavior === "notify") {
-        const notified = await getCapNotified();
-        if (!notified[msg.threadId]) {
-          notifyHuman(`conversation hit ${cap}-reply cap — your turn`, msg.threadName);
-          notified[msg.threadId] = true;
-          await new Promise((r) => chrome.storage.local.set({ capNotified: notified }, r));
-        }
-      }
-      return { blocked: true, reason: `convo reply cap (${used}/${cap})` };
-    }
-  }
-  const rl = await checkRateLimit(settings);
-  if (!rl.ok) return { blocked: true, reason: rl.reason };
-  return { ok: true };
-}
-
-async function finalizeReply(settings, msg, rawText, buyerForLog, via) {
-  const parsed = parseReply(rawText);
-  // Record visit intent silently regardless of reply kind.
-  if (parsed.visit) {
-    await recordVisit(msg.threadId, msg.threadName, parsed.visit);
-    if (parsed.visit === "yes") await scheduleVisitConfirm(msg.threadId);
-    else if (parsed.visit === "no") chrome.alarms.clear(`${VISIT_PREFIX}${msg.threadId}`);
-  }
-  if (parsed.kind === "human") {
-    notifyHuman(parsed.reason, msg.threadName);
-    await appendLog({ thread: msg.threadName, buyer: buyerForLog, action: "human", reply: "[HUMAN] " + parsed.reason, visit: parsed.visit || null, via });
-    return { ok: true, action: "human", reason: parsed.reason, buyer: buyerForLog, raw: rawText };
-  }
-  if (parsed.kind === "empty") {
-    return { ok: true, skip: true, reason: "empty reply from model", buyer: buyerForLog };
-  }
-  await incrementCounters();
-  let convoUsed = null;
-  if (msg.threadId) convoUsed = await bumpConvoReply(msg.threadId);
-  await appendLog({
-    thread: msg.threadName,
-    buyer: buyerForLog,
-    action: parsed.kind,
-    reply: parsed.kind === "video" ? `[VIDEO ${parsed.url}] ${parsed.caption || ""}` : parsed.text,
-    convoReplyNum: convoUsed,
-    visit: parsed.visit || null,
-    via,
-  });
-  return { ok: true, action: parsed.kind, ...parsed, buyer: buyerForLog, raw: rawText };
-}
-
 /* ---------------- video fetch ---------------- */
 
 function abToBase64(buffer) {
@@ -764,59 +616,49 @@ chrome.runtime.onMessage.addListener((msg, _sender, sendResponse) => {
           });
           break;
         }
-        case "GET_REPLY": {
-          // DOM path: content.js extracted the buyer message + transcript as text.
+        case "GET_REPLY_SIMPLE": {
+          // The ONLY reply path now. Two safety checks (business hours + a plain
+          // hourly/daily cap, no warm-up ramp), then ask Claude and hand back the
+          // text. [HUMAN] still pings you; everything else is just a reply.
           const settings = await getSettings();
-          const gate = await applyGates(settings, msg);
-          if (gate.blocked) {
-            sendResponse({ ok: true, blocked: true, reason: gate.reason });
+          if (!withinBusinessHours(settings)) {
+            sendResponse({ ok: true, skip: true, reason: "outside business hours" });
             break;
           }
-          const result = await callClaude(settings, msg.buyerMessage, msg.context);
+          const c = rollWindows(await getCounters(), Date.now());
+          if (settings.hourlyCap && c.hourCount >= settings.hourlyCap) {
+            sendResponse({ ok: true, skip: true, reason: "hourly cap reached" });
+            break;
+          }
+          if (settings.dailyCap && c.dayCount >= settings.dailyCap) {
+            sendResponse({ ok: true, skip: true, reason: "daily cap reached" });
+            break;
+          }
+          const result = await callClaude(
+            settings,
+            msg.buyerMessage,
+            msg.context ? "Conversation so far (most recent last):\n" + msg.context : ""
+          );
           if (result.error) {
             sendResponse({ ok: false, error: result.error });
             break;
           }
-          sendResponse(await finalizeReply(settings, msg, result.text, msg.buyerMessage, "text"));
-          break;
-        }
-        case "GET_REPLY_FROM_SCREEN": {
-          // Vision path: screenshot the active Messenger tab and let Claude read it.
-          const settings = await getSettings();
-          if (settings.visionMode === false) {
-            sendResponse({ ok: false, fallback: true, error: "vision disabled" });
+          const parsed = parseReply(result.text);
+          if (parsed.kind === "human") {
+            notifyHuman(parsed.reason, msg.threadName);
+            await appendLog({ thread: msg.threadName, buyer: msg.buyerMessage, action: "human", reply: "[HUMAN] " + parsed.reason });
+            sendResponse({ ok: true, human: true, reason: parsed.reason });
             break;
           }
-          const gate = await applyGates(settings, msg);
-          if (gate.blocked) {
-            sendResponse({ ok: true, blocked: true, reason: gate.reason });
+          // A [VIDEO:url] just sends its caption as text in the simple build.
+          const text = parsed.kind === "video" ? parsed.caption || "" : parsed.text;
+          if (!text || !text.trim()) {
+            sendResponse({ ok: true, skip: true, reason: "empty reply" });
             break;
           }
-          // captureVisibleTab only works on the active/visible tab — fall back to DOM otherwise.
-          if (!(_sender && _sender.tab)) {
-            sendResponse({ ok: false, fallback: true, error: "no sender tab" });
-            break;
-          }
-          if (_sender.tab.active === false) {
-            sendResponse({ ok: false, fallback: true, error: "Messenger tab not visible" });
-            break;
-          }
-          const shot = await captureTab(_sender.tab.windowId);
-          if (shot.error) {
-            sendResponse({ ok: false, fallback: true, error: "capture: " + shot.error });
-            break;
-          }
-          const result = await callClaudeVision(settings, shot.dataUrl);
-          if (result.error) {
-            sendResponse({ ok: false, error: result.error });
-            break;
-          }
-          const v = parseVision(result.text);
-          if (v.skip) {
-            sendResponse({ ok: true, skip: true, reason: v.reason || "buyer didn't speak last", buyer: v.buyer || null });
-            break;
-          }
-          sendResponse(await finalizeReply(settings, msg, v.reply, v.buyer || "(read from screen)", "vision"));
+          await incrementCounters();
+          await appendLog({ thread: msg.threadName, buyer: msg.buyerMessage, action: "text", reply: text });
+          sendResponse({ ok: true, text });
           break;
         }
         case "GET_VISITS": {

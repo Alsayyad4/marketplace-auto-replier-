@@ -5,53 +5,29 @@ Marketplace buyer messages using the Anthropic Claude API. Bilingual FR/EN
 (casual Quebec French), built for used-iPhone sales in Montréal. No backend, no
 cloud — runs locally, one Chrome profile per Facebook account.
 
-> 🖥️ **v0.6.0 — runs unattended across many background Chromes.** Vision needs a
-> *visible* tab (Chrome can't screenshot a hidden/minimized/background tab), so the
-> bot now checks `document.hidden` and **automatically uses DOM reading whenever the
-> tab isn't on screen** — which is the normal case when you run multiple Chrome
-> windows/profiles unattended. DOM reading still sends the conversation to Claude to
-> interpret, and works fully in the background. Each Chrome **profile** runs its own
-> independent copy; the heartbeat now keeps **every** open Messenger tab scanning.
-> Net effect: vision when you're watching a tab, robust DOM-read-by-Claude when
-> you're not — no configuration needed.
+> ✅ **v0.7.0 — SIMPLE mode.** Deliberately stripped down to one job, because the
+> fancier approaches (vision/screenshot reading, unread detection, human cadence,
+> learned rules) added bug surface without earning their keep. The whole loop is now:
 >
-> 👁️ **v0.5.0 — reads the screen with Claude vision.** Instead of guessing which
-> on-page text is a message (the fragile DOM parsing that caused the bug below),
-> the bot now **screenshots the open conversation and lets Claude read it** the way
-> you would, then writes the reply. A vision model won't mistake a menu label for a
-> buyer message. Toggle in **Settings → General → "Read the screen with vision"**
-> (on by default). Chrome can only screenshot the *visible* tab, so when Messenger
-> isn't the front tab it automatically falls back to the (now-fixed) DOM reader.
-> Heads-up: each reply makes one image API call, so it costs a bit more per message.
+> 1. Go through **every** conversation in the Marketplace list, one at a time.
+> 2. Open it and read the **last** message (the message column is bounded by the
+>    composer box; your messages are on the right, the buyer's on the left; menu
+>    labels / the listing card / system notices are filtered out).
+> 3. **If the last message is from the buyer**, ask Claude for a reply and **type +
+>    send it** — verifying the composer actually cleared (Enter → Send button →
+>    Enter) so a reply can't silently fail to send.
+> 4. Move on. Re-checks each chat periodically; a chat where you spoke last is
+>    parked for 10 min.
 >
-> ✅ **v0.4.0 — confirmed against the live messenger.com DOM.** Root cause (seen
-> in a real screenshot): the bot replied repeatedly to **"Privacy & support"** —
-> a label in the right-hand info panel — because `readConversation()` fell back to
-> the *whole* `[role="main"]` for column bounds whenever the composer hadn't
-> rendered yet. That pulled in the info panel and shifted the left/right midpoint,
-> so **menu chrome was read as the buyer's message.** Fixes:
+> No vision, no `MutationObserver`, no cadence/breaks, no per-conversation caps, no
+> follow-ups, no learned rules. `content.js` dropped from ~985 lines to ~390. Two
+> safety limits remain and are easy to find in **Settings → General**: business
+> hours (default 9 AM–10 PM) and an hourly/daily cap. `[HUMAN]` still notifies you.
 >
-> - **Reads the real message, never UI chrome.** The composer is now *required* to
->   bound the message column (no full-main fallback); we wait for it to render;
->   link-wrapped text (listing card, profile) and an expanded noise list (incl.
->   Meta's safety footer, date headers) are excluded.
-> - **Opens every conversation.** It no longer trusts fragile "unread" styling — it
->   queues **every** visible thread (fresh-looking ones first), opens each, and
->   replies only when the buyer genuinely spoke last (`getBuyerTurn`). Threads
->   where you spoke last are parked on a 10-min re-check; a new buyer message pulls
->   them back into rotation promptly.
-> - **Open-thread observer.** A `MutationObserver` on `[role="main"]` replies to
->   whatever conversation is open the moment the buyer's message is the latest.
-> - **Send is verified.** It confirms the composer emptied (the message really went
->   out) and falls back to clicking **Send**; synthetic Enter is often ignored by
->   Messenger's editor, which used to leave replies sitting unsent.
-> - Also matches the broad `/t/<id>` link form so it works on messenger.com **and**
->   facebook.com.
->
-> ⚠️ The bot replies to **every thread in the open list / the open thread** — keep
-> the **Marketplace folder** selected so it never messages a personal chat. The
-> `isUnread()` heuristics + permanent **Scan now → Copy ALL** diagnostic are kept
-> for prioritisation/tuning, but are no longer required for the bot to function.
+> ⚠️ It replies to **every chat in the open list** — keep the **Marketplace folder**
+> selected so it never messages a personal friend. Runs per Chrome **profile**
+> independently; works on background/minimised windows (the heartbeat keeps every
+> Messenger tab scanning).
 
 ## Install (Load unpacked)
 
@@ -72,7 +48,7 @@ cloud — runs locally, one Chrome profile per Facebook account.
 |------|---------|
 | `manifest.json` | MV3 manifest — content script, service worker, popup, options. |
 | `background.js` | Service worker: Anthropic API (`claude-sonnet-4-6`, `anthropic-dangerous-direct-browser-access`), system-prompt assembly, rate limits + warm-up, business hours, per-conversation cap, follow-up alarms, `[HUMAN]` notifications, mp4 blob fetch, reply log. |
-| `content.js` | DOM side: permanent diagnostic capture, `isUnread()`, scan→read→reply pipeline, human-like typing, human cadence (breaks/skips), `[VIDEO]` paste-to-upload, follow-up typing, live `debugTick`. |
+| `content.js` | DOM side (SIMPLE mode): rotate through every chat → read the last message (composer-bounded, noise-filtered) → if it's the buyer's, ask Claude → type + verify-send. Live `debugTick` for the popup. |
 | `popup.html` / `popup.js` | On/off, status, delay slider, live debug, **Open Marketplace** button, unread diagnostic + Copy ALL. |
 | `options.html` / `options.js` | Tabbed settings (see below). |
 | `icon16/48/128.png` | Action + notification icons. |
