@@ -819,9 +819,9 @@
   }
 
   /* ---------------- one thread ----------------
-   * handleThread = open a thread from the inbox list, then hand off to
-   * respondToTurn (the shared reply engine, also used by the open-thread
-   * observer). The caller owns the `busy` lock. */
+   * handleThread = open a thread from the inbox list, wait for it to render, then
+   * hand off to respondInThread (the shared reply engine, also used by the
+   * open-thread observer). The caller owns the `busy` lock. */
   async function handleThread(anchor, settings) {
     const id = threadId(anchor);
     const name = anchorName(anchor);
@@ -836,64 +836,97 @@
       return;
     }
 
-    // Wait for the composer (= thread finished rendering) before reading, then
-    // pull a labeled transcript and the buyer's actual last message. If the last
-    // turn isn't the buyer's (it's ours, or only UI noise), DO NOT reply — this is
-    // what stops the bot talking to itself or to menu labels like "Privacy & support".
+    // Wait for the composer (= thread finished rendering) before reading.
     const composer = await waitForComposer();
     if (!composer) {
       updateTick({ lastError: "composer never appeared — thread not ready", currentThread: name });
       cooldowns[id] = Date.now() + COOLDOWN_MS;
       return;
     }
-    await sleep(600); // let the last bubbles settle
-    const turn = getBuyerTurn();
-    if (!turn) {
-      // Nothing for us to do here (we spoke last, or only UI noise). Park this
-      // thread on a longer cooldown so the full sweep doesn't keep re-opening it.
-      cooldowns[id] = Date.now() + IDLE_COOLDOWN_MS;
-      updateTick({ lastAction: "skip: buyer didn't speak last", currentThread: name });
-      return;
-    }
-    await respondToTurn(id, name, turn, settings);
+    await sleep(700); // let the last bubbles (and any images) settle before we read
+    await respondInThread(id, name, settings);
   }
 
-  /* Shared reply engine: given a buyer turn for thread (id,name) — already open —
-   * ask Claude, wait the human delay, type + VERIFY-send the reply, and record it.
-   * Used by both the inbox sweep (handleThread) and the open-thread observer.
-   * De-dupes per buyer message so the observer never loops on the same text. */
-  async function respondToTurn(id, name, turn, settings) {
-    const buyerMessage = turn.buyerMessage;
-    if (lastBuyerHandled[id] === buyerMessage) {
+  /* Shared reply engine for a thread that is ALREADY OPEN. Used by the inbox sweep
+   * (handleThread) and the open-thread observer.
+   *
+   * READING: prefers Claude VISION — a screenshot of the screen, read the way you'd
+   * read it yourself — which is robust to DOM quirks and never mistakes a menu label
+   * for a buyer message. A cheap DOM read (getBuyerTurn) is the triage + dedupe key
+   * + the fallback when the tab isn't visible / vision is off.
+   * SENDING: human delay, type, then VERIFY it actually sent. */
+  async function respondInThread(id, name, settings) {
+    // Cheap triage + dedupe key from the DOM (reliable now that the message column
+    // is composer-bounded). If we already answered this exact message, stop.
+    const turn = getBuyerTurn();
+    const dedupeKey = turn ? turn.buyerMessage : null;
+    if (dedupeKey && lastBuyerHandled[id] === dedupeKey) {
       updateTick({ lastAction: "skip: already replied to this message", currentThread: name });
       return;
     }
-    updateTick({ lastAction: "buyer said: " + trunc(buyerMessage, 80), currentThread: name });
 
-    const reply = await ask({
-      type: "GET_REPLY",
-      buyerMessage,
-      context: "Conversation so far (most recent last):\n" + turn.transcript,
-      threadId: id,
-      threadName: name,
-    });
-    if (!reply || !reply.ok) {
-      updateTick({ lastError: "reply error: " + (reply && reply.error), lastAction: "api error" });
-      return;
-    }
-    if (reply.blocked) {
-      updateTick({ lastAction: "blocked: " + reply.reason });
-      return;
-    }
-    if (reply.action === "human") {
-      lastBuyerHandled[id] = buyerMessage; // don't re-notify for the same message
-      updateTick({ lastAction: "HUMAN flagged: " + reply.reason });
-      return; // background fired the notification
+    let reply = null;
+
+    // 1) Read the SCREEN with vision (preferred).
+    if (settings.visionMode !== false) {
+      updateTick({ lastAction: "reading the screen…", currentThread: name });
+      const v = await ask({ type: "GET_REPLY_FROM_SCREEN", threadId: id, threadName: name });
+      if (v && v.ok && !v.fallback) {
+        if (v.skip) {
+          cooldowns[id] = Date.now() + IDLE_COOLDOWN_MS;
+          updateTick({ lastAction: "skip (screen): " + (v.reason || "buyer didn't speak last"), currentThread: name });
+          return;
+        }
+        if (v.blocked) {
+          updateTick({ lastAction: "blocked: " + v.reason });
+          return;
+        }
+        if (v.action === "human") {
+          if (dedupeKey) lastBuyerHandled[id] = dedupeKey;
+          updateTick({ lastAction: "HUMAN flagged: " + v.reason });
+          return;
+        }
+        reply = v;
+        updateTick({ lastAction: "buyer said: " + trunc(v.buyer || dedupeKey || "(screen)", 80), currentThread: name });
+      } else if (v && v.error) {
+        updateTick({ lastAction: "screen read unavailable — using DOM (" + trunc(v.error, 50) + ")", currentThread: name });
+      }
     }
 
-    // human delay before typing
+    // 2) DOM text fallback (vision off, tab not visible, or capture failed).
+    if (!reply) {
+      if (!turn) {
+        cooldowns[id] = Date.now() + IDLE_COOLDOWN_MS;
+        updateTick({ lastAction: "skip: buyer didn't speak last", currentThread: name });
+        return;
+      }
+      updateTick({ lastAction: "buyer said: " + trunc(turn.buyerMessage, 80), currentThread: name });
+      const r = await ask({
+        type: "GET_REPLY",
+        buyerMessage: turn.buyerMessage,
+        context: "Conversation so far (most recent last):\n" + turn.transcript,
+        threadId: id,
+        threadName: name,
+      });
+      if (!r || !r.ok) {
+        updateTick({ lastError: "reply error: " + (r && r.error), lastAction: "api error" });
+        return;
+      }
+      if (r.blocked || r.skip) {
+        updateTick({ lastAction: "blocked: " + r.reason });
+        return;
+      }
+      if (r.action === "human") {
+        if (dedupeKey) lastBuyerHandled[id] = dedupeKey;
+        updateTick({ lastAction: "HUMAN flagged: " + r.reason });
+        return;
+      }
+      reply = r;
+    }
+
+    // 3) Send (shared) — human delay, type, verify it actually went out.
     const delayMs = (settings.responseDelaySec || 30) * 1000 + rand(0, (settings.jitterSec || 60) * 1000);
-    updateTick({ lastAction: `waiting ${Math.round(delayMs / 1000)}s before reply` });
+    updateTick({ lastAction: `waiting ${Math.round(delayMs / 1000)}s before reply`, currentThread: name });
     await sleep(delayMs);
 
     let sent = false;
@@ -914,13 +947,14 @@
       if (sent) updateTick({ lastAction: "reply sent", lastReplySent: trunc(reply.text, 200) });
     }
     if (!sent) {
-      // Don't mark replied if it didn't actually send — but back off briefly so a
+      // Don't mark replied if it didn't actually send — back off briefly so a
       // persistent failure doesn't hammer the API every cycle.
       cooldowns[id] = Date.now() + COOLDOWN_MS;
       return;
     }
 
-    lastBuyerHandled[id] = buyerMessage;
+    const handledKey = dedupeKey || reply.buyer || null;
+    if (handledKey) lastBuyerHandled[id] = handledKey;
     repliedThreads[id] = Date.now();
     cooldowns[id] = Date.now() + COOLDOWN_MS;
     await ask({ type: "BOT_REPLIED", threadId: id });
@@ -949,7 +983,7 @@
       const settings = (await ask({ type: "GET_SETTINGS" })).settings || {};
       if (!settings.enabled || !onMessagesPage()) return;
       updateTick({ lastAction: "open-thread reply (" + (reason || "observer") + ")", currentThread: id });
-      await respondToTurn(id, null, turn, settings);
+      await respondInThread(id, null, settings);
     } catch (e) {
       updateTick({ lastError: "replyToOpenThread: " + e.message });
     } finally {

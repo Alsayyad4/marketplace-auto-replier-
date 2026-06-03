@@ -5,6 +5,15 @@ Marketplace buyer messages using the Anthropic Claude API. Bilingual FR/EN
 (casual Quebec French), built for used-iPhone sales in Montréal. No backend, no
 cloud — runs locally, one Chrome profile per Facebook account.
 
+> 👁️ **v0.5.0 — reads the screen with Claude vision.** Instead of guessing which
+> on-page text is a message (the fragile DOM parsing that caused the bug below),
+> the bot now **screenshots the open conversation and lets Claude read it** the way
+> you would, then writes the reply. A vision model won't mistake a menu label for a
+> buyer message. Toggle in **Settings → General → "Read the screen with vision"**
+> (on by default). Chrome can only screenshot the *visible* tab, so when Messenger
+> isn't the front tab it automatically falls back to the (now-fixed) DOM reader.
+> Heads-up: each reply makes one image API call, so it costs a bit more per message.
+>
 > ✅ **v0.4.0 — confirmed against the live messenger.com DOM.** Root cause (seen
 > in a real screenshot): the bot replied repeatedly to **"Privacy & support"** —
 > a label in the right-hand info panel — because `readConversation()` fell back to

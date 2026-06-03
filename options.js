@@ -26,6 +26,7 @@
       "Be friendly and concise. Auto-detect the buyer's language (French or English) and reply in the same language; for French use casual Quebec French. Quote prices from the listings. Never discount more than 10% without flagging a human. If the buyer is rude, scammy, or asking something unusual, return [HUMAN] with a short reason.",
     examples: "",
     offPlatformGuard: true,
+    visionMode: true,
     closerMode: true,
     noExactPrices: true,
     closerGoals:
@@ -80,6 +81,7 @@
     ["instructions", "value"],
     ["examples", "value"],
     ["offPlatformGuard", "checked"],
+    ["visionMode", "checked"],
     ["closerMode", "checked"],
     ["noExactPrices", "checked"],
     ["closerGoals", "value"],
