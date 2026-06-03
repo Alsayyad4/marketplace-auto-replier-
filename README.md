@@ -5,12 +5,29 @@ Marketplace buyer messages using the Anthropic Claude API. Bilingual FR/EN
 (casual Quebec French), built for used-iPhone sales in Montréal. No backend, no
 cloud — runs locally, one Chrome profile per Facebook account.
 
-> ⚠️ **Unread detection is still best-effort.** `isUnread()` in `content.js`
-> currently combines heuristics (bold weight, a small colored dot, an
-> `unread`/`non lu` aria-label). To finalize it, use the popup **Scan now →
-> Copy ALL** diagnostic on a *genuinely fresh* unread message and replace the
-> `isUnread()` body with the one confirmed signal. The diagnostic capture is
-> permanent — never strip it.
+> ✅ **v0.3.0 — works on messenger.com, no longer depends on unread detection.**
+> The old build only matched `a[href*="/marketplace/t/"]` (a *facebook.com* URL
+> scheme) and required a `[role="row"]` ancestor, so on **messenger.com** — where
+> every thread is `/t/<id>` — it matched **zero** conversations and never replied.
+> The pipeline is now resilient by design:
+>
+> - Matches the broad `/t/<id>` form, so it works on messenger.com **and**
+>   facebook.com.
+> - **Transcript is the source of truth.** If unread styling / preview heuristics
+>   flag nothing, it rotates through every visible thread, opens each, and replies
+>   only when the buyer genuinely spoke last — so a broken `isUnread()` can't stop
+>   it, and it still can't reply to the wrong thing.
+> - **Open-thread observer.** A `MutationObserver` on `[role="main"]` replies to
+>   whatever conversation is open the moment the buyer's message is the latest —
+>   works even if list detection breaks entirely.
+> - **Send is verified.** It confirms the composer emptied (the message really
+>   went out) and falls back to clicking **Send**; synthetic Enter is often
+>   ignored by Messenger's editor, which used to leave replies sitting unsent.
+>
+> ⚠️ The bot replies to **every thread in the open list / the open thread** — keep
+> the **Marketplace folder** selected so it never messages a personal chat. The
+> `isUnread()` heuristics + permanent **Scan now → Copy ALL** diagnostic are kept
+> for tuning, but they're no longer required for the bot to function.
 
 ## Install (Load unpacked)
 
@@ -38,18 +55,34 @@ cloud — runs locally, one Chrome profile per Facebook account.
 
 ## How the pipeline works
 
-Scan loop (every 8s, only on messages pages):
+Two complementary paths feed the same reply engine (`respondToTurn`):
 
-1. Find `a[href*="/marketplace/t/"]` anchors → filter with `isUnread()`.
-2. Human-cadence gate: maybe take a random break or skip this cycle.
-3. Pick one unread thread (90s per-thread cooldown), click it, verify the URL
-   changed.
-4. Read the last bubble in `[role="main"]` (the buyer's message).
-5. Background → Claude → reply, gated by **business hours**, **rate limits**,
+**A) Inbox sweep** (every 8s, only on messages pages):
+
+1. Find `a[href*="/t/"]` anchors → keep real conversations (`isConversationAnchor`).
+2. Build the work list: threads flagged by `isUnread()` **or** "buyer spoke last".
+   If *nothing* is flagged (brittle heuristics drift), fall back to rotating
+   through **every** visible thread.
+3. Human-cadence gate: maybe take a random break or skip this cycle.
+4. Pick one thread off-cooldown (90s per thread), click it, verify the URL changed.
+5. Read a labeled transcript from `[role="main"]`; reply **only if the buyer
+   actually spoke last** (`getBuyerTurn`). This is the guard that makes the full
+   sweep safe.
+
+**B) Open-thread observer** (event-driven): a `MutationObserver` on
+`[role="main"]` fires (debounced) when the open conversation changes, and replies
+if the buyer spoke last. Robust even when list detection is broken — just open a
+thread.
+
+Both then run the shared engine:
+
+6. Background → Claude → reply, gated by **business hours**, **rate limits**,
    **warm-up cap**, and **per-conversation reply cap**.
-6. Wait the human delay (default 30s + 0–60s jitter), type char-by-char at
-   38–78 WPM with occasional pauses, press Enter.
-7. Log it, mark replied, schedule follow-ups.
+7. Wait the human delay (default 30s + 0–60s jitter), type word-by-word at
+   38–78 WPM with occasional pauses.
+8. **Send + verify** (Enter → click Send → Enter), confirming the composer
+   emptied before claiming success; de-dupe per buyer message; log, mark replied,
+   schedule follow-ups.
 
 ### Reply tokens Claude can return
 

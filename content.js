@@ -20,7 +20,12 @@
 (() => {
   "use strict";
 
-  const MP_SELECTOR = 'a[href*="/marketplace/t/"]';
+  // messenger.com uses /t/<id> for ALL threads (including Marketplace); only
+  // facebook.com uses /marketplace/t/<id>. The original /marketplace/t/ selector
+  // matched ZERO anchors on messenger.com, so the bot never saw any threads and
+  // never replied. Match the broad /t/ form (a substring of BOTH schemes) and let
+  // isConversationAnchor() filter out non-conversation links (folder nav buttons).
+  const MP_SELECTOR = 'a[href*="/t/"]';
   const STORAGE_KEY_DUMP = "diagnosticDump";
   const STORAGE_KEY_TICK = "debugTick";
   const STORAGE_KEY_RULE = "learnedUnreadRule"; // self-learning detection
@@ -38,6 +43,10 @@
   const repliedThreads = {}; // threadId -> timestamp (awaiting buyer reply)
   let lastTick = {};
   let breakUntil = 0; // human-cadence: timestamp until which we're "on a break"
+  const lastBuyerHandled = {}; // threadId -> last buyer message we answered (loop guard)
+  let openThreadTimer = 0; // debounce handle for the open-thread observer
+  let observedMain = null; // the [role=main] node the observer is currently watching
+  let openThreadObserver = null;
 
   /* ---------------- tiny safe helpers (inlined) ---------------- */
   const sleep = (ms) => new Promise((r) => setTimeout(r, ms));
@@ -133,7 +142,8 @@
   }
   function threadId(anchor) {
     const href = safe(() => anchor.getAttribute("href"), "") || "";
-    const m = href.match(/\/marketplace\/t\/(\d+)/);
+    // /marketplace/t/<id>, /t/<id>, /e2ee/t/<id>, /messages/t/<id> all end in /t/<id>.
+    const m = href.match(/\/t\/([^/?#]+)/);
     return m ? m[1] : href;
   }
   function anchorName(anchor) {
@@ -152,14 +162,15 @@
     const id = safe(() => anchor.id, "") || "";
     if (/left-sidebar-button/i.test(id)) return false;
     const label = (safe(() => anchor.getAttribute("aria-label"), "") || "");
-    if (/^Marketplace\b/.test(label)) return false; // the nav button label
-    if (/^(Chats|Requests|Marketplace)\b/i.test(label)) return false;
-    // must live inside a real conversation row
-    const inRow = safe(() => anchor.closest('[role="row"]'), null);
-    if (!inRow) return false;
-    // href must point at a specific thread id
+    // Folder nav buttons ("Marketplace · 3 unread", "Chats", "Requests", "Spam", "Archived").
+    if (/^(Chats|Requests|Marketplace|Spam|Archived)\b/i.test(label)) return false;
+    // Must point at a specific thread id. We deliberately DON'T require a
+    // [role="row"] ancestor any more: messenger.com's list markup doesn't always
+    // expose role=row, and that hard requirement was silently rejecting every
+    // real conversation. The post-open transcript check is the real guard against
+    // replying to the wrong thing.
     const href = safe(() => anchor.getAttribute("href"), "") || "";
-    if (!/\/marketplace\/t\/\d+/.test(href)) return false;
+    if (!/\/t\/[^/?#]+/.test(href)) return false;
     return true;
   }
 
@@ -548,7 +559,13 @@
 
     const bubbles = [];
     const seen = new Set();
-    const nodes = safe(() => Array.from(main.querySelectorAll('[role="row"] [dir="auto"]')), []);
+    let nodes = safe(() => Array.from(main.querySelectorAll('[role="row"] [dir="auto"]')), []);
+    if (!nodes.length) {
+      // Fallback: some Messenger builds don't wrap message bubbles in [role="row"].
+      // Read all dir=auto text in the pane; the column/noise filters below still
+      // isolate real buyer/seller bubbles from listing cards and menu chrome.
+      nodes = safe(() => Array.from(main.querySelectorAll('[dir="auto"]')), []);
+    }
     for (const el of nodes) {
       // take leaf-ish text nodes only (skip wrappers that contain another dir=auto)
       if (safe(() => el.querySelector('[dir="auto"]'), null)) continue;
@@ -633,8 +650,47 @@
       );
     }
   }
-  // Type, then verify the composer actually holds the intended text before
-  // sending. If it's garbled/empty, fix it with a single insert. Only then Enter.
+  // Find Messenger's Send control near the composer (label varies by build/locale).
+  function findSendButton() {
+    const main = getMain() || document;
+    const sels = [
+      'div[aria-label="Press Enter to send"]',
+      '[aria-label="Press enter to send"]',
+      '[aria-label="Send"][role="button"]',
+      '[aria-label*="Send" i][role="button"]',
+      '[aria-label*="Envoyer" i][role="button"]',
+      '[data-testid="send"]',
+    ];
+    for (const s of sels) {
+      const el = safe(() => main.querySelector(s), null);
+      if (el) return el;
+    }
+    return null;
+  }
+  function clickSend() {
+    const btn = findSendButton();
+    if (btn) {
+      safe(() => btn.click());
+      return true;
+    }
+    return false;
+  }
+  // The composer empties on a real send — that's how we confirm the message went
+  // out. Poll briefly for it to clear.
+  async function composerEmptied(el, timeoutMs) {
+    const t = timeoutMs || 2500;
+    const start = Date.now();
+    while (Date.now() - start < t) {
+      await sleep(150);
+      if (!composerText(el)) return true;
+    }
+    return false;
+  }
+  // Type, verify the composer holds the intended text, send, then VERIFY the send
+  // actually landed (composer clears). Synthetic Enter is frequently ignored by
+  // Messenger's Lexical editor, which left the reply sitting unsent while the old
+  // code reported success — the core "it never replied" bug. We now try Enter,
+  // then the Send button, then Enter again, and only return true once it's gone.
   async function typeAndSend(el, text, settings) {
     const want = String(text).replace(/\s*\n\s*/g, " ").trim();
     await typeHuman(el, want, settings);
@@ -651,8 +707,18 @@
       return false;
     }
     await sleep(rand(150, 400));
+    // Attempt 1: Enter key.
     pressEnter(el);
-    return true;
+    if (await composerEmptied(el)) return true;
+    // Attempt 2: click the Send button (reliable when synthetic Enter is ignored).
+    updateTick({ lastAction: "Enter didn't send — clicking Send button" });
+    if (clickSend() && (await composerEmptied(el))) return true;
+    // Attempt 3: re-focus and Enter once more.
+    el.focus();
+    pressEnter(el);
+    if (await composerEmptied(el)) return true;
+    updateTick({ lastError: "reply typed but could NOT be sent (composer still full)" });
+    return false;
   }
 
   /* ---------------- video paste-to-upload ---------------- */
@@ -722,7 +788,10 @@
     return true;
   }
 
-  /* ---------------- one thread ---------------- */
+  /* ---------------- one thread ----------------
+   * handleThread = open a thread from the inbox list, then hand off to
+   * respondToTurn (the shared reply engine, also used by the open-thread
+   * observer). The caller owns the `busy` lock. */
   async function handleThread(anchor, settings) {
     const id = threadId(anchor);
     const name = anchorName(anchor);
@@ -747,7 +816,19 @@
       updateTick({ lastAction: "skip: last message isn't a fresh buyer message", currentThread: name });
       return;
     }
+    await respondToTurn(id, name, turn, settings);
+  }
+
+  /* Shared reply engine: given a buyer turn for thread (id,name) — already open —
+   * ask Claude, wait the human delay, type + VERIFY-send the reply, and record it.
+   * Used by both the inbox sweep (handleThread) and the open-thread observer.
+   * De-dupes per buyer message so the observer never loops on the same text. */
+  async function respondToTurn(id, name, turn, settings) {
     const buyerMessage = turn.buyerMessage;
+    if (lastBuyerHandled[id] === buyerMessage) {
+      updateTick({ lastAction: "skip: already replied to this message", currentThread: name });
+      return;
+    }
     updateTick({ lastAction: "buyer said: " + trunc(buyerMessage, 80), currentThread: name });
 
     const reply = await ask({
@@ -766,6 +847,7 @@
       return;
     }
     if (reply.action === "human") {
+      lastBuyerHandled[id] = buyerMessage; // don't re-notify for the same message
       updateTick({ lastAction: "HUMAN flagged: " + reply.reason });
       return; // background fired the notification
     }
@@ -775,9 +857,10 @@
     updateTick({ lastAction: `waiting ${Math.round(delayMs / 1000)}s before reply` });
     await sleep(delayMs);
 
+    let sent = false;
     if (reply.action === "video") {
-      const ok = await sendVideo(reply.url, reply.caption, settings);
-      updateTick({ lastAction: ok ? "video sent" : "video failed", lastReplySent: ok ? `[VIDEO] ${reply.url}` : null });
+      sent = await sendVideo(reply.url, reply.caption, settings);
+      updateTick({ lastAction: sent ? "video sent" : "video failed", lastReplySent: sent ? `[VIDEO] ${reply.url}` : null });
     } else {
       if (typeof reply.text !== "string" || !reply.text.trim()) {
         updateTick({ lastAction: "skipped: empty reply text" });
@@ -788,22 +871,80 @@
         updateTick({ lastError: "composer not found" });
         return;
       }
-      const sent = await typeAndSend(composer, reply.text, settings);
-      if (!sent) return; // composer was empty/garbled — don't mark replied
-      updateTick({ lastAction: "reply sent", lastReplySent: trunc(reply.text, 200) });
+      sent = await typeAndSend(composer, reply.text, settings);
+      if (sent) updateTick({ lastAction: "reply sent", lastReplySent: trunc(reply.text, 200) });
+    }
+    if (!sent) {
+      // Don't mark replied if it didn't actually send — but back off briefly so a
+      // persistent failure doesn't hammer the API every cycle.
+      cooldowns[id] = Date.now() + COOLDOWN_MS;
+      return;
     }
 
+    lastBuyerHandled[id] = buyerMessage;
     repliedThreads[id] = Date.now();
+    cooldowns[id] = Date.now() + COOLDOWN_MS;
     await ask({ type: "BOT_REPLIED", threadId: id });
     await sleep(5000);
   }
 
+  /* ---------------- open-thread auto-reply (observer-driven) ----------------
+   * The most robust path: forget the inbox list. Whenever the OPEN conversation
+   * changes and the buyer spoke last, reply to it. This keeps working even if
+   * list detection / unread styling breaks entirely — you (or our own navigation)
+   * just need a thread open. Debounced, guarded by the shared busy lock + enabled,
+   * and de-duped per buyer message so it never loops. */
+  function currentThreadId() {
+    const m = location.href.match(/\/t\/([^/?#]+)/);
+    return m ? m[1] : null;
+  }
+  async function replyToOpenThread(reason) {
+    if (busy) return;
+    const id = currentThreadId();
+    if (!id) return; // not inside a specific thread
+    const turn = getBuyerTurn();
+    if (!turn) return; // buyer didn't speak last (or only noise) → nothing to do
+    if (lastBuyerHandled[id] === turn.buyerMessage) return;
+    busy = true; // grab the lock synchronously (no await between the checks above and here)
+    try {
+      const settings = (await ask({ type: "GET_SETTINGS" })).settings || {};
+      if (!settings.enabled || !onMessagesPage()) return;
+      updateTick({ lastAction: "open-thread reply (" + (reason || "observer") + ")", currentThread: id });
+      await respondToTurn(id, null, turn, settings);
+    } catch (e) {
+      updateTick({ lastError: "replyToOpenThread: " + e.message });
+    } finally {
+      busy = false;
+    }
+  }
+  // Attach a MutationObserver to the live [role=main]; re-attach if the SPA swaps
+  // the node out on navigation. Idempotent — safe to call every tick.
+  function ensureOpenThreadObserver() {
+    const main = getMain();
+    if (!main) return;
+    if (main === observedMain && openThreadObserver) return; // still watching the right node
+    if (openThreadObserver) safe(() => openThreadObserver.disconnect());
+    openThreadObserver = new MutationObserver(() => {
+      clearTimeout(openThreadTimer);
+      // debounce: let the buyer's message settle before reading the transcript
+      openThreadTimer = setTimeout(() => replyToOpenThread("observer"), 3500);
+    });
+    safe(() => openThreadObserver.observe(main, { childList: true, subtree: true, characterData: true }));
+    observedMain = main;
+    log("open-thread observer attached to [role=main]");
+  }
+
   /* ---------------- scan loop ---------------- */
   function onMessagesPage() {
-    return /messenger\.com/.test(location.host) || /facebook\.com\/messages/.test(location.href);
+    return (
+      /messenger\.com/.test(location.host) ||
+      /facebook\.com\/messages/.test(location.href) ||
+      /facebook\.com\/marketplace/.test(location.href)
+    );
   }
 
   async function tick(reason) {
+    ensureOpenThreadObserver(); // keep the open-thread observer attached across SPA navigation
     if (busy) return;
     // Diagnostic captures EVERYTHING (incl. the nav button) for debugging,
     // but the pipeline only ever acts on real conversation rows.
@@ -824,6 +965,22 @@
       seen.add(id);
       pending.push(a);
     }
+    // RESILIENCE: if neither unread styling nor the preview heuristic flagged
+    // anything (both are brittle against Messenger DOM drift), don't give up —
+    // rotate through every visible conversation. Opening a thread and reading its
+    // REAL transcript is the ground truth; getBuyerTurn() skips any thread where
+    // the buyer didn't actually speak last, so a full sweep can't make us reply to
+    // the wrong thing. Per-thread cooldowns + rate/convo caps keep volume sane.
+    let sweepFallback = false;
+    if (!pending.length && anchors.length) {
+      sweepFallback = true;
+      for (const a of anchors) {
+        const id = threadId(a);
+        if (seen.has(id)) continue;
+        seen.add(id);
+        pending.push(a);
+      }
+    }
 
     // Detect buyer replies on threads we already answered -> cancel follow-ups
     for (const a of anchors) {
@@ -837,7 +994,11 @@
     updateTick({
       marketplaceAnchorCount: anchors.length,
       unreadCount: pending.length,
-      lastAction: settings.enabled ? "scanning" : "idle (disabled)",
+      lastAction: settings.enabled
+        ? sweepFallback
+          ? "scanning (full sweep: nothing flagged unread)"
+          : "scanning"
+        : "idle (disabled)",
       lastError: null,
     });
 
@@ -878,6 +1039,7 @@
     });
     if (!target) return;
 
+    if (busy) return; // an open-thread observer reply may have grabbed the lock during our awaits
     busy = true;
     try {
       await handleThread(target, settings);
@@ -980,6 +1142,7 @@
       }
     })
   );
+  ensureOpenThreadObserver();
   setTimeout(() => tick("boot"), 2500);
   setInterval(() => tick("auto"), SCAN_MS);
 })();
