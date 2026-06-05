@@ -253,6 +253,121 @@
     return await composerEmptied(el); // 3) Enter again
   }
 
+  /* ---------------- demo video (optional, ONCE per chat) ---------------- */
+  function getLocal(keys) {
+    return new Promise((resolve) => {
+      try {
+        chrome.storage.local.get(keys, (r) => resolve(r || {}));
+      } catch (e) {
+        resolve({});
+      }
+    });
+  }
+  function setLocal(obj) {
+    return new Promise((resolve) => {
+      try {
+        chrome.storage.local.set(obj, () => resolve());
+      } catch (e) {
+        resolve();
+      }
+    });
+  }
+  function dataUrlToFile(dataUrl, name, type) {
+    const b64 = dataUrl.slice(dataUrl.indexOf(",") + 1);
+    const bin = atob(b64);
+    const bytes = new Uint8Array(bin.length);
+    for (let i = 0; i < bin.length; i++) bytes[i] = bin.charCodeAt(i);
+    return new File([bytes], name || "demo.mp4", { type: type || "video/mp4" });
+  }
+  // Best-effort: drop the file into Messenger's attach uploader, wait for the
+  // preview to actually appear, then send. Tries the hidden file input, then a
+  // paste, then drag-drop. This is the one fragile part — depends on Messenger's
+  // current uploader — but it's fully isolated from the (working) text reply.
+  async function injectVideo(file) {
+    const main = getMain() || document;
+    const previewSel = 'img[src^="blob:"], [role="progressbar"], video';
+    const before = safe(() => main.querySelectorAll(previewSel).length, 0);
+    const composer = findComposer();
+    if (composer) composer.focus();
+
+    let injected = false;
+    const input = safe(() => document.querySelector('input[type="file"]'), null);
+    if (input) {
+      injected = safe(() => {
+        const dt = new DataTransfer();
+        dt.items.add(file);
+        input.files = dt.files;
+        input.dispatchEvent(new Event("change", { bubbles: true }));
+        return true;
+      }, false);
+    }
+    if (!injected && composer) {
+      injected = safe(() => {
+        const dt = new DataTransfer();
+        dt.items.add(file);
+        const ev = new ClipboardEvent("paste", { bubbles: true, cancelable: true });
+        Object.defineProperty(ev, "clipboardData", { value: dt });
+        composer.dispatchEvent(ev);
+        return true;
+      }, false);
+    }
+    if (!injected && composer) {
+      injected = safe(() => {
+        const dt = new DataTransfer();
+        dt.items.add(file);
+        for (const t of ["dragenter", "dragover", "drop"]) {
+          const ev = new DragEvent(t, { bubbles: true, cancelable: true });
+          Object.defineProperty(ev, "dataTransfer", { value: dt });
+          composer.dispatchEvent(ev);
+        }
+        return true;
+      }, false);
+    }
+    if (!injected) return false;
+
+    // Wait for the upload preview to attach (poll up to ~25s for a NEW preview).
+    const start = Date.now();
+    let attached = false;
+    while (Date.now() - start < 25000) {
+      await sleep(1000);
+      const now = safe(() => main.querySelectorAll(previewSel).length, before);
+      if (now > before) {
+        attached = true;
+        break;
+      }
+    }
+    await sleep(attached ? 1500 : 1000);
+    const composer2 = findComposer();
+    if (composer2) {
+      pressEnter(composer2);
+      await sleep(800);
+      clickSend();
+    }
+    return true;
+  }
+  // Send the stored demo video to the current chat — ONCE per chat, after the text reply.
+  async function maybeSendVideo(id, name) {
+    try {
+      const cfg = await getLocal(["videoEnabled", "demoVideo", "videoSentThreads"]);
+      if (!cfg.videoEnabled || !cfg.demoVideo || !cfg.demoVideo.dataUrl) return;
+      const sent = cfg.videoSentThreads || {};
+      if (sent[id]) return; // already sent in this conversation
+      await sleep(rand(1500, 3000)); // small gap after the text reply
+      setStatus({ lastAction: "sending demo video…", currentThread: name });
+      const file = dataUrlToFile(cfg.demoVideo.dataUrl, cfg.demoVideo.name, cfg.demoVideo.type);
+      const ok = await injectVideo(file);
+      if (ok) {
+        sent[id] = true; // mark so we never send the video twice in the same chat
+        await setLocal({ videoSentThreads: sent });
+        setStatus({ lastAction: "demo video sent ✓", currentThread: name });
+      } else {
+        setStatus({ lastError: "couldn't attach video (no uploader found) — will retry" });
+      }
+    } catch (e) {
+      setStatus({ lastError: "video error: " + e.message });
+    }
+  }
+
   /* ---------------- handle ONE conversation ---------------- */
   async function handleThread(anchor) {
     const id = threadId(anchor);
@@ -318,6 +433,9 @@
     lastHandled[id] = turn.buyerMessage;
     cooldowns[id] = Date.now() + COOLDOWN_MS;
     setStatus({ lastAction: "replied ✓", lastReplySent: trunc(reply.text, 200), currentThread: name });
+
+    // After the text reply, send the demo video once per chat (optional, isolated).
+    await maybeSendVideo(id, name);
   }
 
   /* ---------------- main loop ---------------- */

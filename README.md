@@ -5,6 +5,15 @@ Marketplace buyer messages using the Anthropic Claude API. Bilingual FR/EN
 (casual Quebec French), built for used-iPhone sales in Montréal. No backend, no
 cloud — runs locally, one Chrome profile per Facebook account.
 
+> 🎬 **v0.8.0 — demo video, once per chat.** Upload an mp4 in **Settings → General
+> → "Send a demo video once per chat"** (stored locally on that computer). After the
+> bot sends its **first text reply** to a buyer, it attaches that video and sends it
+> — exactly **once per conversation** (tracked by thread, never re-sends). It's fully
+> isolated from the reply path: if the upload fails, the text reply already went out
+> and the bot just logs it. Attaching the file into Messenger's uploader is the one
+> best-effort part (hidden file-input → paste → drag-drop); keep the video under
+> ~25 MB. `background.js` was not touched.
+>
 > ✅ **v0.7.0 — SIMPLE mode.** Deliberately stripped down to one job, because the
 > fancier approaches (vision/screenshot reading, unread detection, human cadence,
 > learned rules) added bug surface without earning their keep. The whole loop is now:

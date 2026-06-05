@@ -345,6 +345,59 @@
   }
   $("save").addEventListener("click", save);
 
+  /* ----- demo video (stored locally on this computer, NOT synced) ----- */
+  function fmtSize(n) {
+    return n ? (n / 1048576).toFixed(1) + " MB" : "";
+  }
+  function loadVideo() {
+    chrome.storage.local.get(["videoEnabled", "demoVideo"], (r) => {
+      if ($("videoEnabled")) $("videoEnabled").checked = !!r.videoEnabled;
+      const v = r.demoVideo;
+      $("videoInfo").textContent =
+        v && v.dataUrl ? `Current: ${v.name || "video"} (${fmtSize(v.size)})` : "No video uploaded yet.";
+    });
+  }
+  if ($("videoEnabled")) {
+    $("videoEnabled").addEventListener("change", () => {
+      chrome.storage.local.set({ videoEnabled: $("videoEnabled").checked });
+    });
+  }
+  if ($("videoFile")) {
+    $("videoFile").addEventListener("change", () => {
+      const f = $("videoFile").files && $("videoFile").files[0];
+      if (!f) return;
+      $("videoInfo").textContent = `Loading ${f.name}…`;
+      const reader = new FileReader();
+      reader.onload = () => {
+        chrome.storage.local.set(
+          { demoVideo: { name: f.name, type: f.type || "video/mp4", size: f.size, dataUrl: reader.result } },
+          () => {
+            if (chrome.runtime.lastError) {
+              $("videoInfo").textContent = "Couldn't store (too big?): " + chrome.runtime.lastError.message;
+            } else {
+              $("videoInfo").textContent = `Current: ${f.name} (${fmtSize(f.size)})`;
+              if ($("videoEnabled") && !$("videoEnabled").checked) {
+                $("videoEnabled").checked = true;
+                chrome.storage.local.set({ videoEnabled: true });
+              }
+            }
+          }
+        );
+      };
+      reader.onerror = () => ($("videoInfo").textContent = "Could not read that file.");
+      reader.readAsDataURL(f);
+    });
+  }
+  if ($("videoRemove")) {
+    $("videoRemove").addEventListener("click", () => {
+      chrome.storage.local.remove("demoVideo", () => {
+        $("videoInfo").textContent = "No video uploaded yet.";
+        if ($("videoFile")) $("videoFile").value = "";
+      });
+    });
+  }
+  loadVideo();
+
   function load() {
     // Read the merged (synced) settings from the background.
     chrome.runtime.sendMessage({ type: "GET_SETTINGS" }, (res) => {

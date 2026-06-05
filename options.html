@@ -117,6 +117,15 @@
         <hr />
         <label class="check"><input type="checkbox" id="visitConfirmEnabled" /> Silent visit confirmation <span class="hint">after a buyer says they'll come, ask "still coming?"; records yes/no WITHOUT notifying you</span></label>
         <div><label>Ask after (minutes)</label><input type="number" id="visitConfirmAfterMin" min="0" /></div>
+
+        <hr />
+        <label class="check"><input type="checkbox" id="videoEnabled" /> Send a demo video once per chat <span class="hint">after the bot's first text reply to a buyer, attach this video — sent only ONE time per conversation</span></label>
+        <div class="row">
+          <input type="file" id="videoFile" accept="video/mp4,video/*" />
+          <button id="videoRemove" class="danger" type="button">Remove video</button>
+        </div>
+        <div id="videoInfo" class="hint">No video uploaded yet.</div>
+        <div class="hint">Keep it under ~25&nbsp;MB for a reliable upload. Stored locally on this computer only (not synced).</div>
       </section>
 
       <!-- BUSINESS -->
