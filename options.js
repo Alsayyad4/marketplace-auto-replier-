@@ -46,6 +46,8 @@
     listings: [],
     followUps: [],
     videos: [],
+    instantVideoEnabled: false,
+    instantVideoCaption: "",
   };
 
   let settings = Object.assign({}, DEFAULTS);
@@ -96,6 +98,8 @@
     ["warmupEnabled", "checked"],
     ["warmupDays", "number"],
     ["warmupStartCap", "number"],
+    ["instantVideoEnabled", "checked"],
+    ["instantVideoCaption", "value"],
   ];
 
   function fieldsToForm() {
@@ -211,6 +215,76 @@
     settings.videos.push({ name: "", url: "", notes: "" });
     renderVideos();
   });
+
+  /* ----- intro video (uploaded from this computer; stored in local storage,
+   * NOT in the synced settings — videos are far too big for chrome.storage.sync,
+   * so it lives under its own `instantVideo` key and saves the instant you pick
+   * a file, independent of the Save button). ----- */
+  function fmtSize(bytes) {
+    if (bytes == null) return "";
+    const mb = bytes / 1048576;
+    return mb >= 1 ? mb.toFixed(1) + " MB" : Math.max(1, Math.round(bytes / 1024)) + " KB";
+  }
+  function showInstantVideoInfo(v) {
+    const el = $("instantVideoInfo");
+    if (!el) return;
+    el.textContent =
+      v && v.name
+        ? `Stored on this computer: ${v.name} (${fmtSize(v.size)}).`
+        : "No video uploaded on this computer yet.";
+  }
+  function loadInstantVideoInfo() {
+    chrome.storage.local.get(["instantVideo"], (res) => showInstantVideoInfo(res.instantVideo));
+  }
+  function fileToBase64(file) {
+    return new Promise((resolve, reject) => {
+      const r = new FileReader();
+      r.onload = () => {
+        const s = String(r.result || "");
+        const comma = s.indexOf(","); // strip the "data:...;base64," prefix
+        resolve(comma >= 0 ? s.slice(comma + 1) : s);
+      };
+      r.onerror = () => reject(r.error || new Error("read failed"));
+      r.readAsDataURL(file);
+    });
+  }
+  const instantVideoFileEl = $("instantVideoFile");
+  if (instantVideoFileEl) {
+    instantVideoFileEl.addEventListener("change", async (e) => {
+      const file = e.target.files && e.target.files[0];
+      if (!file) return;
+      const info = $("instantVideoInfo");
+      if (!/^video\//.test(file.type || "")) {
+        if (info) info.textContent = "That doesn't look like a video file.";
+        return;
+      }
+      if (info) info.textContent = `Saving ${file.name}…`;
+      try {
+        const base64 = await fileToBase64(file);
+        chrome.storage.local.set(
+          { instantVideo: { base64, mime: file.type || "video/mp4", name: file.name, size: file.size } },
+          () => {
+            if (chrome.runtime.lastError) {
+              if (info) info.textContent = "Could not save: " + chrome.runtime.lastError.message;
+            } else {
+              showInstantVideoInfo({ name: file.name, size: file.size });
+            }
+          }
+        );
+      } catch (err) {
+        if (info) info.textContent = "Could not read the file: " + (err && err.message);
+      }
+    });
+  }
+  const removeInstantVideoEl = $("removeInstantVideo");
+  if (removeInstantVideoEl) {
+    removeInstantVideoEl.addEventListener("click", () => {
+      chrome.storage.local.remove("instantVideo", () => {
+        if (instantVideoFileEl) instantVideoFileEl.value = "";
+        showInstantVideoInfo(null);
+      });
+    });
+  }
 
   $("exportListings").addEventListener("click", () => {
     const blob = new Blob([JSON.stringify(settings.listings, null, 2)], { type: "application/json" });
@@ -358,6 +432,7 @@
       renderListings();
       renderFollowUps();
       renderVideos();
+      loadInstantVideoInfo();
     });
   }
 

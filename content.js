@@ -662,15 +662,11 @@
     for (let i = 0; i < bin.length; i++) bytes[i] = bin.charCodeAt(i);
     return new Blob([bytes], { type: mime || "video/mp4" });
   }
-  async function sendVideo(url, caption, settings) {
-    updateTick({ lastAction: "fetching video" });
-    const res = await ask({ type: "FETCH_VIDEO", url });
-    if (!res || !res.ok) {
-      updateTick({ lastError: "video fetch failed: " + (res && res.error) });
-      return false;
-    }
-    const blob = base64ToBlob(res.base64, res.mime);
-    const file = new File([blob], "demo.mp4", { type: res.mime || "video/mp4" });
+  // Drop a video File into the composer as a native attachment and send it.
+  // Shared by Claude's [VIDEO:url] path and the uploaded intro-video path.
+  async function uploadVideoBlob(base64, mime, name, caption, settings) {
+    const blob = base64ToBlob(base64, mime);
+    const file = new File([blob], name || "demo.mp4", { type: mime || "video/mp4" });
     const composer = findComposer();
     if (!composer) {
       updateTick({ lastError: "composer not found for video" });
@@ -720,6 +716,34 @@
     }
     pressEnter(composer);
     return true;
+  }
+
+  async function sendVideo(url, caption, settings) {
+    updateTick({ lastAction: "fetching video" });
+    const res = await ask({ type: "FETCH_VIDEO", url });
+    if (!res || !res.ok) {
+      updateTick({ lastError: "video fetch failed: " + (res && res.error) });
+      return false;
+    }
+    return uploadVideoBlob(res.base64, res.mime, "demo.mp4", caption, settings);
+  }
+
+  // Intro video: uploaded from the operator's computer, sent ONCE per chat right
+  // after the first text reply. The background gates eligibility (feature on + a
+  // video stored on this machine + not yet sent in this thread), so calling this
+  // on every reply is safe — it no-ops once a chat has already received it.
+  async function maybeSendIntroVideo(id, name, settings) {
+    const v = await ask({ type: "GET_INSTANT_VIDEO", threadId: id });
+    if (!v || !v.ok) return; // disabled, none uploaded, or already sent in this chat
+    await sleep(rand(2500, 5000)); // a short, human gap after the text reply
+    updateTick({ lastAction: "sending intro video" });
+    const ok = await uploadVideoBlob(v.base64, v.mime, v.name, v.caption || "", settings);
+    if (ok) {
+      await ask({ type: "MARK_INSTANT_VIDEO_SENT", threadId: id, threadName: name, name: v.name });
+      updateTick({ lastAction: "intro video sent", lastReplySent: "[INTRO VIDEO]" });
+    } else {
+      updateTick({ lastError: "intro video upload failed" });
+    }
   }
 
   /* ---------------- one thread ---------------- */
@@ -791,6 +815,8 @@
       const sent = await typeAndSend(composer, reply.text, settings);
       if (!sent) return; // composer was empty/garbled — don't mark replied
       updateTick({ lastAction: "reply sent", lastReplySent: trunc(reply.text, 200) });
+      // Reply first, then the one-time intro video (no-ops if off / already sent).
+      await maybeSendIntroVideo(id, name, settings);
     }
 
     repliedThreads[id] = Date.now();

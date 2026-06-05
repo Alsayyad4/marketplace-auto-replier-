@@ -3,7 +3,7 @@
   "name": "SubSell Marketplace Auto-Reply",
   "version": "0.2.0",
   "description": "Auto-replies to Facebook Marketplace buyer messages using the Anthropic Claude API. Bilingual FR/EN, casual Quebec tone. Single-user, local, no backend.",
-  "permissions": ["storage", "alarms", "notifications", "activeTab", "tabs"],
+  "permissions": ["storage", "unlimitedStorage", "alarms", "notifications", "activeTab", "tabs"],
   "host_permissions": [
     "https://*.messenger.com/*",
     "https://*.facebook.com/*",
