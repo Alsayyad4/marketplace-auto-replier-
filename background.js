@@ -126,17 +126,55 @@ function syncedConfigWrite(config) {
 
 function getSettings() {
   return new Promise((resolve) => {
-    syncedConfigRead((cfg, hadSync) => {
-      chrome.storage.local.get(["settings", "enabledLocal"], (res) => {
-        // Config priority: synced (cross-computer) > legacy local 'settings'.
-        // `enabled` is PER-MACHINE: enabledLocal first, then config, then DEFAULTS.
-        const base = hadSync ? cfg : (res.settings || {});
+    chrome.storage.local.get(["settings", "enabledLocal", "remoteConfig"], (res) => {
+      const finish = (base) => {
         const merged = Object.assign({}, DEFAULTS, base);
+        // `enabled` is PER-MACHINE: enabledLocal always wins (the shared config never
+        // turns a machine on/off for you).
         if (typeof res.enabledLocal === "boolean") merged.enabled = res.enabledLocal;
         resolve(merged);
-      });
+      };
+      // Config priority: REMOTE (shared "permanent link") > synced > legacy local.
+      // When a remote config has been fetched it is the single source of truth for
+      // every machine, regardless of Google account.
+      if (res.remoteConfig && typeof res.remoteConfig === "object" && Object.keys(res.remoteConfig).length) {
+        finish(res.remoteConfig);
+        return;
+      }
+      syncedConfigRead((cfg, hadSync) => finish(hadSync ? cfg : res.settings || {}));
     });
   });
+}
+
+/* ---------------- remote config ("permanent link") ----------------
+ * Fetch the whole settings object from ONE URL you control (e.g. a secret GitHub
+ * gist's raw link). Every machine reads from it, so you set the API key + settings
+ * once and edits to that file apply everywhere — even across different Google
+ * accounts. Stored locally as `remoteConfig` and treated as the source of truth by
+ * getSettings(). The URL lives in `remoteConfigUrl` (local, per machine) or the
+ * baked-in REMOTE_CONFIG_URL below (set it once for ZERO per-machine setup). */
+const REMOTE_CONFIG_URL = ""; // optional: bake your link here
+
+function getRemoteConfigUrl() {
+  return new Promise((resolve) =>
+    chrome.storage.local.get(["remoteConfigUrl"], (r) => resolve((r && r.remoteConfigUrl) || REMOTE_CONFIG_URL || ""))
+  );
+}
+async function fetchRemoteConfig() {
+  const url = await getRemoteConfigUrl();
+  if (!url) return { ok: false, error: "no remote config URL set" };
+  try {
+    const resp = await fetch(url, { cache: "no-store" });
+    if (!resp.ok) return { ok: false, error: "HTTP " + resp.status };
+    const cfg = await resp.json();
+    if (!cfg || typeof cfg !== "object" || Array.isArray(cfg)) return { ok: false, error: "config is not a JSON object" };
+    delete cfg.enabled; // on/off stays per machine
+    await new Promise((r) => chrome.storage.local.set({ remoteConfig: cfg, remoteConfigAt: Date.now() }, r));
+    LOG("remote config applied from", url);
+    return { ok: true, keys: Object.keys(cfg).length };
+  } catch (e) {
+    return { ok: false, error: e.message };
+  }
 }
 
 /* ---------------- counters / rate limits ---------------- */
@@ -620,6 +658,11 @@ chrome.runtime.onMessage.addListener((msg, _sender, sendResponse) => {
           sendResponse({ ok: true });
           break;
         }
+        case "FETCH_CONFIG": {
+          // Options "Fetch now" — pull the shared config from the permanent link.
+          sendResponse(await fetchRemoteConfig());
+          break;
+        }
         case "GET_STATUS": {
           const settings = await getSettings();
           const counters = rollWindows(await getCounters(), Date.now());
@@ -753,6 +796,15 @@ chrome.runtime.onMessage.addListener((msg, _sender, sendResponse) => {
  * Note: alarms fire at most once/minute — that's the floor Chrome allows. */
 const HEARTBEAT_ALARM = "subsell-heartbeat";
 chrome.alarms.create(HEARTBEAT_ALARM, { periodInMinutes: 1 });
+
+// Re-pull the shared remote config every 10 min (and once now), so edits to your
+// permanent link reach every machine without re-entering anything.
+const CONFIG_ALARM = "subsell-config";
+chrome.alarms.create(CONFIG_ALARM, { periodInMinutes: 10 });
+chrome.alarms.onAlarm.addListener((alarm) => {
+  if (alarm && alarm.name === CONFIG_ALARM) fetchRemoteConfig();
+});
+fetchRemoteConfig();
 
 async function heartbeat() {
   const settings = await getSettings();

@@ -5,6 +5,16 @@ Marketplace buyer messages using the Anthropic Claude API. Bilingual FR/EN
 (casual Quebec French), built for used-iPhone sales in Montréal. No backend, no
 cloud — runs locally, one Chrome profile per Facebook account.
 
+> 🔗 **v0.10.0 — one key for every computer (permanent link).** Set your API key +
+> settings in ONE shared file and every Chrome reads from it — even across different
+> Google accounts. In **Settings → General → "Sync across computers"**: configure one
+> machine, click **Export config**, paste the file into a **secret GitHub gist**, copy
+> its **raw** URL, and put that URL in **Remote config URL** on each machine (or bake it
+> into the build for zero per-machine setup). Edits to the gist reach all machines within
+> ~10 min (or hit **Fetch now**). The shared file then wins over local settings. ⚠️ Your
+> key sits in that file — keep the link private and rotate the key if it leaks. Additive;
+> the reply/video/follow-up paths are untouched.
+>
 > 🧩 **v0.9.0 — prices + multiple videos + follow-up.** Additive only; the reply
 > core is untouched.
 > - **Multiple videos + delay:** add several clips in **Settings → General**; the

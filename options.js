@@ -347,6 +347,50 @@
   }
   $("save").addEventListener("click", save);
 
+  /* ----- remote config (the "permanent link") ----- */
+  function loadRemoteConfig() {
+    chrome.storage.local.get(["remoteConfigUrl", "remoteConfigAt"], (r) => {
+      if ($("remoteConfigUrl")) $("remoteConfigUrl").value = (r && r.remoteConfigUrl) || "";
+      if ($("configStatus") && r && r.remoteConfigAt)
+        $("configStatus").textContent = "last synced " + new Date(r.remoteConfigAt).toLocaleString();
+    });
+  }
+  if ($("remoteConfigUrl")) {
+    $("remoteConfigUrl").addEventListener("change", () => {
+      chrome.storage.local.set({ remoteConfigUrl: ($("remoteConfigUrl").value || "").trim() });
+    });
+  }
+  if ($("fetchConfig")) {
+    $("fetchConfig").addEventListener("click", () => {
+      chrome.storage.local.set({ remoteConfigUrl: ($("remoteConfigUrl").value || "").trim() }, () => {
+        $("configStatus").textContent = "Fetching…";
+        chrome.runtime.sendMessage({ type: "FETCH_CONFIG" }, (r) => {
+          if (chrome.runtime.lastError) {
+            $("configStatus").textContent = "Error: " + chrome.runtime.lastError.message;
+            return;
+          }
+          $("configStatus").textContent =
+            r && r.ok ? `Synced ✓ (${r.keys} settings). Reload your Messenger tab.` : "Failed: " + (r && r.error);
+        });
+      });
+    });
+  }
+  if ($("exportConfig")) {
+    $("exportConfig").addEventListener("click", () => {
+      formToFields(); // capture current form edits
+      const data = Object.assign({}, settings);
+      delete data.enabled; // on/off stays per machine
+      const blob = new Blob([JSON.stringify(data, null, 2)], { type: "application/json" });
+      const url = URL.createObjectURL(blob);
+      const a = document.createElement("a");
+      a.href = url;
+      a.download = "subsell-config.json";
+      a.click();
+      URL.revokeObjectURL(url);
+    });
+  }
+  loadRemoteConfig();
+
   /* ----- demo video(s) (stored locally on this computer, NOT synced) ----- */
   let demoVideos = [];
   function fmtSize(n) {
