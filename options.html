@@ -119,13 +119,14 @@
         <div><label>Ask after (minutes)</label><input type="number" id="visitConfirmAfterMin" min="0" /></div>
 
         <hr />
-        <label class="check"><input type="checkbox" id="videoEnabled" /> Send a demo video once per chat <span class="hint">after the bot's first text reply to a buyer, attach this video — sent only ONE time per conversation</span></label>
+        <label class="check"><input type="checkbox" id="videoEnabled" /> Send demo video(s) once per chat <span class="hint">after the bot's first text reply to a buyer, send your video(s) — only ONE time per conversation</span></label>
         <div class="row">
           <input type="file" id="videoFile" accept="video/mp4,video/*" />
-          <button id="videoRemove" class="danger" type="button">Remove video</button>
+          <span class="hint">pick a file to add it to the list (add more than one to send several)</span>
         </div>
-        <div id="videoInfo" class="hint">No video uploaded yet.</div>
-        <div class="hint">Keep it under ~25&nbsp;MB for a reliable upload. Stored locally on this computer only (not synced).</div>
+        <div id="videoList" class="hint">No videos uploaded yet.</div>
+        <div><label>Send the video(s) this many seconds after the reply</label><input type="number" id="videoDelaySec" min="0" max="120" /></div>
+        <div class="hint">Keep each under ~25&nbsp;MB for a reliable upload. Stored locally on this computer only (not synced).</div>
       </section>
 
       <!-- BUSINESS -->
@@ -144,6 +145,8 @@
         <textarea id="examples" style="min-height:200px;" placeholder="Buyer: Le 13 est encore dispo?&#10;You: Allô! Oui tjs dispo 👍 256Go, batterie 91%. 420$ cash, pickup Beaubien.&#10;&#10;Buyer: Can I see it working?&#10;You: [VIDEO:https://…/iphone13.mp4] Here's a quick demo 🙂&#10;&#10;Buyer: Can you ship it and I'll e-transfer first?&#10;You: [HUMAN] buyer wants shipping + pay-first, possible scam"></textarea>
         <label>Closer goals <span class="hint">how the bot sells the in-person visit (used when Closer mode is on)</span></label>
         <textarea id="closerGoals"></textarea>
+        <label>Price list <span class="hint">starting prices the bot WILL share (overrides "never quote prices"). One per line. The bot gives the starting price, then closes toward a call / shop visit.</span></label>
+        <textarea id="priceList" style="min-height:160px;" placeholder="iPhones (starting at):&#10;  iPhone 11 — from $___&#10;  iPhone 12 — from $___&#10;  iPhone 13 — from $___&#10;Samsung phones (starting at):&#10;  Galaxy S22 — from $___&#10;iPads / tablets (starting at):&#10;  iPad 9th gen — from $___&#10;  Samsung Tab — from $___&#10;Laptops (starting at): from $___&#10;MacBook (starting at):&#10;  MacBook Air M1 — from $___"></textarea>
         <label>Visit-confirm message <span class="hint">blank = bilingual default. Sent silently to confirm a buyer is still coming.</span></label>
         <textarea id="visitConfirmMessage" placeholder="(blank uses the built-in FR/EN default)"></textarea>
       </section>

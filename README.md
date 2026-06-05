@@ -5,6 +5,19 @@ Marketplace buyer messages using the Anthropic Claude API. Bilingual FR/EN
 (casual Quebec French), built for used-iPhone sales in Montréal. No backend, no
 cloud — runs locally, one Chrome profile per Facebook account.
 
+> 🧩 **v0.9.0 — prices + multiple videos + follow-up.** Additive only; the reply
+> core is untouched.
+> - **Multiple videos + delay:** add several clips in **Settings → General**; the
+>   bot sends them (once per chat) **10 s** after its reply (configurable).
+> - **Share starting prices:** fill the **Price list** in **Settings → Business
+>   prompt** and the bot gives the relevant *starting* price instead of refusing —
+>   then still closes toward a call / shop visit, **trade-in (cash for newer
+>   phones)**, and liquidation urgency.
+> - **Follow-up:** add one in the **Follow-ups** tab (message + minutes + on). After
+>   the bot replies it arms a timer; if the buyer stays quiet that long it nudges
+>   once ("still interested? coming by or calling?"). If the buyer replies first,
+>   the follow-up is skipped automatically.
+>
 > 🎬 **v0.8.0 — demo video, once per chat.** Upload an mp4 in **Settings → General
 > → "Send a demo video once per chat"** (stored locally on that computer). After the
 > bot sends its **first text reply** to a buyer, it attaches that video and sends it

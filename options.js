@@ -30,6 +30,7 @@
     noExactPrices: true,
     closerGoals:
       "Your #1 goal is to get the buyer to come visit the shop in person. We give better prices in person than online. We also do trade-ins/exchanges, buyback of their old phone, and have liquidation deals — mention these naturally when relevant. Build excitement and urgency without being pushy. Always steer toward 'come by the shop and we'll take care of you'.",
+    priceList: "",
     visitConfirmEnabled: true,
     visitConfirmAfterMin: 120,
     visitConfirmMessage: "",
@@ -83,6 +84,7 @@
     ["closerMode", "checked"],
     ["noExactPrices", "checked"],
     ["closerGoals", "value"],
+    ["priceList", "value"],
     ["visitConfirmEnabled", "checked"],
     ["visitConfirmAfterMin", "number"],
     ["visitConfirmMessage", "value"],
@@ -345,16 +347,44 @@
   }
   $("save").addEventListener("click", save);
 
-  /* ----- demo video (stored locally on this computer, NOT synced) ----- */
+  /* ----- demo video(s) (stored locally on this computer, NOT synced) ----- */
+  let demoVideos = [];
   function fmtSize(n) {
     return n ? (n / 1048576).toFixed(1) + " MB" : "";
   }
+  function renderVideoList() {
+    const el = $("videoList");
+    if (!el) return;
+    if (!demoVideos.length) {
+      el.textContent = "No videos uploaded yet.";
+      return;
+    }
+    el.innerHTML = "";
+    demoVideos.forEach((v, i) => {
+      const row = document.createElement("div");
+      row.className = "row";
+      const label = document.createElement("span");
+      label.textContent = `${i + 1}. ${v.name || "video"} (${fmtSize(v.size)})`;
+      const del = document.createElement("button");
+      del.type = "button";
+      del.className = "danger";
+      del.textContent = "Remove";
+      del.addEventListener("click", () => {
+        demoVideos.splice(i, 1);
+        chrome.storage.local.set({ demoVideos }, renderVideoList);
+      });
+      row.appendChild(label);
+      row.appendChild(del);
+      el.appendChild(row);
+    });
+  }
   function loadVideo() {
-    chrome.storage.local.get(["videoEnabled", "demoVideo"], (r) => {
+    chrome.storage.local.get(["videoEnabled", "demoVideos", "demoVideo", "videoDelaySec"], (r) => {
       if ($("videoEnabled")) $("videoEnabled").checked = !!r.videoEnabled;
-      const v = r.demoVideo;
-      $("videoInfo").textContent =
-        v && v.dataUrl ? `Current: ${v.name || "video"} (${fmtSize(v.size)})` : "No video uploaded yet.";
+      if ($("videoDelaySec")) $("videoDelaySec").value = r.videoDelaySec != null ? r.videoDelaySec : 10;
+      demoVideos = Array.isArray(r.demoVideos) ? r.demoVideos : [];
+      if (!demoVideos.length && r.demoVideo && r.demoVideo.dataUrl) demoVideos = [r.demoVideo]; // migrate legacy single
+      renderVideoList();
     });
   }
   if ($("videoEnabled")) {
@@ -362,38 +392,37 @@
       chrome.storage.local.set({ videoEnabled: $("videoEnabled").checked });
     });
   }
+  if ($("videoDelaySec")) {
+    $("videoDelaySec").addEventListener("change", () => {
+      chrome.storage.local.set({ videoDelaySec: Number($("videoDelaySec").value) || 0 });
+    });
+  }
   if ($("videoFile")) {
     $("videoFile").addEventListener("change", () => {
       const f = $("videoFile").files && $("videoFile").files[0];
       if (!f) return;
-      $("videoInfo").textContent = `Loading ${f.name}…`;
+      if ($("videoList")) $("videoList").textContent = `Loading ${f.name}…`;
       const reader = new FileReader();
       reader.onload = () => {
-        chrome.storage.local.set(
-          { demoVideo: { name: f.name, type: f.type || "video/mp4", size: f.size, dataUrl: reader.result } },
-          () => {
-            if (chrome.runtime.lastError) {
-              $("videoInfo").textContent = "Couldn't store (too big?): " + chrome.runtime.lastError.message;
-            } else {
-              $("videoInfo").textContent = `Current: ${f.name} (${fmtSize(f.size)})`;
-              if ($("videoEnabled") && !$("videoEnabled").checked) {
-                $("videoEnabled").checked = true;
-                chrome.storage.local.set({ videoEnabled: true });
-              }
+        demoVideos.push({ name: f.name, type: f.type || "video/mp4", size: f.size, dataUrl: reader.result });
+        chrome.storage.local.set({ demoVideos }, () => {
+          if (chrome.runtime.lastError) {
+            demoVideos.pop();
+            if ($("videoList")) $("videoList").textContent = "Couldn't store (too big?): " + chrome.runtime.lastError.message;
+          } else {
+            if ($("videoEnabled") && !$("videoEnabled").checked) {
+              $("videoEnabled").checked = true;
+              chrome.storage.local.set({ videoEnabled: true });
             }
+            renderVideoList();
           }
-        );
+          if ($("videoFile")) $("videoFile").value = "";
+        });
       };
-      reader.onerror = () => ($("videoInfo").textContent = "Could not read that file.");
+      reader.onerror = () => {
+        if ($("videoList")) $("videoList").textContent = "Could not read that file.";
+      };
       reader.readAsDataURL(f);
-    });
-  }
-  if ($("videoRemove")) {
-    $("videoRemove").addEventListener("click", () => {
-      chrome.storage.local.remove("demoVideo", () => {
-        $("videoInfo").textContent = "No video uploaded yet.";
-        if ($("videoFile")) $("videoFile").value = "";
-      });
     });
   }
   loadVideo();

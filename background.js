@@ -46,6 +46,8 @@ const DEFAULTS = {
   noExactPrices: true, // never quote a number; promise the best price in person
   closerGoals:
     "Your #1 goal is to get the buyer to come visit the shop in person. We give better prices in person than online. We also do trade-ins/exchanges, buyback of their old phone, and have liquidation deals — mention these naturally when relevant. Build excitement and urgency (popular model, moves fast) without being pushy. Always steer toward 'come by the shop and we'll take care of you'.",
+  // starting-price list the bot can share (when set, it gives prices instead of refusing)
+  priceList: "",
   // silent visit confirmation follow-up (does NOT notify the operator)
   visitConfirmEnabled: true,
   visitConfirmAfterMin: 120, // ask "still coming?" this long after a pickup intent
@@ -275,9 +277,21 @@ function buildSystemPrompt(settings) {
   lines.push("INSTRUCTIONS:");
   lines.push(settings.instructions || "");
 
+  // Starting-price list the bot CAN share. When present, it overrides the old
+  // "never quote a price" behaviour — the buyer gets a real starting price, then
+  // we close toward a call / shop visit.
+  const hasPriceList = !!(settings.priceList && settings.priceList.trim());
+  if (hasPriceList) {
+    lines.push("");
+    lines.push(
+      "STARTING PRICES (share the relevant one when a buyer asks about a model — these are 'starting at' / 'à partir de' prices; the exact price depends on storage, condition, and the in-person deal, so quote it as 'starts at $X' and invite them in for the best price):"
+    );
+    lines.push(settings.priceList.trim());
+  }
+
   if (Array.isArray(settings.listings) && settings.listings.length) {
     lines.push("");
-    if (settings.noExactPrices) {
+    if (settings.noExactPrices && !hasPriceList) {
       // Hide the numbers entirely so the model literally cannot quote a price.
       lines.push("CURRENT INVENTORY (availability + video only — do NOT state any price):");
       for (const l of settings.listings) {
@@ -297,12 +311,20 @@ function buildSystemPrompt(settings) {
 
   if (settings.closerMode) {
     lines.push("");
-    lines.push("CLOSER MODE — your job is to turn this chat into a shop visit:");
+    lines.push("HOW TO CLOSE — turn this chat into a call or a shop visit:");
     lines.push(settings.closerGoals || "");
-    if (settings.noExactPrices) {
-      lines.push("PRICING RULE (critical): NEVER state an exact price, number, or dollar amount in chat — not even a range, not even the listed price. If asked the price, say the listed price is on the post but you give your BEST deal in person, and invite them to come by the shop. This avoids any price confusion or disputes. If they push hard for a number, return [HUMAN].");
+    if (hasPriceList) {
+      lines.push(
+        "PRICING: when asked, GIVE the relevant starting price from the list above — do NOT refuse or dodge the question. Then close: tell them the exact / best price is locked in when they call or drop by, because of the deal you can do in person."
+      );
+    } else if (settings.noExactPrices) {
+      lines.push(
+        "PRICING RULE (critical): NEVER state an exact price, number, or dollar amount in chat — not even a range, not even the listed price. If asked the price, say the listed price is on the post but you give your BEST deal in person, and invite them to come by the shop. If they push hard for a number, return [HUMAN]."
+      );
     }
-    lines.push("Mention trade-ins/exchange, buyback of their old device, and liquidation deals when natural. Keep it warm and low-pressure; the goal is 'come to the shop and we'll take care of you.'");
+    lines.push(
+      "Always work these in naturally: we do TRADE-INS — take their old phone/device toward the new one, and if their current phone is NEWER we can even pay them CASH for it. Push our LIQUIDATION deals and create gentle urgency (good stock moves fast). The goal: get them to call or come to the shop, where we take care of them with the best deal."
+    );
   }
 
   lines.push("");

@@ -345,21 +345,33 @@
     }
     return true;
   }
-  // Send the stored demo video to the current chat — ONCE per chat, after the text reply.
+  // Send the stored demo video(s) to the current chat — ONCE per chat, a set delay
+  // after the text reply (default 10s). Supports MULTIPLE videos, sent in order.
   async function maybeSendVideo(id, name) {
     try {
-      const cfg = await getLocal(["videoEnabled", "demoVideo", "videoSentThreads"]);
-      if (!cfg.videoEnabled || !cfg.demoVideo || !cfg.demoVideo.dataUrl) return;
+      const cfg = await getLocal(["videoEnabled", "demoVideos", "demoVideo", "videoSentThreads", "videoDelaySec"]);
+      if (!cfg.videoEnabled) return;
+      let vids = Array.isArray(cfg.demoVideos) ? cfg.demoVideos : [];
+      if (!vids.length && cfg.demoVideo && cfg.demoVideo.dataUrl) vids = [cfg.demoVideo]; // legacy single
+      vids = vids.filter((v) => v && v.dataUrl);
+      if (!vids.length) return;
       const sent = cfg.videoSentThreads || {};
       if (sent[id]) return; // already sent in this conversation
-      await sleep(rand(1500, 3000)); // small gap after the text reply
-      setStatus({ lastAction: "sending demo video…", currentThread: name });
-      const file = dataUrlToFile(cfg.demoVideo.dataUrl, cfg.demoVideo.name, cfg.demoVideo.type);
-      const ok = await injectVideo(file);
-      if (ok) {
-        sent[id] = true; // mark so we never send the video twice in the same chat
+      const delayMs = (cfg.videoDelaySec != null ? cfg.videoDelaySec : 10) * 1000;
+      setStatus({ lastAction: `video in ${Math.round(delayMs / 1000)}s…`, currentThread: name });
+      await sleep(delayMs); // wait N seconds after the text reply (default 10s)
+      let anyOk = false;
+      for (let i = 0; i < vids.length; i++) {
+        setStatus({ lastAction: `sending video ${i + 1}/${vids.length}…`, currentThread: name });
+        const file = dataUrlToFile(vids[i].dataUrl, vids[i].name, vids[i].type);
+        const ok = await injectVideo(file);
+        anyOk = anyOk || ok;
+        if (i < vids.length - 1) await sleep(rand(4000, 7000)); // gap between videos
+      }
+      if (anyOk) {
+        sent[id] = true; // mark so we never send the video(s) twice in the same chat
         await setLocal({ videoSentThreads: sent });
-        setStatus({ lastAction: "demo video sent ✓", currentThread: name });
+        setStatus({ lastAction: "demo video(s) sent ✓", currentThread: name });
       } else {
         setStatus({ lastError: "couldn't attach video (no uploader found) — will retry" });
       }
@@ -434,6 +446,10 @@
     cooldowns[id] = Date.now() + COOLDOWN_MS;
     setStatus({ lastAction: "replied ✓", lastReplySent: trunc(reply.text, 200), currentThread: name });
 
+    // Schedule a follow-up (background handles the timing). Re-armed on every
+    // reply, so it only fires after the conversation has gone quiet. Fire-and-forget.
+    ask({ type: "BOT_REPLIED", threadId: id });
+
     // After the text reply, send the demo video once per chat (optional, isolated).
     await maybeSendVideo(id, name);
   }
@@ -476,6 +492,35 @@
     }
     if (msg && msg.type === "PING") {
       send({ ok: true, url: location.href, anchorCount: conversationAnchors().length });
+      return true;
+    }
+    if (msg && msg.type === "SEND_FOLLOWUP") {
+      // Background's follow-up alarm fired. Open the thread and nudge — but ONLY if
+      // we still spoke last (if the buyer already replied, the normal loop handles it).
+      (async () => {
+        if (busy) return send({ ok: false, error: "busy" });
+        const anchor = conversationAnchors().find((a) => threadId(a) === msg.threadId);
+        if (!anchor) return send({ ok: false, error: "thread not found" });
+        busy = true;
+        try {
+          safe(() => anchor.click());
+          await sleep(2200);
+          const composer = await waitForComposer();
+          if (!composer) return send({ ok: false, error: "no composer" });
+          await sleep(600);
+          if (buyerSpokeLast()) {
+            setStatus({ lastAction: "follow-up skipped — buyer already active", currentThread: anchorName(anchor) });
+            return send({ ok: true, skipped: true });
+          }
+          const ok = await typeAndSend(composer, msg.text);
+          setStatus({ lastAction: ok ? "follow-up sent ✓" : "follow-up failed", currentThread: anchorName(anchor) });
+          send({ ok });
+        } catch (e) {
+          send({ ok: false, error: e.message });
+        } finally {
+          busy = false;
+        }
+      })();
       return true;
     }
     if (msg && msg.type === "SCAN") {
