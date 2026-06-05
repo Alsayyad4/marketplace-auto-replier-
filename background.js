@@ -66,6 +66,11 @@ const DEFAULTS = {
   listings: [],
   followUps: [],
   videos: [],
+  // intro video — uploaded from the computer, sent once per chat after the first
+  // reply. Only these two small flags sync; the video BYTES live in
+  // chrome.storage.local key `instantVideo` (per-machine, can't fit in sync).
+  instantVideoEnabled: false,
+  instantVideoCaption: "",
 };
 
 const LOG = (...a) => console.log("[SubSell-BG]", ...a);
@@ -232,6 +237,33 @@ function getCapNotified() {
   return new Promise((resolve) => {
     chrome.storage.local.get(["capNotified"], (res) => resolve(res.capNotified || {}));
   });
+}
+
+/* ---------------- intro video (sent once per chat) ----------------
+ * The uploaded video lives in chrome.storage.local.instantVideo as
+ * { base64, mime, name, size }. It is NOT synced (sync caps at ~100KB).
+ * `instantVideoSent` is a per-thread map so each chat gets it exactly once;
+ * it persists across restarts so the bot never re-sends. */
+function getStoredInstantVideo() {
+  return new Promise((resolve) => {
+    chrome.storage.local.get(["instantVideo"], (res) => resolve(res.instantVideo || null));
+  });
+}
+function getInstantVideoSent() {
+  return new Promise((resolve) => {
+    chrome.storage.local.get(["instantVideoSent"], (res) => resolve(res.instantVideoSent || {}));
+  });
+}
+async function instantVideoAlreadySent(threadId) {
+  if (!threadId) return false;
+  const map = await getInstantVideoSent();
+  return !!map[threadId];
+}
+async function markInstantVideoSent(threadId) {
+  if (!threadId) return;
+  const map = await getInstantVideoSent();
+  map[threadId] = Date.now();
+  return new Promise((resolve) => chrome.storage.local.set({ instantVideoSent: map }, resolve));
 }
 
 /* Visit intent per conversation — recorded SILENTLY (no operator notification).
@@ -708,6 +740,46 @@ chrome.runtime.onMessage.addListener((msg, _sender, sendResponse) => {
         }
         case "FETCH_VIDEO": {
           sendResponse(await fetchVideo(msg.url));
+          break;
+        }
+        case "GET_INSTANT_VIDEO": {
+          // Hand the stored intro video to content.js ONLY if the feature is on,
+          // a video is uploaded on this machine, and this chat hasn't had it yet.
+          const settings = await getSettings();
+          if (!settings.instantVideoEnabled) {
+            sendResponse({ ok: false, reason: "disabled" });
+            break;
+          }
+          if (await instantVideoAlreadySent(msg.threadId)) {
+            sendResponse({ ok: false, reason: "already sent" });
+            break;
+          }
+          const v = await getStoredInstantVideo();
+          if (!v || !v.base64) {
+            sendResponse({ ok: false, reason: "no video uploaded on this computer" });
+            break;
+          }
+          sendResponse({
+            ok: true,
+            base64: v.base64,
+            mime: v.mime || "video/mp4",
+            name: v.name || "video.mp4",
+            caption: settings.instantVideoCaption || "",
+          });
+          break;
+        }
+        case "MARK_INSTANT_VIDEO_SENT": {
+          // Content reports a successful upload: remember it for this chat, count
+          // it toward the hourly/daily rate limit (realistic), and log it. It does
+          // NOT consume the per-conversation reply cap — it's a one-time intro.
+          await markInstantVideoSent(msg.threadId);
+          await incrementCounters();
+          await appendLog({
+            thread: msg.threadName,
+            action: "intro-video",
+            reply: "[INTRO VIDEO] " + (msg.name || ""),
+          });
+          sendResponse({ ok: true });
           break;
         }
         case "BOT_REPLIED": {

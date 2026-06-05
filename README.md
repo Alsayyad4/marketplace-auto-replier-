@@ -30,8 +30,8 @@ cloud — runs locally, one Chrome profile per Facebook account.
 | File | Purpose |
 |------|---------|
 | `manifest.json` | MV3 manifest — content script, service worker, popup, options. |
-| `background.js` | Service worker: Anthropic API (`claude-sonnet-4-6`, `anthropic-dangerous-direct-browser-access`), system-prompt assembly, rate limits + warm-up, business hours, per-conversation cap, follow-up alarms, `[HUMAN]` notifications, mp4 blob fetch, reply log. |
-| `content.js` | DOM side: permanent diagnostic capture, `isUnread()`, scan→read→reply pipeline, human-like typing, human cadence (breaks/skips), `[VIDEO]` paste-to-upload, follow-up typing, live `debugTick`. |
+| `background.js` | Service worker: Anthropic API (`claude-sonnet-4-6`, `anthropic-dangerous-direct-browser-access`), system-prompt assembly, rate limits + warm-up, business hours, per-conversation cap, follow-up alarms, `[HUMAN]` notifications, mp4 blob fetch, once-per-chat intro-video handoff, reply log. |
+| `content.js` | DOM side: permanent diagnostic capture, `isUnread()`, scan→read→reply pipeline, human-like typing, human cadence (breaks/skips), `[VIDEO]` + once-per-chat intro-video paste-to-upload, follow-up typing, live `debugTick`. |
 | `popup.html` / `popup.js` | On/off, status, delay slider, live debug, **Open Marketplace** button, unread diagnostic + Copy ALL. |
 | `options.html` / `options.js` | Tabbed settings (see below). |
 | `icon16/48/128.png` | Action + notification icons. |
@@ -75,7 +75,13 @@ Scan loop (every 8s, only on messages pages):
   video URL, available) with JSON import/export.
 - **Follow-ups** — name, after-minutes, message, on/off. Scheduled when the bot
   replies; cancelled if the buyer replies first.
-- **Videos** — library of mp4 URLs (name, URL, notes).
+- **Videos** — **Intro video**: upload an mp4 *from this computer*; the bot sends
+  it **once per chat**, right after its first reply (native upload, not a link).
+  Stored in `chrome.storage.local` on that machine only — it does **not** sync
+  across computers (videos are too big for `chrome.storage.sync`), so upload it on
+  each machine. Counts toward hourly/daily caps, not the per-conversation cap.
+  Below it: a library of mp4 URLs (name, URL, notes) for Claude's `[VIDEO:url]`
+  token.
 - **Test responses** — dry-run Claude on a fake buyer message; no Facebook, no
   rate-limit use.
 - **Activity log** — last 500 sends (buyer message + reply + action + convo

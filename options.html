@@ -163,6 +163,20 @@
 
       <!-- VIDEOS -->
       <section id="videos">
+        <h3 style="margin:4px 0;">Intro video — sent once per new chat</h3>
+        <p class="hint">Upload a short clip from THIS computer. After the bot's first reply in each conversation, it sends this video one time as a native upload (never a link). Counts toward your hourly/daily caps, but not the per-conversation reply cap.</p>
+        <p class="hint">⚠️ The file is stored on this computer only — it does <b>not</b> sync to your other machines (videos are too big for sync). Upload it on each computer you run the bot on. Keep it short (a few seconds) to stay snappy.</p>
+        <label class="check"><input type="checkbox" id="instantVideoEnabled" /> Send my intro video once per chat</label>
+        <div class="row">
+          <input type="file" id="instantVideoFile" accept="video/*" />
+          <button id="removeInstantVideo" type="button" class="danger">Remove video</button>
+        </div>
+        <div id="instantVideoInfo" class="hint">No video uploaded on this computer yet.</div>
+        <label>Caption sent with the video <span class="hint">optional — keep it short; vary it across accounts</span></label>
+        <input type="text" id="instantVideoCaption" placeholder="e.g. Voici le téléphone en vrai 👀 / Here's the actual phone" />
+        <p class="hint">The video uploads the moment you pick it. The on/off switch and caption save with the <b>Save settings</b> button below.</p>
+        <hr />
+        <h3 style="margin:4px 0;">Video library <span class="hint">URLs for Claude's [VIDEO:url] token</span></h3>
         <div class="row"><button id="addVideo">+ Add video</button></div>
         <table id="videosTable">
           <thead><tr><th>Name</th><th>URL</th><th>Notes</th><th></th></tr></thead>
