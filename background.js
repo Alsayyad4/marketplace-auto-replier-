@@ -46,6 +46,8 @@ const DEFAULTS = {
   noExactPrices: true, // never quote a number; promise the best price in person
   closerGoals:
     "Your #1 goal is to get the buyer to come visit the shop in person. We give better prices in person than online. We also do trade-ins/exchanges, buyback of their old phone, and have liquidation deals — mention these naturally when relevant. Build excitement and urgency (popular model, moves fast) without being pushy. Always steer toward 'come by the shop and we'll take care of you'.",
+  // starting-price list the bot can share (when set, it gives prices instead of refusing)
+  priceList: "",
   // silent visit confirmation follow-up (does NOT notify the operator)
   visitConfirmEnabled: true,
   visitConfirmAfterMin: 120, // ask "still coming?" this long after a pickup intent
@@ -122,19 +124,98 @@ function syncedConfigWrite(config) {
   });
 }
 
+// Read enterprise-policy config (chrome.storage.managed → managed_schema.json).
+// Admins push `configJson` (the whole settings JSON) to the fleet via Chrome
+// policy; this returns the parsed object, or null when there's no policy.
+function readManagedConfig() {
+  return new Promise((resolve) => {
+    if (!chrome.storage || !chrome.storage.managed) return resolve(null);
+    try {
+      chrome.storage.managed.get(["configJson"], (mg) => {
+        if (chrome.runtime.lastError || !mg || !mg.configJson) return resolve(null);
+        try {
+          const cfg = JSON.parse(mg.configJson);
+          resolve(cfg && typeof cfg === "object" && !Array.isArray(cfg) ? cfg : null);
+        } catch (e) {
+          resolve(null);
+        }
+      });
+    } catch (e) {
+      resolve(null);
+    }
+  });
+}
+
 function getSettings() {
   return new Promise((resolve) => {
-    syncedConfigRead((cfg, hadSync) => {
-      chrome.storage.local.get(["settings", "enabledLocal"], (res) => {
-        // Config priority: synced (cross-computer) > legacy local 'settings'.
-        // `enabled` is PER-MACHINE: enabledLocal first, then config, then DEFAULTS.
-        const base = hadSync ? cfg : (res.settings || {});
+    chrome.storage.local.get(["settings", "enabledLocal", "remoteConfig"], (res) => {
+      const finish = (base) => {
         const merged = Object.assign({}, DEFAULTS, base);
+        // `enabled` is PER-MACHINE: enabledLocal always wins (shared config never
+        // turns a machine on/off for you).
         if (typeof res.enabledLocal === "boolean") merged.enabled = res.enabledLocal;
         resolve(merged);
+      };
+      // Config priority: MANAGED policy (fleet) > REMOTE link > synced > legacy local.
+      readManagedConfig().then((managed) => {
+        if (managed) {
+          delete managed.enabled;
+          finish(managed);
+          return;
+        }
+        if (res.remoteConfig && typeof res.remoteConfig === "object" && Object.keys(res.remoteConfig).length) {
+          finish(res.remoteConfig);
+          return;
+        }
+        syncedConfigRead((cfg, hadSync) => finish(hadSync ? cfg : res.settings || {}));
       });
     });
   });
+}
+
+/* ---------------- remote config ("permanent link") ----------------
+ * Fetch the whole settings object from ONE URL you control (e.g. a secret GitHub
+ * gist's raw link). Every machine reads from it, so you set the API key + settings
+ * once and edits to that file apply everywhere — even across different Google
+ * accounts. Stored locally as `remoteConfig` and treated as the source of truth by
+ * getSettings(). The URL lives in `remoteConfigUrl` (local, per machine) or the
+ * baked-in REMOTE_CONFIG_URL below (set it once for ZERO per-machine setup). */
+const REMOTE_CONFIG_URL = ""; // optional: bake your link here
+
+function getRemoteConfigUrl() {
+  return new Promise((resolve) => {
+    const fromLocal = () =>
+      chrome.storage.local.get(["remoteConfigUrl"], (r) => resolve((r && r.remoteConfigUrl) || REMOTE_CONFIG_URL || ""));
+    // Enterprise policy can supply the URL too (chrome.storage.managed.configUrl).
+    if (chrome.storage && chrome.storage.managed) {
+      try {
+        chrome.storage.managed.get(["configUrl"], (mg) => {
+          if (!chrome.runtime.lastError && mg && mg.configUrl) resolve(mg.configUrl);
+          else fromLocal();
+        });
+        return;
+      } catch (e) {
+        /* fall through */
+      }
+    }
+    fromLocal();
+  });
+}
+async function fetchRemoteConfig() {
+  const url = await getRemoteConfigUrl();
+  if (!url) return { ok: false, error: "no remote config URL set" };
+  try {
+    const resp = await fetch(url, { cache: "no-store" });
+    if (!resp.ok) return { ok: false, error: "HTTP " + resp.status };
+    const cfg = await resp.json();
+    if (!cfg || typeof cfg !== "object" || Array.isArray(cfg)) return { ok: false, error: "config is not a JSON object" };
+    delete cfg.enabled; // on/off stays per machine
+    await new Promise((r) => chrome.storage.local.set({ remoteConfig: cfg, remoteConfigAt: Date.now() }, r));
+    LOG("remote config applied from", url);
+    return { ok: true, keys: Object.keys(cfg).length };
+  } catch (e) {
+    return { ok: false, error: e.message };
+  }
 }
 
 /* ---------------- counters / rate limits ---------------- */
@@ -275,9 +356,21 @@ function buildSystemPrompt(settings) {
   lines.push("INSTRUCTIONS:");
   lines.push(settings.instructions || "");
 
+  // Starting-price list the bot CAN share. When present, it overrides the old
+  // "never quote a price" behaviour — the buyer gets a real starting price, then
+  // we close toward a call / shop visit.
+  const hasPriceList = !!(settings.priceList && settings.priceList.trim());
+  if (hasPriceList) {
+    lines.push("");
+    lines.push(
+      "STARTING PRICES (share the relevant one when a buyer asks about a model — these are 'starting at' / 'à partir de' prices; the exact price depends on storage, condition, and the in-person deal, so quote it as 'starts at $X' and invite them in for the best price):"
+    );
+    lines.push(settings.priceList.trim());
+  }
+
   if (Array.isArray(settings.listings) && settings.listings.length) {
     lines.push("");
-    if (settings.noExactPrices) {
+    if (settings.noExactPrices && !hasPriceList) {
       // Hide the numbers entirely so the model literally cannot quote a price.
       lines.push("CURRENT INVENTORY (availability + video only — do NOT state any price):");
       for (const l of settings.listings) {
@@ -297,12 +390,20 @@ function buildSystemPrompt(settings) {
 
   if (settings.closerMode) {
     lines.push("");
-    lines.push("CLOSER MODE — your job is to turn this chat into a shop visit:");
+    lines.push("HOW TO CLOSE — turn this chat into a call or a shop visit:");
     lines.push(settings.closerGoals || "");
-    if (settings.noExactPrices) {
-      lines.push("PRICING RULE (critical): NEVER state an exact price, number, or dollar amount in chat — not even a range, not even the listed price. If asked the price, say the listed price is on the post but you give your BEST deal in person, and invite them to come by the shop. This avoids any price confusion or disputes. If they push hard for a number, return [HUMAN].");
+    if (hasPriceList) {
+      lines.push(
+        "PRICING: when asked, GIVE the relevant starting price from the list above — do NOT refuse or dodge the question. Then close: tell them the exact / best price is locked in when they call or drop by, because of the deal you can do in person."
+      );
+    } else if (settings.noExactPrices) {
+      lines.push(
+        "PRICING RULE (critical): NEVER state an exact price, number, or dollar amount in chat — not even a range, not even the listed price. If asked the price, say the listed price is on the post but you give your BEST deal in person, and invite them to come by the shop. If they push hard for a number, return [HUMAN]."
+      );
     }
-    lines.push("Mention trade-ins/exchange, buyback of their old device, and liquidation deals when natural. Keep it warm and low-pressure; the goal is 'come to the shop and we'll take care of you.'");
+    lines.push(
+      "Always work these in naturally: we do TRADE-INS — take their old phone/device toward the new one, and if their current phone is NEWER we can even pay them CASH for it. Push our LIQUIDATION deals and create gentle urgency (good stock moves fast). The goal: get them to call or come to the shop, where we take care of them with the best deal."
+    );
   }
 
   lines.push("");
@@ -598,6 +699,11 @@ chrome.runtime.onMessage.addListener((msg, _sender, sendResponse) => {
           sendResponse({ ok: true });
           break;
         }
+        case "FETCH_CONFIG": {
+          // Options "Fetch now" — pull the shared config from the permanent link.
+          sendResponse(await fetchRemoteConfig());
+          break;
+        }
         case "GET_STATUS": {
           const settings = await getSettings();
           const counters = rollWindows(await getCounters(), Date.now());
@@ -616,78 +722,49 @@ chrome.runtime.onMessage.addListener((msg, _sender, sendResponse) => {
           });
           break;
         }
-        case "GET_REPLY": {
+        case "GET_REPLY_SIMPLE": {
+          // The ONLY reply path now. Two safety checks (business hours + a plain
+          // hourly/daily cap, no warm-up ramp), then ask Claude and hand back the
+          // text. [HUMAN] still pings you; everything else is just a reply.
           const settings = await getSettings();
           if (!withinBusinessHours(settings)) {
-            sendResponse({ ok: true, blocked: true, reason: "outside business hours" });
+            sendResponse({ ok: true, skip: true, reason: "outside business hours" });
             break;
           }
-          // per-conversation reply cap (0 = unlimited)
-          const cap = Number(settings.maxRepliesPerConvo) || 0;
-          if (cap > 0 && msg.threadId) {
-            const used = await convoReplyCount(msg.threadId);
-            if (used >= cap) {
-              if (settings.convoCapBehavior === "notify") {
-                // fire the notification only once per conversation, not every cycle
-                const notified = await getCapNotified();
-                if (!notified[msg.threadId]) {
-                  notifyHuman(`conversation hit ${cap}-reply cap — your turn`, msg.threadName);
-                  notified[msg.threadId] = true;
-                  await new Promise((r) => chrome.storage.local.set({ capNotified: notified }, r));
-                }
-              }
-              sendResponse({ ok: true, blocked: true, reason: `convo reply cap (${used}/${cap})` });
-              break;
-            }
-          }
-          const rl = await checkRateLimit(settings);
-          if (!rl.ok) {
-            sendResponse({ ok: true, blocked: true, reason: rl.reason });
+          const c = rollWindows(await getCounters(), Date.now());
+          if (settings.hourlyCap && c.hourCount >= settings.hourlyCap) {
+            sendResponse({ ok: true, skip: true, reason: "hourly cap reached" });
             break;
           }
-          const result = await callClaude(settings, msg.buyerMessage, msg.context);
+          if (settings.dailyCap && c.dayCount >= settings.dailyCap) {
+            sendResponse({ ok: true, skip: true, reason: "daily cap reached" });
+            break;
+          }
+          const result = await callClaude(
+            settings,
+            msg.buyerMessage,
+            msg.context ? "Conversation so far (most recent last):\n" + msg.context : ""
+          );
           if (result.error) {
             sendResponse({ ok: false, error: result.error });
             break;
           }
           const parsed = parseReply(result.text);
-          // Record visit intent silently (no operator notification) regardless of reply kind.
-          if (parsed.visit) {
-            await recordVisit(msg.threadId, msg.threadName, parsed.visit);
-            // A fresh "yes" schedules a silent confirm; "no" cancels any pending one.
-            if (parsed.visit === "yes") await scheduleVisitConfirm(msg.threadId);
-            else if (parsed.visit === "no") chrome.alarms.clear(`${VISIT_PREFIX}${msg.threadId}`);
-          }
           if (parsed.kind === "human") {
             notifyHuman(parsed.reason, msg.threadName);
-            await appendLog({
-              thread: msg.threadName,
-              buyer: msg.buyerMessage,
-              action: "human",
-              reply: "[HUMAN] " + parsed.reason,
-              visit: parsed.visit || null,
-            });
-            sendResponse({ ok: true, action: "human", reason: parsed.reason, raw: result.text });
+            await appendLog({ thread: msg.threadName, buyer: msg.buyerMessage, action: "human", reply: "[HUMAN] " + parsed.reason });
+            sendResponse({ ok: true, human: true, reason: parsed.reason });
             break;
           }
-          if (parsed.kind === "empty") {
-            // Nothing to send — don't consume a rate-limit slot. Visit (if any) already recorded.
-            sendResponse({ ok: true, blocked: true, reason: "empty reply from model" });
+          // A [VIDEO:url] just sends its caption as text in the simple build.
+          const text = parsed.kind === "video" ? parsed.caption || "" : parsed.text;
+          if (!text || !text.trim()) {
+            sendResponse({ ok: true, skip: true, reason: "empty reply" });
             break;
           }
-          // text or video both consume a rate-limit slot (they get sent)
           await incrementCounters();
-          let convoUsed = null;
-          if (msg.threadId) convoUsed = await bumpConvoReply(msg.threadId);
-          await appendLog({
-            thread: msg.threadName,
-            buyer: msg.buyerMessage,
-            action: parsed.kind,
-            reply: parsed.kind === "video" ? `[VIDEO ${parsed.url}] ${parsed.caption || ""}` : parsed.text,
-            convoReplyNum: convoUsed,
-            visit: parsed.visit || null,
-          });
-          sendResponse({ ok: true, action: parsed.kind, ...parsed, raw: result.text });
+          await appendLog({ thread: msg.threadName, buyer: msg.buyerMessage, action: "text", reply: text });
+          sendResponse({ ok: true, text });
           break;
         }
         case "GET_VISITS": {
@@ -761,12 +838,30 @@ chrome.runtime.onMessage.addListener((msg, _sender, sendResponse) => {
 const HEARTBEAT_ALARM = "subsell-heartbeat";
 chrome.alarms.create(HEARTBEAT_ALARM, { periodInMinutes: 1 });
 
+// Re-pull the shared remote config every 10 min (and once now), so edits to your
+// permanent link reach every machine without re-entering anything.
+const CONFIG_ALARM = "subsell-config";
+chrome.alarms.create(CONFIG_ALARM, { periodInMinutes: 10 });
+chrome.alarms.onAlarm.addListener((alarm) => {
+  if (alarm && alarm.name === CONFIG_ALARM) fetchRemoteConfig();
+});
+fetchRemoteConfig();
+
 async function heartbeat() {
   const settings = await getSettings();
   if (!settings.enabled) return;
-  const tab = await findMessagesTab();
-  if (!tab) return;
-  chrome.tabs.sendMessage(tab.id, { type: "TICK_NOW" }, () => void chrome.runtime.lastError);
+  // Ping EVERY open Messenger tab (not just the first) so multiple windows in the
+  // same profile all keep scanning while backgrounded. Each separate Chrome
+  // profile runs its own independent copy of this worker.
+  const tabs = await new Promise((resolve) => {
+    chrome.tabs.query(
+      { url: ["https://*.messenger.com/*", "https://www.facebook.com/messages/*", "https://www.facebook.com/marketplace/*"] },
+      (t) => resolve(t || [])
+    );
+  });
+  for (const tab of tabs) {
+    chrome.tabs.sendMessage(tab.id, { type: "TICK_NOW" }, () => void chrome.runtime.lastError);
+  }
 }
 
 // Fold the heartbeat into the existing alarm listener path.

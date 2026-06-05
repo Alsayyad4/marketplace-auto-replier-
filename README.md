@@ -5,12 +5,70 @@ Marketplace buyer messages using the Anthropic Claude API. Bilingual FR/EN
 (casual Quebec French), built for used-iPhone sales in Montréal. No backend, no
 cloud — runs locally, one Chrome profile per Facebook account.
 
-> ⚠️ **Unread detection is still best-effort.** `isUnread()` in `content.js`
-> currently combines heuristics (bold weight, a small colored dot, an
-> `unread`/`non lu` aria-label). To finalize it, use the popup **Scan now →
-> Copy ALL** diagnostic on a *genuinely fresh* unread message and replace the
-> `isUnread()` body with the one confirmed signal. The diagnostic capture is
-> permanent — never strip it.
+> 🏢 **v0.11.0 — fleet deploy for your own machines.** Fixed extension ID
+> (`jdbjbonhdnfkkfihbodmhpmccoiajflm`) + Chrome enterprise-policy support, so you can
+> **force-install + auto-update** SubSell across hundreds of machines and **push the
+> API key + settings centrally** (via `chrome.storage.managed` / a config URL) —
+> no Web Store, no per-machine `Load unpacked`, nothing typed on each box. Config
+> priority is now **managed policy → permanent link → synced → local**. See
+> `deploy/DEPLOY.md` for the turnkey steps + `deploy/subsell-policy.reg` +
+> `deploy/update.xml`. Purely additive — the reply/video/follow-up logic is unchanged.
+>
+> 🔗 **v0.10.0 — one key for every computer (permanent link).** Set your API key +
+> settings in ONE shared file and every Chrome reads from it — even across different
+> Google accounts. In **Settings → General → "Sync across computers"**: configure one
+> machine, click **Export config**, paste the file into a **secret GitHub gist**, copy
+> its **raw** URL, and put that URL in **Remote config URL** on each machine (or bake it
+> into the build for zero per-machine setup). Edits to the gist reach all machines within
+> ~10 min (or hit **Fetch now**). The shared file then wins over local settings. ⚠️ Your
+> key sits in that file — keep the link private and rotate the key if it leaks. Additive;
+> the reply/video/follow-up paths are untouched.
+>
+> 🧩 **v0.9.0 — prices + multiple videos + follow-up.** Additive only; the reply
+> core is untouched.
+> - **Multiple videos + delay:** add several clips in **Settings → General**; the
+>   bot sends them (once per chat) **10 s** after its reply (configurable).
+> - **Share starting prices:** fill the **Price list** in **Settings → Business
+>   prompt** and the bot gives the relevant *starting* price instead of refusing —
+>   then still closes toward a call / shop visit, **trade-in (cash for newer
+>   phones)**, and liquidation urgency.
+> - **Follow-up:** add one in the **Follow-ups** tab (message + minutes + on). After
+>   the bot replies it arms a timer; if the buyer stays quiet that long it nudges
+>   once ("still interested? coming by or calling?"). If the buyer replies first,
+>   the follow-up is skipped automatically.
+>
+> 🎬 **v0.8.0 — demo video, once per chat.** Upload an mp4 in **Settings → General
+> → "Send a demo video once per chat"** (stored locally on that computer). After the
+> bot sends its **first text reply** to a buyer, it attaches that video and sends it
+> — exactly **once per conversation** (tracked by thread, never re-sends). It's fully
+> isolated from the reply path: if the upload fails, the text reply already went out
+> and the bot just logs it. Attaching the file into Messenger's uploader is the one
+> best-effort part (hidden file-input → paste → drag-drop); keep the video under
+> ~25 MB. `background.js` was not touched.
+>
+> ✅ **v0.7.0 — SIMPLE mode.** Deliberately stripped down to one job, because the
+> fancier approaches (vision/screenshot reading, unread detection, human cadence,
+> learned rules) added bug surface without earning their keep. The whole loop is now:
+>
+> 1. Go through **every** conversation in the Marketplace list, one at a time.
+> 2. Open it and read the **last** message (the message column is bounded by the
+>    composer box; your messages are on the right, the buyer's on the left; menu
+>    labels / the listing card / system notices are filtered out).
+> 3. **If the last message is from the buyer**, ask Claude for a reply and **type +
+>    send it** — verifying the composer actually cleared (Enter → Send button →
+>    Enter) so a reply can't silently fail to send.
+> 4. Move on. Re-checks each chat periodically; a chat where you spoke last is
+>    parked for 10 min.
+>
+> No vision, no `MutationObserver`, no cadence/breaks, no per-conversation caps, no
+> follow-ups, no learned rules. `content.js` dropped from ~985 lines to ~390. Two
+> safety limits remain and are easy to find in **Settings → General**: business
+> hours (default 9 AM–10 PM) and an hourly/daily cap. `[HUMAN]` still notifies you.
+>
+> ⚠️ It replies to **every chat in the open list** — keep the **Marketplace folder**
+> selected so it never messages a personal friend. Runs per Chrome **profile**
+> independently; works on background/minimised windows (the heartbeat keeps every
+> Messenger tab scanning).
 
 ## Install (Load unpacked)
 
@@ -31,25 +89,42 @@ cloud — runs locally, one Chrome profile per Facebook account.
 |------|---------|
 | `manifest.json` | MV3 manifest — content script, service worker, popup, options. |
 | `background.js` | Service worker: Anthropic API (`claude-sonnet-4-6`, `anthropic-dangerous-direct-browser-access`), system-prompt assembly, rate limits + warm-up, business hours, per-conversation cap, follow-up alarms, `[HUMAN]` notifications, mp4 blob fetch, reply log. |
-| `content.js` | DOM side: permanent diagnostic capture, `isUnread()`, scan→read→reply pipeline, human-like typing, human cadence (breaks/skips), `[VIDEO]` paste-to-upload, follow-up typing, live `debugTick`. |
+| `content.js` | DOM side (SIMPLE mode): rotate through every chat → read the last message (composer-bounded, noise-filtered) → if it's the buyer's, ask Claude → type + verify-send. Live `debugTick` for the popup. |
 | `popup.html` / `popup.js` | On/off, status, delay slider, live debug, **Open Marketplace** button, unread diagnostic + Copy ALL. |
 | `options.html` / `options.js` | Tabbed settings (see below). |
 | `icon16/48/128.png` | Action + notification icons. |
 
 ## How the pipeline works
 
-Scan loop (every 8s, only on messages pages):
+Two complementary paths feed the same reply engine (`respondToTurn`):
 
-1. Find `a[href*="/marketplace/t/"]` anchors → filter with `isUnread()`.
-2. Human-cadence gate: maybe take a random break or skip this cycle.
-3. Pick one unread thread (90s per-thread cooldown), click it, verify the URL
-   changed.
-4. Read the last bubble in `[role="main"]` (the buyer's message).
-5. Background → Claude → reply, gated by **business hours**, **rate limits**,
+**A) Inbox sweep** (every 8s, only on messages pages):
+
+1. Find `a[href*="/t/"]` anchors → keep real conversations (`isConversationAnchor`).
+2. Queue **every** visible conversation, with fresh-looking ones first (marked
+   unread, or the buyer spoke last in the row preview). Styling is only used to
+   *prioritise* — never to gate — so drift can't stop the bot.
+3. Human-cadence gate (only on genuinely fresh bursts): maybe break or skip.
+4. Pick the next thread off-cooldown, click it, verify the URL changed, and
+   **wait for the composer** to render.
+5. Read a labeled transcript from `[role="main"]` (composer-bounded column,
+   noise/anchor-filtered); reply **only if the buyer actually spoke last**
+   (`getBuyerTurn`). Threads where you spoke last are parked on a 10-min re-check.
+
+**B) Open-thread observer** (event-driven): a `MutationObserver` on
+`[role="main"]` fires (debounced) when the open conversation changes, and replies
+if the buyer spoke last. Robust even when list detection is broken — just open a
+thread.
+
+Both then run the shared engine:
+
+6. Background → Claude → reply, gated by **business hours**, **rate limits**,
    **warm-up cap**, and **per-conversation reply cap**.
-6. Wait the human delay (default 30s + 0–60s jitter), type char-by-char at
-   38–78 WPM with occasional pauses, press Enter.
-7. Log it, mark replied, schedule follow-ups.
+7. Wait the human delay (default 30s + 0–60s jitter), type word-by-word at
+   38–78 WPM with occasional pauses.
+8. **Send + verify** (Enter → click Send → Enter), confirming the composer
+   emptied before claiming success; de-dupe per buyer message; log, mark replied,
+   schedule follow-ups.
 
 ### Reply tokens Claude can return
 

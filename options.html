@@ -58,6 +58,21 @@
           <option value="claude-opus-4-8">claude-opus-4-8</option>
           <option value="claude-haiku-4-5-20251001">claude-haiku-4-5</option>
         </select>
+
+        <hr />
+        <label>Sync across computers — permanent link <span class="hint">put your key + settings in ONE shared file; every Chrome reads from it (works across different Google accounts). Edit the file → all machines update.</span></label>
+        <div class="row">
+          <button id="exportConfig" type="button">⬇ Export config to file</button>
+          <span class="hint">do this on a fully set-up machine, then paste the file into a SECRET GitHub gist</span>
+        </div>
+        <label>Remote config URL <span class="hint">the RAW link to that shared file. Stored locally on this computer only.</span></label>
+        <input type="text" id="remoteConfigUrl" placeholder="https://gist.githubusercontent.com/…/raw/…/subsell-config.json" />
+        <div class="row">
+          <button id="fetchConfig" type="button" class="primary">⟳ Fetch now</button>
+          <span id="configStatus" class="hint"></span>
+        </div>
+        <div class="hint">⚠️ Your API key lives inside that file — keep the link PRIVATE/secret, and rotate the key if it ever leaks. While a URL is set, the shared file is the source of truth (this page's fields are ignored).</div>
+
         <div class="inline">
           <div><label>Response delay (s)</label><input type="number" id="responseDelaySec" min="0" /></div>
           <div><label>Jitter (s)</label><input type="number" id="jitterSec" min="0" /></div>
@@ -117,6 +132,16 @@
         <hr />
         <label class="check"><input type="checkbox" id="visitConfirmEnabled" /> Silent visit confirmation <span class="hint">after a buyer says they'll come, ask "still coming?"; records yes/no WITHOUT notifying you</span></label>
         <div><label>Ask after (minutes)</label><input type="number" id="visitConfirmAfterMin" min="0" /></div>
+
+        <hr />
+        <label class="check"><input type="checkbox" id="videoEnabled" /> Send demo video(s) once per chat <span class="hint">after the bot's first text reply to a buyer, send your video(s) — only ONE time per conversation</span></label>
+        <div class="row">
+          <input type="file" id="videoFile" accept="video/mp4,video/*" />
+          <span class="hint">pick a file to add it to the list (add more than one to send several)</span>
+        </div>
+        <div id="videoList" class="hint">No videos uploaded yet.</div>
+        <div><label>Send the video(s) this many seconds after the reply</label><input type="number" id="videoDelaySec" min="0" max="120" /></div>
+        <div class="hint">Keep each under ~25&nbsp;MB for a reliable upload. Stored locally on this computer only (not synced).</div>
       </section>
 
       <!-- BUSINESS -->
@@ -135,6 +160,8 @@
         <textarea id="examples" style="min-height:200px;" placeholder="Buyer: Le 13 est encore dispo?&#10;You: Allô! Oui tjs dispo 👍 256Go, batterie 91%. 420$ cash, pickup Beaubien.&#10;&#10;Buyer: Can I see it working?&#10;You: [VIDEO:https://…/iphone13.mp4] Here's a quick demo 🙂&#10;&#10;Buyer: Can you ship it and I'll e-transfer first?&#10;You: [HUMAN] buyer wants shipping + pay-first, possible scam"></textarea>
         <label>Closer goals <span class="hint">how the bot sells the in-person visit (used when Closer mode is on)</span></label>
         <textarea id="closerGoals"></textarea>
+        <label>Price list <span class="hint">starting prices the bot WILL share (overrides "never quote prices"). One per line. The bot gives the starting price, then closes toward a call / shop visit.</span></label>
+        <textarea id="priceList" style="min-height:160px;" placeholder="iPhones (starting at):&#10;  iPhone 11 — from $___&#10;  iPhone 12 — from $___&#10;  iPhone 13 — from $___&#10;Samsung phones (starting at):&#10;  Galaxy S22 — from $___&#10;iPads / tablets (starting at):&#10;  iPad 9th gen — from $___&#10;  Samsung Tab — from $___&#10;Laptops (starting at): from $___&#10;MacBook (starting at):&#10;  MacBook Air M1 — from $___"></textarea>
         <label>Visit-confirm message <span class="hint">blank = bilingual default. Sent silently to confirm a buyer is still coming.</span></label>
         <textarea id="visitConfirmMessage" placeholder="(blank uses the built-in FR/EN default)"></textarea>
       </section>
