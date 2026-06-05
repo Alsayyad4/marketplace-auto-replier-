@@ -1,0 +1,15 @@
+{
+  "type": "object",
+  "properties": {
+    "configJson": {
+      "type": "string",
+      "title": "SubSell settings as a JSON string",
+      "description": "Paste the contents of an exported subsell-config.json here (API key + business settings). Pushed to this machine by enterprise policy; highest priority. This is how the whole fleet gets the key with nothing typed per machine."
+    },
+    "configUrl": {
+      "type": "string",
+      "title": "URL to fetch the settings JSON from",
+      "description": "Alternative to configJson: a URL the extension fetches the settings from (e.g. a secret gist raw link)."
+    }
+  }
+}

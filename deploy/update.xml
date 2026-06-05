@@ -1,0 +1,13 @@
+<?xml version='1.0' encoding='UTF-8'?>
+<!--
+  Chrome auto-update manifest for SubSell (self-hosted).
+  Host this file at a stable URL, e.g.  https://YOUR-HOST/subsell/update.xml
+  - Replace YOUR-HOST below with where you host subsell.crx.
+  - Bump `version` here every time you ship a new build (must match manifest.json).
+  Chrome on your fleet re-checks this a few times a day and auto-updates.
+-->
+<gupdate xmlns='http://www.google.com/update2/response' protocol='2.0'>
+  <app appid='jdbjbonhdnfkkfihbodmhpmccoiajflm'>
+    <updatecheck codebase='https://YOUR-HOST/subsell/subsell.crx' version='0.11.0' />
+  </app>
+</gupdate>

@@ -2,3 +2,7 @@
 node_modules/
 *.log
 .DS_Store
+
+# extension signing key — NEVER commit
+subsell-extension-key.pem
+*.pem

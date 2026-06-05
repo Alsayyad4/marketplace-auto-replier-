@@ -5,6 +5,15 @@ Marketplace buyer messages using the Anthropic Claude API. Bilingual FR/EN
 (casual Quebec French), built for used-iPhone sales in Montréal. No backend, no
 cloud — runs locally, one Chrome profile per Facebook account.
 
+> 🏢 **v0.11.0 — fleet deploy for your own machines.** Fixed extension ID
+> (`jdbjbonhdnfkkfihbodmhpmccoiajflm`) + Chrome enterprise-policy support, so you can
+> **force-install + auto-update** SubSell across hundreds of machines and **push the
+> API key + settings centrally** (via `chrome.storage.managed` / a config URL) —
+> no Web Store, no per-machine `Load unpacked`, nothing typed on each box. Config
+> priority is now **managed policy → permanent link → synced → local**. See
+> `deploy/DEPLOY.md` for the turnkey steps + `deploy/subsell-policy.reg` +
+> `deploy/update.xml`. Purely additive — the reply/video/follow-up logic is unchanged.
+>
 > 🔗 **v0.10.0 — one key for every computer (permanent link).** Set your API key +
 > settings in ONE shared file and every Chrome reads from it — even across different
 > Google accounts. In **Settings → General → "Sync across computers"**: configure one

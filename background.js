@@ -124,24 +124,51 @@ function syncedConfigWrite(config) {
   });
 }
 
+// Read enterprise-policy config (chrome.storage.managed → managed_schema.json).
+// Admins push `configJson` (the whole settings JSON) to the fleet via Chrome
+// policy; this returns the parsed object, or null when there's no policy.
+function readManagedConfig() {
+  return new Promise((resolve) => {
+    if (!chrome.storage || !chrome.storage.managed) return resolve(null);
+    try {
+      chrome.storage.managed.get(["configJson"], (mg) => {
+        if (chrome.runtime.lastError || !mg || !mg.configJson) return resolve(null);
+        try {
+          const cfg = JSON.parse(mg.configJson);
+          resolve(cfg && typeof cfg === "object" && !Array.isArray(cfg) ? cfg : null);
+        } catch (e) {
+          resolve(null);
+        }
+      });
+    } catch (e) {
+      resolve(null);
+    }
+  });
+}
+
 function getSettings() {
   return new Promise((resolve) => {
     chrome.storage.local.get(["settings", "enabledLocal", "remoteConfig"], (res) => {
       const finish = (base) => {
         const merged = Object.assign({}, DEFAULTS, base);
-        // `enabled` is PER-MACHINE: enabledLocal always wins (the shared config never
+        // `enabled` is PER-MACHINE: enabledLocal always wins (shared config never
         // turns a machine on/off for you).
         if (typeof res.enabledLocal === "boolean") merged.enabled = res.enabledLocal;
         resolve(merged);
       };
-      // Config priority: REMOTE (shared "permanent link") > synced > legacy local.
-      // When a remote config has been fetched it is the single source of truth for
-      // every machine, regardless of Google account.
-      if (res.remoteConfig && typeof res.remoteConfig === "object" && Object.keys(res.remoteConfig).length) {
-        finish(res.remoteConfig);
-        return;
-      }
-      syncedConfigRead((cfg, hadSync) => finish(hadSync ? cfg : res.settings || {}));
+      // Config priority: MANAGED policy (fleet) > REMOTE link > synced > legacy local.
+      readManagedConfig().then((managed) => {
+        if (managed) {
+          delete managed.enabled;
+          finish(managed);
+          return;
+        }
+        if (res.remoteConfig && typeof res.remoteConfig === "object" && Object.keys(res.remoteConfig).length) {
+          finish(res.remoteConfig);
+          return;
+        }
+        syncedConfigRead((cfg, hadSync) => finish(hadSync ? cfg : res.settings || {}));
+      });
     });
   });
 }
@@ -156,9 +183,23 @@ function getSettings() {
 const REMOTE_CONFIG_URL = ""; // optional: bake your link here
 
 function getRemoteConfigUrl() {
-  return new Promise((resolve) =>
-    chrome.storage.local.get(["remoteConfigUrl"], (r) => resolve((r && r.remoteConfigUrl) || REMOTE_CONFIG_URL || ""))
-  );
+  return new Promise((resolve) => {
+    const fromLocal = () =>
+      chrome.storage.local.get(["remoteConfigUrl"], (r) => resolve((r && r.remoteConfigUrl) || REMOTE_CONFIG_URL || ""));
+    // Enterprise policy can supply the URL too (chrome.storage.managed.configUrl).
+    if (chrome.storage && chrome.storage.managed) {
+      try {
+        chrome.storage.managed.get(["configUrl"], (mg) => {
+          if (!chrome.runtime.lastError && mg && mg.configUrl) resolve(mg.configUrl);
+          else fromLocal();
+        });
+        return;
+      } catch (e) {
+        /* fall through */
+      }
+    }
+    fromLocal();
+  });
 }
 async function fetchRemoteConfig() {
   const url = await getRemoteConfigUrl();

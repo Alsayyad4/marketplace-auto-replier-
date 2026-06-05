@@ -1,0 +1,32 @@
+Windows Registry Editor Version 5.00
+
+; =====================================================================
+;  SubSell fleet policy (Windows / Chrome)
+;  Extension ID: jdbjbonhdnfkkfihbodmhpmccoiajflm
+;
+;  What this does on a machine:
+;   1) Force-installs SubSell from your self-hosted update.xml (auto-updates).
+;   2) Points it at your shared settings file (configUrl) so the API key +
+;      settings arrive automatically — nothing to type on the machine.
+;
+;  BEFORE deploying, replace the two placeholders below:
+;   - YOUR-HOST                -> where you host subsell.crx + update.xml
+;   - the configUrl gist link  -> your secret gist raw URL (holds the settings)
+;
+;  Apply: double-click this file (or push it with your GPO/MDM/RMM), then
+;  fully restart Chrome. Verify at chrome://policy and chrome://extensions.
+; =====================================================================
+
+; --- 1) Force-install + auto-update -----------------------------------
+[HKEY_LOCAL_MACHINE\SOFTWARE\Policies\Google\Chrome\ExtensionInstallForcelist]
+"1"="jdbjbonhdnfkkfihbodmhpmccoiajflm;https://YOUR-HOST/subsell/update.xml"
+
+; --- 2) Central config (the key + settings) ---------------------------
+; EASY (recommended): point at your secret gist raw URL. Edit the gist later
+; and every machine follows. Nothing else to escape.
+[HKEY_LOCAL_MACHINE\SOFTWARE\Policies\Google\Chrome\3rdparty\extensions\jdbjbonhdnfkkfihbodmhpmccoiajflm\policy]
+"configUrl"="https://gist.githubusercontent.com/USER/GIST_ID/raw/subsell-config.json"
+
+; ADVANCED (no gist): instead of configUrl, push the whole settings inline as
+; one escaped JSON string. Delete the configUrl line above and use this:
+; "configJson"="{\"apiKey\":\"sk-ant-REPLACE\",\"businessName\":\"...\",\"priceList\":\"...\"}"
