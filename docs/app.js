@@ -176,7 +176,7 @@
 
   /* ---------------- Supabase data ---------------- */
   async function loadConfig() {
-    const { data, error } = await client.from("configs").select("config").maybeSingle();
+    const { data, error } = await client.from("subsell_configs").select("config").maybeSingle();
     if (error) { $("savedMsg").textContent = ""; $("savedMsg").className = "err"; $("savedMsg").textContent = "Load failed: " + error.message; return; }
     settings = Object.assign({}, DEFAULTS, (data && data.config) || {});
     renderAll();
@@ -191,7 +191,7 @@
     const msg = $("savedMsg");
     msg.className = "hint";
     msg.textContent = "Saving…";
-    const { error } = await client.from("configs").upsert(
+    const { error } = await client.from("subsell_configs").upsert(
       { user_id: session.user.id, config: clean },
       { onConflict: "user_id" }
     );

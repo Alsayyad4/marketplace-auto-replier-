@@ -324,7 +324,7 @@ async function cloudPull(force) {
   if (!auth) return { ok: false, error: "not logged in" };
   const { url, key } = await getCloudCreds();
   try {
-    const resp = await fetch(`${url}/rest/v1/configs?select=config,updated_at`, {
+    const resp = await fetch(`${url}/rest/v1/subsell_configs?select=config,updated_at`, {
       headers: { apikey: key, authorization: "Bearer " + auth.access_token },
       cache: "no-store",
     });
@@ -354,7 +354,7 @@ async function cloudPush(config) {
   const clean = Object.assign({}, config);
   delete clean.enabled;
   try {
-    const resp = await fetch(`${url}/rest/v1/configs?on_conflict=user_id`, {
+    const resp = await fetch(`${url}/rest/v1/subsell_configs?on_conflict=user_id`, {
       method: "POST",
       headers: {
         "content-type": "application/json",

@@ -23,8 +23,14 @@ is about 10 minutes and you never have to touch a server again.
 2. Open [`cloud/schema.sql`](./schema.sql) from this repo, copy the whole thing,
    paste it in, and click **Run**. You should see "Success. No rows returned".
 
-This makes a `configs` table where each account stores its settings, locked down
-so an account can only read/write its **own** row.
+This makes a `subsell_configs` table where each account stores its settings,
+locked down so an account can only read/write its **own** row.
+
+> 💡 Everything it creates is namespaced `subsell_*` (the table, the trigger
+> function), so it's **safe to run in a Supabase project you already use for
+> another app** — it only ever creates its own objects and never touches your
+> existing tables. (You can also just spin up a separate project for SubSell; the
+> free plan allows more than one.)
 
 ## 3. Grab your two public keys
 
