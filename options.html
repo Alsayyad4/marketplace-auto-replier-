@@ -60,7 +60,29 @@
         </select>
 
         <hr />
-        <label>Sync across computers — permanent link <span class="hint">put your key + settings in ONE shared file; every Chrome reads from it (works across different Google accounts). Edit the file → all machines update.</span></label>
+        <label>☁️ Cloud sync (web app) <span class="hint">the recommended way to run on many computers: log into ONE account; edit settings here or in the web dashboard and every connected Chrome updates within ~1 min — even across different Google accounts. Setup: cloud/SUPABASE_SETUP.md</span></label>
+        <div id="cloudStatus" class="hint">Checking…</div>
+        <div class="inline">
+          <div><label>Supabase project URL <span class="hint">safe to share</span></label><input type="text" id="supabaseUrl" placeholder="https://xxxx.supabase.co" /></div>
+          <div><label>Supabase anon (public) key <span class="hint">safe to share — NOT service_role</span></label><input type="password" id="supabaseAnonKey" placeholder="eyJ…" /></div>
+        </div>
+        <div class="row">
+          <button id="saveCloudCreds" type="button">Save connection</button>
+        </div>
+        <div class="inline">
+          <div><label>Account email</label><input type="text" id="cloudEmail" placeholder="you@example.com" /></div>
+          <div><label>Account password</label><input type="password" id="cloudPassword" placeholder="••••••••" /></div>
+        </div>
+        <div class="row">
+          <button id="cloudLogin" type="button" class="primary">Log in</button>
+          <button id="cloudPull" type="button">⟳ Pull now</button>
+          <button id="cloudLogout" type="button" class="danger">Log out</button>
+          <span id="cloudMsg" class="hint"></span>
+        </div>
+        <div class="hint">⚠️ Your API key is stored in your private cloud row (only your login can read it). While you're logged in, the cloud is the source of truth and overrides the link/Chrome-sync/local config below. Saving on this page also pushes to the cloud.</div>
+
+        <hr />
+        <label>Sync across computers — permanent link (older alternative) <span class="hint">put your key + settings in ONE shared file; every Chrome reads from it (works across different Google accounts). Edit the file → all machines update. Prefer Cloud sync above.</span></label>
         <div class="row">
           <button id="exportConfig" type="button">⬇ Export config to file</button>
           <span class="hint">do this on a fully set-up machine, then paste the file into a SECRET GitHub gist</span>

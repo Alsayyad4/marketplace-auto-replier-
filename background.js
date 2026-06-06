@@ -148,7 +148,7 @@ function readManagedConfig() {
 
 function getSettings() {
   return new Promise((resolve) => {
-    chrome.storage.local.get(["settings", "enabledLocal", "remoteConfig"], (res) => {
+    chrome.storage.local.get(["settings", "enabledLocal", "remoteConfig", "cloudConfig"], (res) => {
       const finish = (base) => {
         const merged = Object.assign({}, DEFAULTS, base);
         // `enabled` is PER-MACHINE: enabledLocal always wins (shared config never
@@ -156,11 +156,15 @@ function getSettings() {
         if (typeof res.enabledLocal === "boolean") merged.enabled = res.enabledLocal;
         resolve(merged);
       };
-      // Config priority: MANAGED policy (fleet) > REMOTE link > synced > legacy local.
+      // Config priority: MANAGED policy (fleet) > CLOUD (web app) > REMOTE link > synced > legacy local.
       readManagedConfig().then((managed) => {
         if (managed) {
           delete managed.enabled;
           finish(managed);
+          return;
+        }
+        if (res.cloudConfig && typeof res.cloudConfig === "object" && Object.keys(res.cloudConfig).length) {
+          finish(res.cloudConfig);
           return;
         }
         if (res.remoteConfig && typeof res.remoteConfig === "object" && Object.keys(res.remoteConfig).length) {
@@ -216,6 +220,188 @@ async function fetchRemoteConfig() {
   } catch (e) {
     return { ok: false, error: e.message };
   }
+}
+
+/* ---------------- cloud sync (Supabase web app) ----------------
+ * The recommended way to run SubSell across many computers/Chromes — even on
+ * different Google accounts: ONE login, ONE settings row in the cloud, editable
+ * from a web dashboard (see /docs) or from any extension's Settings. Each machine
+ * pulls it on a 1-minute alarm, so an edit anywhere lands everywhere in ~1 min.
+ *
+ * Auth + data go straight to Supabase's REST endpoints via fetch — no SDK, no
+ * bundler, honoring the "no npm inside the extension" rule. The anon key is
+ * public by design; Supabase Row-Level Security ties every read/write to the
+ * logged-in account. On/off (`enabled`) stays per-machine and is never written.
+ *
+ * Optional zero-per-machine setup: bake your project URL + anon key in below;
+ * otherwise they're entered once per machine in Settings → Cloud sync. */
+const SUPABASE_URL = ""; // optional: bake your https://xxxx.supabase.co here
+const SUPABASE_ANON_KEY = ""; // optional: bake your anon (public) key here
+
+function getCloudCreds() {
+  return new Promise((resolve) => {
+    chrome.storage.local.get(["supabaseUrl", "supabaseAnonKey"], (r) => {
+      resolve({
+        url: (((r && r.supabaseUrl) || SUPABASE_URL) || "").replace(/\/+$/, ""),
+        key: ((r && r.supabaseAnonKey) || SUPABASE_ANON_KEY) || "",
+      });
+    });
+  });
+}
+
+function getCloudAuth() {
+  return new Promise((resolve) =>
+    chrome.storage.local.get(["cloudAuth"], (r) => resolve((r && r.cloudAuth) || null))
+  );
+}
+function setCloudAuth(auth) {
+  return new Promise((resolve) => chrome.storage.local.set({ cloudAuth: auth }, resolve));
+}
+
+function authFromTokenResponse(data, prev) {
+  return {
+    access_token: data.access_token,
+    refresh_token: data.refresh_token || (prev && prev.refresh_token),
+    expires_at: Date.now() + (Number(data.expires_in) || 3600) * 1000,
+    user_id: (data.user && data.user.id) || (prev && prev.user_id),
+    email: (data.user && data.user.email) || (prev && prev.email),
+  };
+}
+
+async function cloudLogin(email, password) {
+  const { url, key } = await getCloudCreds();
+  if (!url || !key) return { ok: false, error: "Set your Supabase URL + anon key first." };
+  try {
+    const resp = await fetch(`${url}/auth/v1/token?grant_type=password`, {
+      method: "POST",
+      headers: { "content-type": "application/json", apikey: key },
+      body: JSON.stringify({ email, password }),
+    });
+    const data = await resp.json().catch(() => ({}));
+    if (!resp.ok || !data.access_token)
+      return { ok: false, error: data.error_description || data.msg || data.error || ("HTTP " + resp.status) };
+    const auth = authFromTokenResponse(data, null);
+    await setCloudAuth(auth);
+    const pulled = await cloudPull(true);
+    return { ok: true, email: auth.email, pulled: !!(pulled && pulled.ok) };
+  } catch (e) {
+    return { ok: false, error: e.message };
+  }
+}
+
+async function cloudRefresh(auth) {
+  const { url, key } = await getCloudCreds();
+  const resp = await fetch(`${url}/auth/v1/token?grant_type=refresh_token`, {
+    method: "POST",
+    headers: { "content-type": "application/json", apikey: key },
+    body: JSON.stringify({ refresh_token: auth.refresh_token }),
+  });
+  const data = await resp.json().catch(() => ({}));
+  if (!resp.ok || !data.access_token) throw new Error(data.error_description || data.msg || "token refresh failed");
+  const next = authFromTokenResponse(data, auth);
+  await setCloudAuth(next);
+  return next;
+}
+
+// Usable auth (refreshing the access token if near expiry), or null when not
+// logged in / a refresh failed. Never throws — callers just skip this cycle.
+async function cloudValidAuth() {
+  const auth = await getCloudAuth();
+  if (!auth || !auth.refresh_token) return null;
+  if (auth.access_token && auth.expires_at && auth.expires_at - Date.now() > 60000) return auth;
+  try {
+    return await cloudRefresh(auth);
+  } catch (e) {
+    LOG("cloud token refresh failed:", e.message);
+    return null;
+  }
+}
+
+// Pull the account's config row. Applies it as `cloudConfig` (the getSettings
+// source of truth) only when the server's updated_at changed, so polling is cheap.
+async function cloudPull(force) {
+  const auth = await cloudValidAuth();
+  if (!auth) return { ok: false, error: "not logged in" };
+  const { url, key } = await getCloudCreds();
+  try {
+    const resp = await fetch(`${url}/rest/v1/configs?select=config,updated_at`, {
+      headers: { apikey: key, authorization: "Bearer " + auth.access_token },
+      cache: "no-store",
+    });
+    if (!resp.ok) return { ok: false, error: "HTTP " + resp.status };
+    const rows = await resp.json().catch(() => []);
+    if (!Array.isArray(rows) || !rows.length) return { ok: true, empty: true }; // nothing saved yet
+    const cfg = rows[0].config || {};
+    const stamp = rows[0].updated_at || "";
+    delete cfg.enabled; // on/off stays per machine
+    const prev = await new Promise((r) => chrome.storage.local.get(["cloudUpdatedAt"], (x) => r(x.cloudUpdatedAt)));
+    if (!force && prev && stamp && prev === stamp) return { ok: true, unchanged: true };
+    await new Promise((r) =>
+      chrome.storage.local.set({ cloudConfig: cfg, cloudConfigAt: Date.now(), cloudUpdatedAt: stamp }, r)
+    );
+    LOG("cloud config applied (", Object.keys(cfg).length, "keys)");
+    return { ok: true, keys: Object.keys(cfg).length };
+  } catch (e) {
+    return { ok: false, error: e.message };
+  }
+}
+
+// Upsert the account's config row (called when settings are saved while logged in).
+async function cloudPush(config) {
+  const auth = await cloudValidAuth();
+  if (!auth) return { ok: false, error: "not logged in" };
+  const { url, key } = await getCloudCreds();
+  const clean = Object.assign({}, config);
+  delete clean.enabled;
+  try {
+    const resp = await fetch(`${url}/rest/v1/configs?on_conflict=user_id`, {
+      method: "POST",
+      headers: {
+        "content-type": "application/json",
+        apikey: key,
+        authorization: "Bearer " + auth.access_token,
+        prefer: "resolution=merge-duplicates,return=representation",
+      },
+      body: JSON.stringify([{ user_id: auth.user_id, config: clean }]),
+    });
+    const data = await resp.json().catch(() => null);
+    if (!resp.ok) return { ok: false, error: (data && (data.message || data.error)) || ("HTTP " + resp.status) };
+    const row = Array.isArray(data) ? data[0] : data;
+    await new Promise((r) =>
+      chrome.storage.local.set(
+        { cloudConfig: clean, cloudConfigAt: Date.now(), cloudUpdatedAt: (row && row.updated_at) || new Date().toISOString() },
+        r
+      )
+    );
+    LOG("cloud config pushed");
+    return { ok: true };
+  } catch (e) {
+    return { ok: false, error: e.message };
+  }
+}
+
+async function cloudLogout() {
+  await new Promise((r) =>
+    chrome.storage.local.remove(["cloudAuth", "cloudConfig", "cloudConfigAt", "cloudUpdatedAt"], r)
+  );
+  return { ok: true };
+}
+
+async function cloudStatus() {
+  const auth = await getCloudAuth();
+  const { url, key } = await getCloudCreds();
+  const extra = await new Promise((r) =>
+    chrome.storage.local.get(["cloudConfigAt", "supabaseUrl", "supabaseAnonKey"], (x) => r(x || {}))
+  );
+  return {
+    ok: true,
+    configured: !!(url && key),
+    loggedIn: !!(auth && auth.refresh_token),
+    email: (auth && auth.email) || null,
+    lastPullAt: extra.cloudConfigAt || null,
+    url,
+    storedCreds: !!(extra.supabaseUrl && extra.supabaseAnonKey),
+  };
 }
 
 /* ---------------- counters / rate limits ---------------- */
@@ -684,13 +870,18 @@ chrome.runtime.onMessage.addListener((msg, _sender, sendResponse) => {
           break;
         }
         case "SAVE_SETTINGS": {
-          // Full config save (from options) -> synced chunks across computers.
+          // Full config save (from options/popup). Always mirror to Chrome sync;
+          // when logged into the cloud, push there too (it's the source of truth,
+          // so the change reaches every machine on the next ~1-min pull).
           const s = msg.settings || {};
           const ok = await syncedConfigWrite(s);
+          let cloud = null;
+          const auth = await getCloudAuth();
+          if (auth && auth.refresh_token) cloud = await cloudPush(s);
           if (typeof s.enabled === "boolean") {
             await new Promise((r) => chrome.storage.local.set({ enabledLocal: s.enabled }, r));
           }
-          sendResponse({ ok });
+          sendResponse({ ok, cloud });
           break;
         }
         case "SET_ENABLED": {
@@ -702,6 +893,30 @@ chrome.runtime.onMessage.addListener((msg, _sender, sendResponse) => {
         case "FETCH_CONFIG": {
           // Options "Fetch now" — pull the shared config from the permanent link.
           sendResponse(await fetchRemoteConfig());
+          break;
+        }
+        case "CLOUD_SET_CREDS": {
+          // Save this machine's Supabase project URL + anon (public) key.
+          const supabaseUrl = (msg.url || "").trim().replace(/\/+$/, "");
+          const supabaseAnonKey = (msg.anonKey || "").trim();
+          await new Promise((r) => chrome.storage.local.set({ supabaseUrl, supabaseAnonKey }, r));
+          sendResponse({ ok: true });
+          break;
+        }
+        case "CLOUD_LOGIN": {
+          sendResponse(await cloudLogin(msg.email, msg.password));
+          break;
+        }
+        case "CLOUD_LOGOUT": {
+          sendResponse(await cloudLogout());
+          break;
+        }
+        case "CLOUD_PULL": {
+          sendResponse(await cloudPull(true));
+          break;
+        }
+        case "CLOUD_STATUS": {
+          sendResponse(await cloudStatus());
           break;
         }
         case "GET_STATUS": {
@@ -846,6 +1061,17 @@ chrome.alarms.onAlarm.addListener((alarm) => {
   if (alarm && alarm.name === CONFIG_ALARM) fetchRemoteConfig();
 });
 fetchRemoteConfig();
+
+// Cloud sync (Supabase web app): pull the account's config every minute (and
+// once now) so an edit in the dashboard or on another machine lands here within
+// ~1 min. No-op unless this machine is logged in. updated_at is checked first, so
+// an unchanged config costs one cheap request and no storage write.
+const CLOUD_ALARM = "subsell-cloud";
+chrome.alarms.create(CLOUD_ALARM, { periodInMinutes: 1 });
+chrome.alarms.onAlarm.addListener((alarm) => {
+  if (alarm && alarm.name === CLOUD_ALARM) cloudPull(false);
+});
+cloudPull(false);
 
 async function heartbeat() {
   const settings = await getSettings();

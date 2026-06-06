@@ -391,6 +391,97 @@
   }
   loadRemoteConfig();
 
+  /* ----- cloud sync (Supabase web app) ----- */
+  function fmtWhen(ts) {
+    return ts ? new Date(ts).toLocaleString() : "never";
+  }
+  function refreshCloudStatus() {
+    chrome.runtime.sendMessage({ type: "CLOUD_STATUS" }, (s) => {
+      if (chrome.runtime.lastError || !s || !s.ok) return;
+      const el = $("cloudStatus");
+      if (!el) return;
+      if (!s.configured) {
+        el.textContent = "Not connected — enter your Supabase URL + anon key, then Save connection.";
+      } else if (!s.loggedIn) {
+        el.textContent = "Connected to " + s.url + " — log in to start syncing.";
+      } else {
+        el.textContent = "Logged in as " + (s.email || "?") + " · last synced " + fmtWhen(s.lastPullAt);
+      }
+    });
+  }
+  function persistCloudCreds(cb) {
+    const url = ($("supabaseUrl").value || "").trim();
+    const anonKey = ($("supabaseAnonKey").value || "").trim();
+    chrome.runtime.sendMessage({ type: "CLOUD_SET_CREDS", url, anonKey }, () => cb && cb());
+  }
+  if ($("saveCloudCreds")) {
+    $("saveCloudCreds").addEventListener("click", () => {
+      persistCloudCreds(() => {
+        $("cloudMsg").textContent = "Connection saved.";
+        setTimeout(() => ($("cloudMsg").textContent = ""), 2000);
+        refreshCloudStatus();
+      });
+    });
+  }
+  if ($("cloudLogin")) {
+    $("cloudLogin").addEventListener("click", () => {
+      $("cloudMsg").textContent = "Logging in…";
+      // Persist creds first in case they were typed but not explicitly saved.
+      persistCloudCreds(() => {
+        chrome.runtime.sendMessage(
+          { type: "CLOUD_LOGIN", email: ($("cloudEmail").value || "").trim(), password: $("cloudPassword").value },
+          (r) => {
+            if (chrome.runtime.lastError) {
+              $("cloudMsg").textContent = "Error: " + chrome.runtime.lastError.message;
+              return;
+            }
+            if (!r || !r.ok) {
+              $("cloudMsg").textContent = "Login failed: " + (r && r.error);
+              return;
+            }
+            $("cloudPassword").value = "";
+            $("cloudMsg").textContent = "Logged in ✓ — pulled your cloud settings.";
+            refreshCloudStatus();
+            load(); // re-read merged settings (cloud now wins) into the form
+          }
+        );
+      });
+    });
+  }
+  if ($("cloudLogout")) {
+    $("cloudLogout").addEventListener("click", () => {
+      chrome.runtime.sendMessage({ type: "CLOUD_LOGOUT" }, () => {
+        $("cloudMsg").textContent = "Logged out.";
+        setTimeout(() => ($("cloudMsg").textContent = ""), 2000);
+        refreshCloudStatus();
+        load();
+      });
+    });
+  }
+  if ($("cloudPull")) {
+    $("cloudPull").addEventListener("click", () => {
+      $("cloudMsg").textContent = "Pulling…";
+      chrome.runtime.sendMessage({ type: "CLOUD_PULL" }, (r) => {
+        if (chrome.runtime.lastError) {
+          $("cloudMsg").textContent = "Error: " + chrome.runtime.lastError.message;
+          return;
+        }
+        $("cloudMsg").textContent =
+          r && r.ok ? (r.empty ? "No cloud config saved yet." : "Synced ✓") : "Failed: " + (r && r.error);
+        refreshCloudStatus();
+        load();
+      });
+    });
+  }
+  function loadCloud() {
+    chrome.storage.local.get(["supabaseUrl", "supabaseAnonKey"], (r) => {
+      if ($("supabaseUrl")) $("supabaseUrl").value = (r && r.supabaseUrl) || "";
+      if ($("supabaseAnonKey")) $("supabaseAnonKey").value = (r && r.supabaseAnonKey) || "";
+      refreshCloudStatus();
+    });
+  }
+  loadCloud();
+
   /* ----- demo video(s) (stored locally on this computer, NOT synced) ----- */
   let demoVideos = [];
   function fmtSize(n) {

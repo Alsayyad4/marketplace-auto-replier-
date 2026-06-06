@@ -1,10 +1,22 @@
 # SubSell Marketplace Auto-Reply — Chrome Extension
 
-A single-user Chrome **Manifest V3** extension that auto-replies to Facebook
-Marketplace buyer messages using the Anthropic Claude API. Bilingual FR/EN
-(casual Quebec French), built for used-iPhone sales in Montréal. No backend, no
-cloud — runs locally, one Chrome profile per Facebook account.
+A Chrome **Manifest V3** extension that auto-replies to Facebook Marketplace
+buyer messages using the Anthropic Claude API. Bilingual FR/EN (casual Quebec
+French), built for used-iPhone sales in Montréal. Runs locally per Chrome profile
+by default; **optional cloud sync** turns it into a web app so one change reaches
+every computer.
 
+> ☁️ **v0.12.0 — cloud sync (web app).** Run SubSell like a web app: log into ONE
+> account, edit settings in a hosted **dashboard** (or in any extension's Settings),
+> and **every connected Chrome on every computer updates within ~1 min** — even
+> across different Google accounts. Backed by your own free **Supabase** project
+> (Postgres + auth + Row-Level Security); your API key + settings live in your private
+> row that only your login can read. Config priority is now **managed policy → cloud →
+> permanent link → synced → local**, so the cloud is the source of truth whenever you're
+> logged in (log out and it falls back exactly as before). Turn-key setup in
+> `cloud/SUPABASE_SETUP.md` (SQL in `cloud/schema.sql`, dashboard in `docs/`). Purely
+> additive — the reply/video/follow-up logic is untouched; on/off stays per-machine.
+>
 > 🏢 **v0.11.0 — fleet deploy for your own machines.** Fixed extension ID
 > (`jdbjbonhdnfkkfihbodmhpmccoiajflm`) + Chrome enterprise-policy support, so you can
 > **force-install + auto-update** SubSell across hundreds of machines and **push the
@@ -91,8 +103,10 @@ cloud — runs locally, one Chrome profile per Facebook account.
 | `background.js` | Service worker: Anthropic API (`claude-sonnet-4-6`, `anthropic-dangerous-direct-browser-access`), system-prompt assembly, rate limits + warm-up, business hours, per-conversation cap, follow-up alarms, `[HUMAN]` notifications, mp4 blob fetch, reply log. |
 | `content.js` | DOM side (SIMPLE mode): rotate through every chat → read the last message (composer-bounded, noise-filtered) → if it's the buyer's, ask Claude → type + verify-send. Live `debugTick` for the popup. |
 | `popup.html` / `popup.js` | On/off, status, delay slider, live debug, **Open Marketplace** button, unread diagnostic + Copy ALL. |
-| `options.html` / `options.js` | Tabbed settings (see below). |
+| `options.html` / `options.js` | Tabbed settings (see below) + **☁️ Cloud sync** (log in, pull/push to your Supabase account). |
 | `icon16/48/128.png` | Action + notification icons. |
+| `docs/` | The cloud **dashboard** — a static web app (`index.html`, `app.js`, `config.js`) you deploy to GitHub Pages (or open locally) to edit settings from any browser. |
+| `cloud/` | One-time backend setup: `schema.sql` (Supabase table + RLS) and `SUPABASE_SETUP.md` (step-by-step). |
 
 ## How the pipeline works
 

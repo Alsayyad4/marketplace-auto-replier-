@@ -1,0 +1,226 @@
+<!DOCTYPE html>
+<html lang="en">
+  <head>
+    <meta charset="utf-8" />
+    <meta name="viewport" content="width=device-width, initial-scale=1" />
+    <title>SubSell — Cloud Dashboard</title>
+    <style>
+      :root { color-scheme: light dark; }
+      * { box-sizing: border-box; }
+      body { font-family: -apple-system, Segoe UI, Roboto, Arial, sans-serif; margin: 0; font-size: 14px; line-height: 1.5; }
+      header { padding: 12px 18px; border-bottom: 1px solid #ccc; display: flex; align-items: center; gap: 12px; flex-wrap: wrap; }
+      header h1 { font-size: 17px; margin: 0; }
+      header .who { margin-left: auto; color: #888; font-size: 12px; display: flex; gap: 10px; align-items: center; }
+      main { padding: 18px; max-width: 940px; margin: 0 auto; }
+      label { display: block; margin: 12px 0 3px; font-weight: 600; }
+      .hint { font-weight: 400; color: #888; font-size: 12px; }
+      input[type="text"], input[type="password"], input[type="email"], input[type="number"], select, textarea {
+        width: 100%; max-width: 540px; padding: 7px 9px; border: 1px solid #aaa; border-radius: 6px; font-size: 14px; background: Field; color: FieldText;
+      }
+      textarea { min-height: 92px; font-family: inherit; }
+      .inline { display: flex; gap: 16px; flex-wrap: wrap; }
+      .inline > div { flex: 1; min-width: 160px; }
+      .tabs { display: flex; gap: 4px; padding: 10px 18px 0; flex-wrap: wrap; border-bottom: 1px solid #ccc; }
+      .tab { padding: 8px 14px; border: 1px solid #ccc; border-bottom: none; border-radius: 6px 6px 0 0; cursor: pointer; background: rgba(127,127,127,.06); }
+      .tab.active { background: #1877f2; color: #fff; border-color: #1877f2; }
+      section.pane { display: none; }
+      section.pane.active { display: block; }
+      table { border-collapse: collapse; width: 100%; margin-top: 8px; }
+      th, td { border: 1px solid #ccc; padding: 4px 6px; text-align: left; }
+      th { background: rgba(127,127,127,.12); }
+      td input, td textarea { max-width: none; width: 100%; }
+      button { font-size: 14px; padding: 8px 14px; border-radius: 6px; border: 1px solid #888; background: #f4f4f4; color: #111; cursor: pointer; }
+      button.primary { background: #1877f2; color: #fff; border-color: #1877f2; }
+      button.danger { color: #c0392b; }
+      .bar { position: sticky; bottom: 0; background: Canvas; padding: 12px 18px; border-top: 1px solid #ccc; display: flex; gap: 12px; align-items: center; }
+      .saved { color: #1a8f3c; }
+      .err { color: #c0392b; }
+      .row { display: flex; gap: 8px; align-items: center; margin: 8px 0; flex-wrap: wrap; }
+      .check { display: inline-flex; align-items: center; gap: 6px; font-weight: 400; }
+      .card { max-width: 420px; margin: 8vh auto; padding: 26px; border: 1px solid #ccc; border-radius: 12px; }
+      .card h1 { margin: 0 0 4px; font-size: 20px; }
+      .hidden { display: none !important; }
+      .banner { padding: 10px 14px; background: rgba(24,119,242,.08); border: 1px solid rgba(24,119,242,.35); border-radius: 8px; margin-bottom: 12px; font-size: 13px; }
+      hr { border: none; border-top: 1px solid #ddd; margin: 18px 0; }
+    </style>
+  </head>
+  <body>
+    <!-- LOGIN GATE -->
+    <div id="loginView">
+      <div class="card">
+        <h1>SubSell Cloud</h1>
+        <p class="hint">Sign in to edit the settings shared by all your computers.</p>
+        <div id="configWarn" class="banner err hidden">
+          This dashboard isn't connected to a Supabase project yet. Fill in
+          <code>docs/config.js</code> first — see <code>cloud/SUPABASE_SETUP.md</code>.
+        </div>
+        <label>Email</label>
+        <input type="email" id="loginEmail" autocomplete="username" placeholder="you@example.com" />
+        <label>Password</label>
+        <input type="password" id="loginPassword" autocomplete="current-password" placeholder="••••••••" />
+        <div class="row" style="margin-top:14px;">
+          <button id="loginBtn" class="primary">Log in</button>
+          <button id="signupBtn">Create account</button>
+        </div>
+        <div id="loginStatus" class="hint"></div>
+      </div>
+    </div>
+
+    <!-- APP -->
+    <div id="appView" class="hidden">
+      <header>
+        <h1>SubSell — Cloud Dashboard</h1>
+        <div class="who">
+          <span id="whoami"></span>
+          <button id="logoutBtn">Log out</button>
+        </div>
+      </header>
+      <div class="tabs">
+        <div class="tab active" data-tab="general">General</div>
+        <div class="tab" data-tab="business">Business prompt</div>
+        <div class="tab" data-tab="listings">Listings</div>
+        <div class="tab" data-tab="followups">Follow-ups</div>
+        <div class="tab" data-tab="videos">Videos</div>
+      </div>
+
+      <main>
+        <div class="banner">
+          Changes you save here reach every connected Chrome within ~1 minute. The
+          bot <b>On/Off</b> switch stays per-machine and isn't controlled from here.
+        </div>
+
+        <!-- GENERAL -->
+        <section id="general" class="pane active">
+          <label>Anthropic API key <span class="hint">stored in your private cloud row (RLS-protected)</span></label>
+          <input type="password" id="apiKey" placeholder="sk-ant-…" />
+          <label>Model</label>
+          <select id="model">
+            <option value="claude-sonnet-4-6">claude-sonnet-4-6</option>
+            <option value="claude-opus-4-8">claude-opus-4-8</option>
+            <option value="claude-haiku-4-5-20251001">claude-haiku-4-5</option>
+          </select>
+
+          <div class="inline">
+            <div><label>Response delay (s)</label><input type="number" id="responseDelaySec" min="0" /></div>
+            <div><label>Jitter (s)</label><input type="number" id="jitterSec" min="0" /></div>
+          </div>
+          <div class="inline">
+            <div><label>Hourly cap</label><input type="number" id="hourlyCap" min="0" /></div>
+            <div><label>Daily cap</label><input type="number" id="dailyCap" min="0" /></div>
+          </div>
+          <div class="inline">
+            <div>
+              <label>Max replies per conversation <span class="hint">0 = unlimited</span></label>
+              <input type="number" id="maxRepliesPerConvo" min="0" />
+            </div>
+            <div>
+              <label>When that cap is hit</label>
+              <select id="convoCapBehavior">
+                <option value="stop">Go quiet (stop replying)</option>
+                <option value="notify">Notify me to take over</option>
+              </select>
+            </div>
+          </div>
+          <div class="inline">
+            <div><label>Typing WPM min</label><input type="number" id="wpmMin" min="1" /></div>
+            <div><label>Typing WPM max</label><input type="number" id="wpmMax" min="1" /></div>
+          </div>
+
+          <hr />
+          <label class="check"><input type="checkbox" id="businessHoursEnabled" /> Respect business hours</label>
+          <div class="inline">
+            <div><label>Open hour (0–23)</label><input type="number" id="businessHoursStart" min="0" max="23" /></div>
+            <div><label>Close hour (0–23)</label><input type="number" id="businessHoursEnd" min="0" max="23" /></div>
+          </div>
+
+          <hr />
+          <label class="check"><input type="checkbox" id="humanCadence" /> Human cadence <span class="hint">random breaks + occasional skipped cycles</span></label>
+          <div class="inline">
+            <div><label>Skip chance (0–1)</label><input type="number" id="skipChance" min="0" max="1" step="0.01" /></div>
+            <div><label>Break chance / cycle (0–1)</label><input type="number" id="breakChance" min="0" max="1" step="0.01" /></div>
+          </div>
+          <div class="inline">
+            <div><label>Break min (min)</label><input type="number" id="breakMinMin" min="0" /></div>
+            <div><label>Break max (min)</label><input type="number" id="breakMaxMin" min="0" /></div>
+          </div>
+
+          <hr />
+          <label class="check"><input type="checkbox" id="warmupEnabled" /> Warm-up mode <span class="hint">ramp daily volume over N days</span></label>
+          <div class="inline">
+            <div><label>Warm-up days</label><input type="number" id="warmupDays" min="0" /></div>
+            <div><label>Day-0 daily cap</label><input type="number" id="warmupStartCap" min="1" /></div>
+          </div>
+
+          <hr />
+          <label class="check"><input type="checkbox" id="offPlatformGuard" /> Off-platform guardrails <span class="hint">forbid phone numbers, links, "contact me elsewhere"</span></label>
+          <label class="check"><input type="checkbox" id="closerMode" /> Closer mode <span class="hint">drive buyers to the shop; mention exchange / buyback / liquidation</span></label>
+          <label class="check"><input type="checkbox" id="noExactPrices" /> Never quote exact prices in chat</label>
+
+          <hr />
+          <label class="check"><input type="checkbox" id="visitConfirmEnabled" /> Silent visit confirmation</label>
+          <div><label>Ask after (minutes)</label><input type="number" id="visitConfirmAfterMin" min="0" /></div>
+          <div class="hint">Note: demo-video uploads (the actual mp4 files) stay on each computer and aren't synced here. The Videos tab below syncs video <em>URLs</em>.</div>
+        </section>
+
+        <!-- BUSINESS -->
+        <section id="business" class="pane">
+          <label>Business name</label>
+          <input type="text" id="businessName" />
+          <label>Address</label>
+          <input type="text" id="businessAddress" />
+          <label>Hours (text shown to Claude)</label>
+          <input type="text" id="businessHoursText" />
+          <label>Business info</label>
+          <textarea id="businessInfo"></textarea>
+          <label>Instructions / tone</label>
+          <textarea id="instructions"></textarea>
+          <label>Example conversations <span class="hint">few-shot buyer→ideal-reply pairs (include when to send [VIDEO:url] / escalate [HUMAN])</span></label>
+          <textarea id="examples" style="min-height:200px;"></textarea>
+          <label>Closer goals</label>
+          <textarea id="closerGoals"></textarea>
+          <label>Price list <span class="hint">starting prices the bot WILL share; one per line</span></label>
+          <textarea id="priceList" style="min-height:160px;"></textarea>
+          <label>Visit-confirm message <span class="hint">blank = bilingual default</span></label>
+          <textarea id="visitConfirmMessage"></textarea>
+        </section>
+
+        <!-- LISTINGS -->
+        <section id="listings" class="pane">
+          <div class="row"><button id="addListing">+ Add listing</button></div>
+          <table id="listingsTable">
+            <thead><tr><th>Title</th><th>Model</th><th>Storage</th><th>Condition</th><th>Price CAD</th><th>Video URL</th><th>Avail.</th><th></th></tr></thead>
+            <tbody></tbody>
+          </table>
+        </section>
+
+        <!-- FOLLOWUPS -->
+        <section id="followups" class="pane">
+          <div class="row"><button id="addFollowUp">+ Add follow-up</button></div>
+          <table id="followupsTable">
+            <thead><tr><th>Name</th><th>After (min)</th><th>Message</th><th>On</th><th></th></tr></thead>
+            <tbody></tbody>
+          </table>
+        </section>
+
+        <!-- VIDEOS -->
+        <section id="videos" class="pane">
+          <div class="row"><button id="addVideo">+ Add video</button></div>
+          <table id="videosTable">
+            <thead><tr><th>Name</th><th>URL</th><th>Notes</th><th></th></tr></thead>
+            <tbody></tbody>
+          </table>
+        </section>
+      </main>
+
+      <div class="bar">
+        <button id="save" class="primary">Save to cloud</button>
+        <button id="reload">Reload from cloud</button>
+        <span id="savedMsg" class="saved"></span>
+      </div>
+    </div>
+
+    <script src="config.js"></script>
+    <script src="https://cdn.jsdelivr.net/npm/@supabase/supabase-js@2"></script>
+    <script src="app.js"></script>
+  </body>
+</html>
