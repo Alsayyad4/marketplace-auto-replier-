@@ -235,8 +235,8 @@ async function fetchRemoteConfig() {
  *
  * Optional zero-per-machine setup: bake your project URL + anon key in below;
  * otherwise they're entered once per machine in Settings → Cloud sync. */
-const SUPABASE_URL = ""; // optional: bake your https://xxxx.supabase.co here
-const SUPABASE_ANON_KEY = ""; // optional: bake your anon (public) key here
+const SUPABASE_URL = "https://tcqunihripihroseswgy.supabase.co"; // baked in: per-machine setup is just login
+const SUPABASE_ANON_KEY = "sb_publishable_arlG6dkWL4H7PPW0xVMIUw_3CNzUc8R"; // publishable (public) key — safe to ship
 
 function getCloudCreds() {
   return new Promise((resolve) => {
