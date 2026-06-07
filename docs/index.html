@@ -99,6 +99,7 @@
         <div class="tab" data-tab="business">Business</div>
         <div class="tab" data-tab="listings">Listings</div>
         <div class="tab" data-tab="followups">Follow-ups</div>
+        <div class="tab" data-tab="videos">Videos</div>
       </div>
 
       <main>
@@ -112,20 +113,62 @@
             <option value="claude-opus-4-8">claude-opus-4-8</option>
             <option value="claude-haiku-4-5-20251001">claude-haiku-4-5</option>
           </select>
-          <hr />
-          <label class="check"><input type="checkbox" id="businessHoursEnabled" /> Respect business hours</label>
+
           <div class="inline">
-            <div><label>Open hour (0–23)</label><input type="number" id="businessHoursStart" min="0" max="23" /></div>
-            <div><label>Close hour (0–23)</label><input type="number" id="businessHoursEnd" min="0" max="23" /></div>
+            <div><label>Response delay (s)</label><input type="number" id="responseDelaySec" min="0" /></div>
+            <div><label>Jitter (s)</label><input type="number" id="jitterSec" min="0" /></div>
           </div>
           <div class="inline">
             <div><label>Hourly cap</label><input type="number" id="hourlyCap" min="0" /></div>
             <div><label>Daily cap</label><input type="number" id="dailyCap" min="0" /></div>
           </div>
           <div class="inline">
-            <div><label>Response delay (s)</label><input type="number" id="responseDelaySec" min="0" /></div>
-            <div><label>Jitter (s)</label><input type="number" id="jitterSec" min="0" /></div>
+            <div><label>Max replies / conversation <span class="hint">0 = unlimited</span></label><input type="number" id="maxRepliesPerConvo" min="0" /></div>
+            <div><label>When that cap is hit</label>
+              <select id="convoCapBehavior">
+                <option value="stop">Go quiet (stop replying)</option>
+                <option value="notify">Notify me to take over</option>
+              </select>
+            </div>
           </div>
+          <div class="inline">
+            <div><label>Typing WPM min</label><input type="number" id="wpmMin" min="1" /></div>
+            <div><label>Typing WPM max</label><input type="number" id="wpmMax" min="1" /></div>
+          </div>
+
+          <hr />
+          <label class="check"><input type="checkbox" id="businessHoursEnabled" /> Respect business hours</label>
+          <div class="inline">
+            <div><label>Open hour (0–23)</label><input type="number" id="businessHoursStart" min="0" max="23" /></div>
+            <div><label>Close hour (0–23)</label><input type="number" id="businessHoursEnd" min="0" max="23" /></div>
+          </div>
+
+          <hr />
+          <label class="check"><input type="checkbox" id="humanCadence" /> Human cadence <span class="hint">random breaks + occasional skipped cycles</span></label>
+          <div class="inline">
+            <div><label>Skip chance (0–1)</label><input type="number" id="skipChance" min="0" max="1" step="0.01" /></div>
+            <div><label>Break chance / cycle (0–1)</label><input type="number" id="breakChance" min="0" max="1" step="0.01" /></div>
+          </div>
+          <div class="inline">
+            <div><label>Break min (min)</label><input type="number" id="breakMinMin" min="0" /></div>
+            <div><label>Break max (min)</label><input type="number" id="breakMaxMin" min="0" /></div>
+          </div>
+
+          <hr />
+          <label class="check"><input type="checkbox" id="warmupEnabled" /> Warm-up mode <span class="hint">ramp daily volume over N days</span></label>
+          <div class="inline">
+            <div><label>Warm-up days</label><input type="number" id="warmupDays" min="0" /></div>
+            <div><label>Day-0 daily cap</label><input type="number" id="warmupStartCap" min="1" /></div>
+          </div>
+
+          <hr />
+          <label class="check"><input type="checkbox" id="offPlatformGuard" /> Off-platform guardrails <span class="hint">forbid phone/email/links; escalate instead</span></label>
+          <label class="check"><input type="checkbox" id="closerMode" /> Closer mode <span class="hint">drive buyers to call/visit; trade-ins, buyback, liquidation</span></label>
+          <label class="check"><input type="checkbox" id="noExactPrices" /> Never quote exact prices <span class="hint">(ignored when a price list is set on the Business tab)</span></label>
+
+          <hr />
+          <label class="check"><input type="checkbox" id="visitConfirmEnabled" /> Silent visit confirmation <span class="hint">after a buyer says they'll come, ask "still coming?" silently</span></label>
+          <div><label>Ask after (minutes)</label><input type="number" id="visitConfirmAfterMin" min="0" /></div>
         </section>
 
         <!-- BUSINESS -->
@@ -142,15 +185,12 @@
           <textarea id="instructions"></textarea>
           <label>Example conversations <span class="hint">few-shot buyer→ideal-reply pairs; strongly shapes the voice</span></label>
           <textarea id="examples" style="min-height:200px;"></textarea>
-          <hr />
-          <label class="check"><input type="checkbox" id="closerMode" /> Closer mode <span class="hint">drive buyers to call/visit; trade-ins, buyback, liquidation</span></label>
-          <label>Closer goals</label>
+          <label>Closer goals <span class="hint">how the bot sells the in-person visit (used when Closer mode is on)</span></label>
           <textarea id="closerGoals"></textarea>
-          <label class="check"><input type="checkbox" id="noExactPrices" /> Never quote exact prices <span class="hint">(ignored when a price list is set below)</span></label>
-          <label>Price list <span class="hint">starting prices the bot WILL share; one per line</span></label>
+          <label>Price list <span class="hint">starting prices the bot WILL share; one per line (overrides "never quote prices")</span></label>
           <textarea id="priceList" style="min-height:160px;"></textarea>
-          <hr />
-          <label class="check"><input type="checkbox" id="offPlatformGuard" /> Off-platform guardrails <span class="hint">forbid phone/email/links; escalate instead</span></label>
+          <label>Visit-confirm message <span class="hint">blank = bilingual default</span></label>
+          <textarea id="visitConfirmMessage"></textarea>
         </section>
 
         <!-- LISTINGS -->
@@ -167,6 +207,16 @@
           <div class="row"><button id="addFollowUp">+ Add follow-up</button></div>
           <table id="followupsTable">
             <thead><tr><th>Name</th><th>After (min)</th><th>Message</th><th>On</th><th></th></tr></thead>
+            <tbody></tbody>
+          </table>
+        </section>
+
+        <!-- VIDEOS -->
+        <section id="videos" class="pane">
+          <p class="hint">A library of demo-video <b>URLs</b> (reference list). The actual uploaded mp4 file is per-machine and lives in the extension's Settings, not here.</p>
+          <div class="row"><button id="addVideo">+ Add video</button></div>
+          <table id="videosTable">
+            <thead><tr><th>Name</th><th>URL</th><th>Notes</th><th></th></tr></thead>
             <tbody></tbody>
           </table>
         </section>

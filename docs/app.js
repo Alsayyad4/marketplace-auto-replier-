@@ -8,40 +8,63 @@
   "use strict";
   const $ = (id) => document.getElementById(id);
 
-  /* Active settings shown in the UI (defaults mirror the extension). */
+  /* Full settings set — mirrors DEFAULTS in the extension's background.js and the
+   * tabs in SETTINGS-REFERENCE.md. `enabled` is per-machine and excluded. */
   const DEFAULTS = {
     apiKey: "",
     model: "claude-sonnet-4-6",
+    responseDelaySec: 30,
+    jitterSec: 60,
+    hourlyCap: 30,
+    dailyCap: 200,
+    maxRepliesPerConvo: 5,
+    convoCapBehavior: "stop",
+    wpmMin: 38,
+    wpmMax: 78,
     businessHoursEnabled: true,
     businessHoursStart: 9,
     businessHoursEnd: 22,
-    hourlyCap: 30,
-    dailyCap: 200,
-    responseDelaySec: 30,
-    jitterSec: 60,
+    humanCadence: true,
+    skipChance: 0.12,
+    breakChance: 0.05,
+    breakMinMin: 3,
+    breakMaxMin: 18,
+    warmupEnabled: true,
+    warmupDays: 7,
+    warmupStartCap: 10,
+    offPlatformGuard: true,
+    closerMode: true,
+    noExactPrices: true,
+    visitConfirmEnabled: true,
+    visitConfirmAfterMin: 120,
     businessName: "SubSell",
     businessAddress: "757 Rue Beaubien E, Montréal",
     businessHoursText: "9AM–10PM, 7 days",
     businessInfo: "",
     instructions: "",
     examples: "",
-    closerMode: true,
     closerGoals: "",
-    noExactPrices: true,
     priceList: "",
-    offPlatformGuard: true,
+    visitConfirmMessage: "",
     listings: [],
     followUps: [],
+    videos: [],
   };
 
   const FIELDS = [
     ["apiKey", "value"], ["model", "value"],
+    ["responseDelaySec", "number"], ["jitterSec", "number"],
+    ["hourlyCap", "number"], ["dailyCap", "number"],
+    ["maxRepliesPerConvo", "number"], ["convoCapBehavior", "value"],
+    ["wpmMin", "number"], ["wpmMax", "number"],
     ["businessHoursEnabled", "checked"], ["businessHoursStart", "number"], ["businessHoursEnd", "number"],
-    ["hourlyCap", "number"], ["dailyCap", "number"], ["responseDelaySec", "number"], ["jitterSec", "number"],
+    ["humanCadence", "checked"], ["skipChance", "number"], ["breakChance", "number"], ["breakMinMin", "number"], ["breakMaxMin", "number"],
+    ["warmupEnabled", "checked"], ["warmupDays", "number"], ["warmupStartCap", "number"],
+    ["offPlatformGuard", "checked"], ["closerMode", "checked"], ["noExactPrices", "checked"],
+    ["visitConfirmEnabled", "checked"], ["visitConfirmAfterMin", "number"],
     ["businessName", "value"], ["businessAddress", "value"], ["businessHoursText", "value"],
     ["businessInfo", "value"], ["instructions", "value"], ["examples", "value"],
-    ["closerMode", "checked"], ["closerGoals", "value"], ["noExactPrices", "checked"],
-    ["priceList", "value"], ["offPlatformGuard", "checked"],
+    ["closerGoals", "value"], ["priceList", "value"], ["visitConfirmMessage", "value"],
   ];
 
   let settings = Object.assign({}, DEFAULTS); // working copy (preserves loaded advanced fields)
@@ -126,6 +149,11 @@
       { key: "name" }, { key: "afterMinutes", type: "number" }, { key: "message", type: "textarea" }, { key: "enabled", type: "checkbox" },
     ], renderFollowUps);
   }
+  function renderVideos() {
+    renderTable("#videosTable tbody", settings.videos, [
+      { key: "name" }, { key: "url" }, { key: "notes", type: "textarea" },
+    ], renderVideos);
+  }
   $("addListing").addEventListener("click", () => {
     settings.listings.push({ title: "", model: "", storage: "", condition: "", price: 0, videoUrl: "", available: true });
     renderListings();
@@ -134,13 +162,19 @@
     settings.followUps.push({ name: "", afterMinutes: 60, message: "", enabled: true });
     renderFollowUps();
   });
+  $("addVideo").addEventListener("click", () => {
+    settings.videos.push({ name: "", url: "", notes: "" });
+    renderVideos();
+  });
 
   function renderAll() {
     settings.listings = settings.listings || [];
     settings.followUps = settings.followUps || [];
+    settings.videos = settings.videos || [];
     fieldsToForm();
     renderListings();
     renderFollowUps();
+    renderVideos();
   }
 
   /* ---------------- config URL ---------------- */

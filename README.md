@@ -108,6 +108,7 @@ every computer.
 | `docs/` | The cloud **dashboard** — a static web app (`index.html`, `app.js`, `config.js`) deployed to GitHub Pages; sign in (Google/email) to edit settings and copy your config URL. |
 | `supabase/` | Backend: `schema.sql` (table + RLS + signup trigger), `functions/config/index.ts` (public config Edge Function), and `README.md` (deploy steps). |
 | `SPEC-webapp.md` | The config-JSON contract between the web app and the extension. |
+| `SETTINGS-REFERENCE.md` | Every tab/field the editor mirrors + types/defaults (from `DEFAULTS`). |
 
 ## How the pipeline works
 
