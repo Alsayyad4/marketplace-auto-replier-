@@ -3,7 +3,7 @@
   <head>
     <meta charset="utf-8" />
     <meta name="viewport" content="width=device-width, initial-scale=1" />
-    <title>SubSell — Cloud Dashboard</title>
+    <title>SubSell — Settings</title>
     <style>
       :root { color-scheme: light dark; }
       * { box-sizing: border-box; }
@@ -32,28 +32,35 @@
       button { font-size: 14px; padding: 8px 14px; border-radius: 6px; border: 1px solid #888; background: #f4f4f4; color: #111; cursor: pointer; }
       button.primary { background: #1877f2; color: #fff; border-color: #1877f2; }
       button.danger { color: #c0392b; }
+      button.google { background:#fff; color:#222; border:1px solid #ccc; font-weight:600; width:100%; max-width:340px; }
       .bar { position: sticky; bottom: 0; background: Canvas; padding: 12px 18px; border-top: 1px solid #ccc; display: flex; gap: 12px; align-items: center; }
       .saved { color: #1a8f3c; }
       .err { color: #c0392b; }
       .row { display: flex; gap: 8px; align-items: center; margin: 8px 0; flex-wrap: wrap; }
       .check { display: inline-flex; align-items: center; gap: 6px; font-weight: 400; }
-      .card { max-width: 420px; margin: 8vh auto; padding: 26px; border: 1px solid #ccc; border-radius: 12px; }
+      .card { max-width: 380px; margin: 8vh auto; padding: 26px; border: 1px solid #ccc; border-radius: 12px; }
       .card h1 { margin: 0 0 4px; font-size: 20px; }
       .hidden { display: none !important; }
-      .banner { padding: 10px 14px; background: rgba(24,119,242,.08); border: 1px solid rgba(24,119,242,.35); border-radius: 8px; margin-bottom: 12px; font-size: 13px; }
+      .banner { padding: 12px 14px; background: rgba(24,119,242,.08); border: 1px solid rgba(24,119,242,.35); border-radius: 8px; margin-bottom: 14px; font-size: 13px; }
+      .urlbox { display:flex; gap:8px; align-items:center; flex-wrap:wrap; margin-top:6px; }
+      .urlbox input { max-width: 560px; font-family: ui-monospace, monospace; font-size: 12px; }
+      .divider { display:flex; align-items:center; gap:10px; color:#999; margin:16px 0; font-size:12px; }
+      .divider::before, .divider::after { content:""; flex:1; border-top:1px solid #ccc; }
       hr { border: none; border-top: 1px solid #ddd; margin: 18px 0; }
     </style>
   </head>
   <body>
-    <!-- LOGIN GATE -->
+    <!-- LOGIN -->
     <div id="loginView">
       <div class="card">
-        <h1>SubSell Cloud</h1>
+        <h1>SubSell Settings</h1>
         <p class="hint">Sign in to edit the settings shared by all your computers.</p>
         <div id="configWarn" class="banner err hidden">
-          This dashboard isn't connected to a Supabase project yet. Fill in
-          <code>docs/config.js</code> first — see <code>cloud/SUPABASE_SETUP.md</code>.
+          Not connected to a Supabase project. Fill in <code>docs/config.js</code> first —
+          see <code>supabase/README.md</code>.
         </div>
+        <button id="googleBtn" class="google">Sign in with Google</button>
+        <div class="divider">or use email</div>
         <label>Email</label>
         <input type="email" id="loginEmail" autocomplete="username" placeholder="you@example.com" />
         <label>Password</label>
@@ -69,29 +76,35 @@
     <!-- APP -->
     <div id="appView" class="hidden">
       <header>
-        <h1>SubSell — Cloud Dashboard</h1>
-        <div class="who">
-          <span id="whoami"></span>
-          <button id="logoutBtn">Log out</button>
-        </div>
+        <h1>SubSell — Settings</h1>
+        <div class="who"><span id="whoami"></span><button id="logoutBtn">Log out</button></div>
       </header>
-      <div class="tabs">
-        <div class="tab active" data-tab="general">General</div>
-        <div class="tab" data-tab="business">Business prompt</div>
-        <div class="tab" data-tab="listings">Listings</div>
-        <div class="tab" data-tab="followups">Follow-ups</div>
-        <div class="tab" data-tab="videos">Videos</div>
-      </div>
 
       <main>
         <div class="banner">
-          Changes you save here reach every connected Chrome within ~1 minute. The
-          bot <b>On/Off</b> switch stays per-machine and isn't controlled from here.
+          <b>Your config URL</b> — paste this into the extension on each computer:
+          <b>Settings → General → Remote config URL → Fetch now</b>. Edits you save here
+          reach every machine within ~10&nbsp;min.
+          <div class="urlbox">
+            <input type="text" id="configUrl" readonly />
+            <button id="copyUrl" class="primary">Copy</button>
+            <button id="regenKey" class="danger" title="Invalidate the old URL and make a new one">Regenerate key</button>
+          </div>
+          <div class="hint" style="margin-top:6px;">⚠️ This URL contains a secret key that returns your API key — keep it private; regenerate if it leaks.</div>
         </div>
+      </main>
 
+      <div class="tabs">
+        <div class="tab active" data-tab="general">General</div>
+        <div class="tab" data-tab="business">Business</div>
+        <div class="tab" data-tab="listings">Listings</div>
+        <div class="tab" data-tab="followups">Follow-ups</div>
+      </div>
+
+      <main>
         <!-- GENERAL -->
         <section id="general" class="pane active">
-          <label>Anthropic API key <span class="hint">stored in your private cloud row (RLS-protected)</span></label>
+          <label>Anthropic API key</label>
           <input type="password" id="apiKey" placeholder="sk-ant-…" />
           <label>Model</label>
           <select id="model">
@@ -99,67 +112,20 @@
             <option value="claude-opus-4-8">claude-opus-4-8</option>
             <option value="claude-haiku-4-5-20251001">claude-haiku-4-5</option>
           </select>
-
-          <div class="inline">
-            <div><label>Response delay (s)</label><input type="number" id="responseDelaySec" min="0" /></div>
-            <div><label>Jitter (s)</label><input type="number" id="jitterSec" min="0" /></div>
-          </div>
-          <div class="inline">
-            <div><label>Hourly cap</label><input type="number" id="hourlyCap" min="0" /></div>
-            <div><label>Daily cap</label><input type="number" id="dailyCap" min="0" /></div>
-          </div>
-          <div class="inline">
-            <div>
-              <label>Max replies per conversation <span class="hint">0 = unlimited</span></label>
-              <input type="number" id="maxRepliesPerConvo" min="0" />
-            </div>
-            <div>
-              <label>When that cap is hit</label>
-              <select id="convoCapBehavior">
-                <option value="stop">Go quiet (stop replying)</option>
-                <option value="notify">Notify me to take over</option>
-              </select>
-            </div>
-          </div>
-          <div class="inline">
-            <div><label>Typing WPM min</label><input type="number" id="wpmMin" min="1" /></div>
-            <div><label>Typing WPM max</label><input type="number" id="wpmMax" min="1" /></div>
-          </div>
-
           <hr />
           <label class="check"><input type="checkbox" id="businessHoursEnabled" /> Respect business hours</label>
           <div class="inline">
             <div><label>Open hour (0–23)</label><input type="number" id="businessHoursStart" min="0" max="23" /></div>
             <div><label>Close hour (0–23)</label><input type="number" id="businessHoursEnd" min="0" max="23" /></div>
           </div>
-
-          <hr />
-          <label class="check"><input type="checkbox" id="humanCadence" /> Human cadence <span class="hint">random breaks + occasional skipped cycles</span></label>
           <div class="inline">
-            <div><label>Skip chance (0–1)</label><input type="number" id="skipChance" min="0" max="1" step="0.01" /></div>
-            <div><label>Break chance / cycle (0–1)</label><input type="number" id="breakChance" min="0" max="1" step="0.01" /></div>
+            <div><label>Hourly cap</label><input type="number" id="hourlyCap" min="0" /></div>
+            <div><label>Daily cap</label><input type="number" id="dailyCap" min="0" /></div>
           </div>
           <div class="inline">
-            <div><label>Break min (min)</label><input type="number" id="breakMinMin" min="0" /></div>
-            <div><label>Break max (min)</label><input type="number" id="breakMaxMin" min="0" /></div>
+            <div><label>Response delay (s)</label><input type="number" id="responseDelaySec" min="0" /></div>
+            <div><label>Jitter (s)</label><input type="number" id="jitterSec" min="0" /></div>
           </div>
-
-          <hr />
-          <label class="check"><input type="checkbox" id="warmupEnabled" /> Warm-up mode <span class="hint">ramp daily volume over N days</span></label>
-          <div class="inline">
-            <div><label>Warm-up days</label><input type="number" id="warmupDays" min="0" /></div>
-            <div><label>Day-0 daily cap</label><input type="number" id="warmupStartCap" min="1" /></div>
-          </div>
-
-          <hr />
-          <label class="check"><input type="checkbox" id="offPlatformGuard" /> Off-platform guardrails <span class="hint">forbid phone numbers, links, "contact me elsewhere"</span></label>
-          <label class="check"><input type="checkbox" id="closerMode" /> Closer mode <span class="hint">drive buyers to the shop; mention exchange / buyback / liquidation</span></label>
-          <label class="check"><input type="checkbox" id="noExactPrices" /> Never quote exact prices in chat</label>
-
-          <hr />
-          <label class="check"><input type="checkbox" id="visitConfirmEnabled" /> Silent visit confirmation</label>
-          <div><label>Ask after (minutes)</label><input type="number" id="visitConfirmAfterMin" min="0" /></div>
-          <div class="hint">Note: demo-video uploads (the actual mp4 files) stay on each computer and aren't synced here. The Videos tab below syncs video <em>URLs</em>.</div>
         </section>
 
         <!-- BUSINESS -->
@@ -174,14 +140,17 @@
           <textarea id="businessInfo"></textarea>
           <label>Instructions / tone</label>
           <textarea id="instructions"></textarea>
-          <label>Example conversations <span class="hint">few-shot buyer→ideal-reply pairs (include when to send [VIDEO:url] / escalate [HUMAN])</span></label>
+          <label>Example conversations <span class="hint">few-shot buyer→ideal-reply pairs; strongly shapes the voice</span></label>
           <textarea id="examples" style="min-height:200px;"></textarea>
+          <hr />
+          <label class="check"><input type="checkbox" id="closerMode" /> Closer mode <span class="hint">drive buyers to call/visit; trade-ins, buyback, liquidation</span></label>
           <label>Closer goals</label>
           <textarea id="closerGoals"></textarea>
+          <label class="check"><input type="checkbox" id="noExactPrices" /> Never quote exact prices <span class="hint">(ignored when a price list is set below)</span></label>
           <label>Price list <span class="hint">starting prices the bot WILL share; one per line</span></label>
           <textarea id="priceList" style="min-height:160px;"></textarea>
-          <label>Visit-confirm message <span class="hint">blank = bilingual default</span></label>
-          <textarea id="visitConfirmMessage"></textarea>
+          <hr />
+          <label class="check"><input type="checkbox" id="offPlatformGuard" /> Off-platform guardrails <span class="hint">forbid phone/email/links; escalate instead</span></label>
         </section>
 
         <!-- LISTINGS -->
@@ -201,20 +170,11 @@
             <tbody></tbody>
           </table>
         </section>
-
-        <!-- VIDEOS -->
-        <section id="videos" class="pane">
-          <div class="row"><button id="addVideo">+ Add video</button></div>
-          <table id="videosTable">
-            <thead><tr><th>Name</th><th>URL</th><th>Notes</th><th></th></tr></thead>
-            <tbody></tbody>
-          </table>
-        </section>
       </main>
 
       <div class="bar">
         <button id="save" class="primary">Save to cloud</button>
-        <button id="reload">Reload from cloud</button>
+        <button id="reload">Reload</button>
         <span id="savedMsg" class="saved"></span>
       </div>
     </div>

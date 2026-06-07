@@ -6,16 +6,16 @@ French), built for used-iPhone sales in Montréal. Runs locally per Chrome profi
 by default; **optional cloud sync** turns it into a web app so one change reaches
 every computer.
 
-> ☁️ **v0.12.0 — cloud sync (web app).** Run SubSell like a web app: log into ONE
-> account, edit settings in a hosted **dashboard** (or in any extension's Settings),
-> and **every connected Chrome on every computer updates within ~1 min** — even
-> across different Google accounts. Backed by your own free **Supabase** project
-> (Postgres + auth + Row-Level Security); your API key + settings live in your private
-> row that only your login can read. Config priority is now **managed policy → cloud →
-> permanent link → synced → local**, so the cloud is the source of truth whenever you're
-> logged in (log out and it falls back exactly as before). Turn-key setup in
-> `cloud/SUPABASE_SETUP.md` (SQL in `cloud/schema.sql`, dashboard in `docs/`). Purely
-> additive — the reply/video/follow-up logic is untouched; on/off stays per-machine.
+> ☁️ **v0.12.0 — cloud sync (web app).** Run SubSell like a web app: sign into a hosted
+> **settings dashboard** (Google or email) that serves your settings to every computer.
+> Edit once → every machine picks it up within ~10 min. Backed by your own free
+> **Supabase** project: settings live in a private row (`subsell_configs`, Row-Level
+> Security), and a tiny **Edge Function** serves them at a per-user **config URL** you
+> paste into the extension's existing **Settings → General → Remote config URL** — so
+> **zero extension changes** are needed. Setup in `supabase/README.md` (SQL in
+> `supabase/schema.sql`, function in `supabase/functions/config/`, web UI in `docs/`); the
+> JSON contract is `SPEC-webapp.md`. Purely additive — the reply/video/follow-up logic is
+> untouched; on/off stays per-machine.
 >
 > 🏢 **v0.11.0 — fleet deploy for your own machines.** Fixed extension ID
 > (`jdbjbonhdnfkkfihbodmhpmccoiajflm`) + Chrome enterprise-policy support, so you can
@@ -103,10 +103,11 @@ every computer.
 | `background.js` | Service worker: Anthropic API (`claude-sonnet-4-6`, `anthropic-dangerous-direct-browser-access`), system-prompt assembly, rate limits + warm-up, business hours, per-conversation cap, follow-up alarms, `[HUMAN]` notifications, mp4 blob fetch, reply log. |
 | `content.js` | DOM side (SIMPLE mode): rotate through every chat → read the last message (composer-bounded, noise-filtered) → if it's the buyer's, ask Claude → type + verify-send. Live `debugTick` for the popup. |
 | `popup.html` / `popup.js` | On/off, status, delay slider, live debug, **Open Marketplace** button, unread diagnostic + Copy ALL. |
-| `options.html` / `options.js` | Tabbed settings (see below) + **☁️ Cloud sync** (log in, pull/push to your Supabase account). |
+| `options.html` / `options.js` | Tabbed settings (see below). Paste your web-app **config URL** in **General → Remote config URL** to pull settings from the cloud. |
 | `icon16/48/128.png` | Action + notification icons. |
-| `docs/` | The cloud **dashboard** — a static web app (`index.html`, `app.js`, `config.js`) you deploy to GitHub Pages (or open locally) to edit settings from any browser. |
-| `cloud/` | One-time backend setup: `schema.sql` (Supabase table + RLS) and `SUPABASE_SETUP.md` (step-by-step). |
+| `docs/` | The cloud **dashboard** — a static web app (`index.html`, `app.js`, `config.js`) deployed to GitHub Pages; sign in (Google/email) to edit settings and copy your config URL. |
+| `supabase/` | Backend: `schema.sql` (table + RLS + signup trigger), `functions/config/index.ts` (public config Edge Function), and `README.md` (deploy steps). |
+| `SPEC-webapp.md` | The config-JSON contract between the web app and the extension. |
 
 ## How the pipeline works
 

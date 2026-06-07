@@ -1,71 +1,51 @@
-/* SubSell — cloud dashboard logic.
- * Talks to Supabase (auth + the `configs` table) using the supabase-js client.
- * The settings shape here MUST stay in sync with DEFAULTS in the extension's
- * background.js / options.js — it's the same JSON object that the extension
- * reads back. Only synced settings live here; per-machine state (the On/Off
- * toggle, rate-limit counters, logs, uploaded video blobs) stays in the
- * extension's local storage and is intentionally NOT shown. */
+/* SubSell — cloud settings dashboard (Supabase).
+ * Auth (Google or email/password) → edit the settings JSON in `subsell_configs`
+ * → show the per-user config URL (Edge Function) the extension fetches.
+ * The JSON shape matches DEFAULTS/buildSystemPrompt() in the extension's
+ * background.js (see SPEC-webapp.md). Unknown/advanced fields in a loaded config
+ * are preserved on save (we only overwrite the fields shown here). */
 (() => {
   "use strict";
   const $ = (id) => document.getElementById(id);
 
-  /* ---- same defaults as the extension (minus per-machine `enabled`) ---- */
+  /* Active settings shown in the UI (defaults mirror the extension). */
   const DEFAULTS = {
     apiKey: "",
     model: "claude-sonnet-4-6",
-    responseDelaySec: 30,
-    jitterSec: 60,
-    hourlyCap: 30,
-    dailyCap: 200,
-    wpmMin: 38,
-    wpmMax: 78,
     businessHoursEnabled: true,
     businessHoursStart: 9,
     businessHoursEnd: 22,
+    hourlyCap: 30,
+    dailyCap: 200,
+    responseDelaySec: 30,
+    jitterSec: 60,
     businessName: "SubSell",
     businessAddress: "757 Rue Beaubien E, Montréal",
     businessHoursText: "9AM–10PM, 7 days",
     businessInfo: "",
     instructions: "",
     examples: "",
-    offPlatformGuard: true,
     closerMode: true,
-    noExactPrices: true,
     closerGoals: "",
+    noExactPrices: true,
     priceList: "",
-    visitConfirmEnabled: true,
-    visitConfirmAfterMin: 120,
-    visitConfirmMessage: "",
-    maxRepliesPerConvo: 5,
-    convoCapBehavior: "stop",
-    humanCadence: true,
-    skipChance: 0.12,
-    breakChance: 0.05,
-    breakMinMin: 3,
-    breakMaxMin: 18,
-    warmupEnabled: true,
-    warmupDays: 7,
-    warmupStartCap: 10,
+    offPlatformGuard: true,
     listings: [],
     followUps: [],
-    videos: [],
   };
 
   const FIELDS = [
-    ["apiKey", "value"], ["model", "value"], ["responseDelaySec", "number"], ["jitterSec", "number"],
-    ["hourlyCap", "number"], ["dailyCap", "number"], ["wpmMin", "number"], ["wpmMax", "number"],
+    ["apiKey", "value"], ["model", "value"],
     ["businessHoursEnabled", "checked"], ["businessHoursStart", "number"], ["businessHoursEnd", "number"],
+    ["hourlyCap", "number"], ["dailyCap", "number"], ["responseDelaySec", "number"], ["jitterSec", "number"],
     ["businessName", "value"], ["businessAddress", "value"], ["businessHoursText", "value"],
     ["businessInfo", "value"], ["instructions", "value"], ["examples", "value"],
-    ["offPlatformGuard", "checked"], ["closerMode", "checked"], ["noExactPrices", "checked"],
-    ["closerGoals", "value"], ["priceList", "value"], ["visitConfirmEnabled", "checked"],
-    ["visitConfirmAfterMin", "number"], ["visitConfirmMessage", "value"], ["maxRepliesPerConvo", "number"],
-    ["convoCapBehavior", "value"], ["humanCadence", "checked"], ["skipChance", "number"],
-    ["breakChance", "number"], ["breakMinMin", "number"], ["breakMaxMin", "number"],
-    ["warmupEnabled", "checked"], ["warmupDays", "number"], ["warmupStartCap", "number"],
+    ["closerMode", "checked"], ["closerGoals", "value"], ["noExactPrices", "checked"],
+    ["priceList", "value"], ["offPlatformGuard", "checked"],
   ];
 
-  let settings = Object.assign({}, DEFAULTS);
+  let settings = Object.assign({}, DEFAULTS); // working copy (preserves loaded advanced fields)
+  let configKey = "";
   let client = null;
   let session = null;
 
@@ -98,7 +78,7 @@
     }
   }
 
-  /* ---------------- generic table editor ---------------- */
+  /* ---------------- table editor ---------------- */
   function renderTable(tbodySel, items, cols, onChange) {
     const tbody = document.querySelector(tbodySel);
     tbody.innerHTML = "";
@@ -146,11 +126,6 @@
       { key: "name" }, { key: "afterMinutes", type: "number" }, { key: "message", type: "textarea" }, { key: "enabled", type: "checkbox" },
     ], renderFollowUps);
   }
-  function renderVideos() {
-    renderTable("#videosTable tbody", settings.videos, [
-      { key: "name" }, { key: "url" }, { key: "notes", type: "textarea" },
-    ], renderVideos);
-  }
   $("addListing").addEventListener("click", () => {
     settings.listings.push({ title: "", model: "", storage: "", condition: "", price: 0, videoUrl: "", available: true });
     renderListings();
@@ -159,46 +134,69 @@
     settings.followUps.push({ name: "", afterMinutes: 60, message: "", enabled: true });
     renderFollowUps();
   });
-  $("addVideo").addEventListener("click", () => {
-    settings.videos.push({ name: "", url: "", notes: "" });
-    renderVideos();
-  });
 
   function renderAll() {
     settings.listings = settings.listings || [];
     settings.followUps = settings.followUps || [];
-    settings.videos = settings.videos || [];
     fieldsToForm();
     renderListings();
     renderFollowUps();
-    renderVideos();
+  }
+
+  /* ---------------- config URL ---------------- */
+  function buildUrl() {
+    const base = (window.SUBSELL_SUPABASE_URL || "").replace(/\/+$/, "");
+    $("configUrl").value = configKey ? `${base}/functions/v1/config?key=${configKey}` : "";
+  }
+  $("copyUrl").addEventListener("click", async () => {
+    const v = $("configUrl").value;
+    if (!v) return;
+    try { await navigator.clipboard.writeText(v); flash("Copied ✓"); }
+    catch (e) { $("configUrl").select(); flash("Press Ctrl+C to copy"); }
+  });
+  $("regenKey").addEventListener("click", async () => {
+    if (!confirm("Make a new config URL? The old one will stop working — you'll need to re-paste the new URL into each extension.")) return;
+    const newKey = (crypto.randomUUID && crypto.randomUUID().replaceAll("-", "")) || String(Date.now()) + Math.random().toString(16).slice(2);
+    const { error } = await client.from("subsell_configs").update({ config_key: newKey }).eq("user_id", session.user.id);
+    if (error) { flash("Failed: " + error.message, true); return; }
+    configKey = newKey;
+    buildUrl();
+    flash("New URL generated — re-paste it into your extensions.");
+  });
+
+  function flash(msg, isErr) {
+    const el = $("savedMsg");
+    el.className = isErr ? "err" : "saved";
+    el.textContent = msg;
+    setTimeout(() => (el.textContent = ""), 4000);
   }
 
   /* ---------------- Supabase data ---------------- */
   async function loadConfig() {
-    const { data, error } = await client.from("subsell_configs").select("config").maybeSingle();
-    if (error) { $("savedMsg").textContent = ""; $("savedMsg").className = "err"; $("savedMsg").textContent = "Load failed: " + error.message; return; }
-    settings = Object.assign({}, DEFAULTS, (data && data.config) || {});
+    let { data, error } = await client.from("subsell_configs").select("config, config_key").maybeSingle();
+    if (error) { flash("Load failed: " + error.message, true); return; }
+    if (!data) {
+      // No row yet (trigger/backfill not run) — create one for this user.
+      const ins = await client.from("subsell_configs").insert({ user_id: session.user.id }).select("config, config_key").maybeSingle();
+      if (ins.error) { flash("No config row and couldn't create one (" + ins.error.message + "). Run supabase/schema.sql.", true); return; }
+      data = ins.data;
+    }
+    settings = Object.assign({}, DEFAULTS, data.config || {}); // keep any advanced fields present
+    configKey = data.config_key || "";
     renderAll();
-    $("savedMsg").className = "hint";
-    $("savedMsg").textContent = data ? "Loaded from cloud." : "No config yet — fill it in and save.";
+    buildUrl();
+    flash(data.config && Object.keys(data.config).length ? "Loaded from cloud." : "New config — fill it in and save.");
   }
 
   async function saveConfig() {
     formToFields();
     const clean = Object.assign({}, settings);
-    delete clean.enabled; // on/off is per-machine
-    const msg = $("savedMsg");
-    msg.className = "hint";
-    msg.textContent = "Saving…";
-    const { error } = await client.from("subsell_configs").upsert(
-      { user_id: session.user.id, config: clean },
-      { onConflict: "user_id" }
-    );
-    if (error) { msg.className = "err"; msg.textContent = "Save failed: " + error.message; return; }
-    msg.className = "saved";
-    msg.textContent = "Saved ✓ — every connected Chrome updates within ~1 min.";
-    setTimeout(() => (msg.textContent = ""), 4000);
+    delete clean.enabled; // per-machine
+    const { error } = await client.from("subsell_configs")
+      .update({ config: clean, updated_at: new Date().toISOString() })
+      .eq("user_id", session.user.id);
+    if (error) { flash("Save failed: " + error.message, true); return; }
+    flash("Saved ✓ — machines update within ~10 min (or hit Fetch now).");
   }
   $("save").addEventListener("click", saveConfig);
   $("reload").addEventListener("click", loadConfig);
@@ -208,7 +206,7 @@
     session = sess;
     $("loginView").classList.add("hidden");
     $("appView").classList.remove("hidden");
-    $("whoami").textContent = sess.user.email || "";
+    $("whoami").textContent = (sess.user && sess.user.email) || "";
     loadConfig();
   }
   function showLogin() {
@@ -217,35 +215,36 @@
     $("loginView").classList.remove("hidden");
   }
 
-  async function doLogin() {
+  $("googleBtn").addEventListener("click", async () => {
+    $("loginStatus").className = "hint";
+    $("loginStatus").textContent = "Redirecting to Google…";
+    const { error } = await client.auth.signInWithOAuth({
+      provider: "google",
+      options: { redirectTo: location.href.split("#")[0] },
+    });
+    if (error) { $("loginStatus").className = "err"; $("loginStatus").textContent = error.message; }
+  });
+  $("loginBtn").addEventListener("click", async () => {
     $("loginStatus").className = "hint";
     $("loginStatus").textContent = "Signing in…";
     const { data, error } = await client.auth.signInWithPassword({
-      email: $("loginEmail").value.trim(),
-      password: $("loginPassword").value,
+      email: $("loginEmail").value.trim(), password: $("loginPassword").value,
     });
     if (error) { $("loginStatus").className = "err"; $("loginStatus").textContent = error.message; return; }
     showApp(data.session);
-  }
-  async function doSignup() {
+  });
+  $("signupBtn").addEventListener("click", async () => {
     $("loginStatus").className = "hint";
     $("loginStatus").textContent = "Creating account…";
     const { data, error } = await client.auth.signUp({
-      email: $("loginEmail").value.trim(),
-      password: $("loginPassword").value,
+      email: $("loginEmail").value.trim(), password: $("loginPassword").value,
     });
     if (error) { $("loginStatus").className = "err"; $("loginStatus").textContent = error.message; return; }
     if (data.session) showApp(data.session);
     else { $("loginStatus").className = "hint"; $("loginStatus").textContent = "Account created — check your email to confirm, then log in."; }
-  }
-  async function doLogout() {
-    await client.auth.signOut();
-    showLogin();
-  }
-  $("loginBtn").addEventListener("click", doLogin);
-  $("signupBtn").addEventListener("click", doSignup);
-  $("logoutBtn").addEventListener("click", doLogout);
-  $("loginPassword").addEventListener("keydown", (e) => { if (e.key === "Enter") doLogin(); });
+  });
+  $("logoutBtn").addEventListener("click", async () => { await client.auth.signOut(); showLogin(); });
+  $("loginPassword").addEventListener("keydown", (e) => { if (e.key === "Enter") $("loginBtn").click(); });
 
   /* ---------------- boot ---------------- */
   function boot() {
@@ -253,8 +252,7 @@
     const key = window.SUBSELL_SUPABASE_ANON_KEY;
     if (!url || !key || typeof supabase === "undefined") {
       $("configWarn").classList.remove("hidden");
-      $("loginBtn").disabled = true;
-      $("signupBtn").disabled = true;
+      ["googleBtn", "loginBtn", "signupBtn"].forEach((id) => ($(id).disabled = true));
       return;
     }
     client = supabase.createClient(url, key);
