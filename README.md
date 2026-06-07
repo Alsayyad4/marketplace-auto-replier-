@@ -83,6 +83,48 @@ cloud — runs locally, one Chrome profile per Facebook account.
 6. Open **messenger.com** (or use the popup's **📨 Open Marketplace** button),
    then flip the popup toggle to **ON**.
 
+## Web control panel (`docs/`) — configure once, every computer follows
+
+The extension is what actually replies (a web page can't type into Messenger by
+itself). The **web app in `docs/`** is the control panel + installer around it:
+
+- **Get the extension / "Add to Chrome"** — a prominent install panel. Until the
+  Chrome Web Store listing is live it offers **Download .zip → Load unpacked**;
+  once you publish (see below) it becomes a one-click **Add to Chrome** button.
+- **Every v10 setting, mirrored** — all seven tabs (General, Business prompt,
+  Listings, Follow-ups, Videos, **Test responses**, **Activity log**). The
+  **Test responses** tab calls Claude live in the browser using the *same* system
+  prompt the bot builds, so you can sanity-check key + prompt without touching
+  Facebook.
+- **One account → all machines (Supabase cloud login).** Log in, edit settings,
+  and the page gives you a per-account **config URL**. Paste it into each
+  extension's **Settings → General → Remote config URL → Fetch now**. Edits reach
+  every machine within ~10 min. This uses the extension's **existing** remote-config
+  feature — **no extension update required**. Backend setup (one-time, free) is in
+  [`supabase/README.md`](supabase/README.md); fill your project values in
+  [`docs/config.js`](docs/config.js).
+- **Or skip the cloud** — the **⬇ Download config file** button writes
+  `subsell-config.json`; host it in a secret gist and paste its raw URL into the
+  same Remote config URL field.
+
+> Demo-video *files* stay per-machine (megabytes can't sync) — upload them in each
+> extension's **Settings → General**. The video **URL library** and the on/off
+> behavior do sync. Activity **logs** are per-machine too; view them in each
+> extension's **Activity log** tab.
+
+Host `docs/` on **GitHub Pages** (Settings → Pages → deploy from `main` / `docs`)
+or any static host; the root [`index.html`](index.html) redirects there.
+
+## Publish to the Chrome Web Store (real "Add to Chrome")
+
+1. `bash store/build-extension-zip.sh` → builds `dist/subsell-extension.zip`
+   (extension files only; manifest `key` stripped so the Store assigns its own ID).
+2. Follow [`store/STORE-SUBMISSION.md`](store/STORE-SUBMISSION.md): $5 one-time
+   registration, paste the listing copy from [`store/listing.md`](store/listing.md),
+   set the privacy-policy URL ([`docs/privacy.html`](docs/privacy.html)), submit.
+3. After approval, paste your listing URL into `SUBSELL_WEBSTORE_URL` in
+   `docs/config.js` — the web app's **Add to Chrome** button goes live.
+
 ## Files
 
 | File | Purpose |
@@ -93,6 +135,10 @@ cloud — runs locally, one Chrome profile per Facebook account.
 | `popup.html` / `popup.js` | On/off, status, delay slider, live debug, **Open Marketplace** button, unread diagnostic + Copy ALL. |
 | `options.html` / `options.js` | Tabbed settings (see below). |
 | `icon16/48/128.png` | Action + notification icons. |
+| `docs/` | The **web control panel** (static site): `index.html`, `app.js`, `config.js`, `privacy.html`. Host on GitHub Pages. |
+| `supabase/` | Optional cloud backend for the dashboard: `schema.sql`, the `config` Edge Function, and setup `README.md`. |
+| `store/` | Chrome Web Store kit: `build-extension-zip.sh`, `STORE-SUBMISSION.md`, `listing.md`. |
+| `deploy/` | Enterprise fleet deploy (policy `.reg`, `update.xml`, `DEPLOY.md`). |
 
 ## How the pipeline works
 
