@@ -132,6 +132,13 @@
     if (/^(mon|tue|wed|thu|fri|sat|sun)\b/i.test(t)) return true; // "Sat 7:11 PM" headers
     if (/^(yesterday|today|hier|aujourd)/i.test(t)) return true; // relative date headers
     if (/^to help identify/.test(t) || t.includes("meta may use technology")) return true; // Meta footer
+    // Facebook system / rating prompts — NOT real buyer messages (don't reply to these).
+    if (/^you can now rate/.test(t)) return true; // "You can now rate each other"
+    if (/^people (may|can) rate/.test(t)) return true; // "People may rate one another based on…"
+    if (/^rate /.test(t)) return true; // "Rate Zachary" / "Rate seller" button
+    if (/started this chat/.test(t)) return true; // "X started this chat"
+    if (/^mark as sold$/.test(t)) return true;
+    if (/^view buyer/.test(t)) return true; // "View buyer" / "View buyer profile"
     return NOISE.some((n) => t === n || t.startsWith(n));
   }
 
