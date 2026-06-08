@@ -89,12 +89,13 @@ API key and reads message content. One is included at **`docs/privacy.html`**.
 | `tabs`, `activeTab` | Find/focus the operator's open Messenger tab to operate on it. |
 | Host: `*.messenger.com`, `*.facebook.com` | The extension only auto-replies inside the operator's own Marketplace/Messenger chats. |
 | Host: `api.anthropic.com` | Calls the Anthropic Claude API to generate replies (operator's own key). |
-| Host: `<all_urls>` | Fetches the operator's remote-config file (e.g. a private gist or their own cloud URL) and demo-video files from arbitrary hosts to upload as native attachments. |
+| Host: `*.supabase.co` | Fetches the operator's own settings from the Supabase project they control (cloud sync). |
 
-> **Review-smoothing option:** `<all_urls>` is the broadest permission and draws the
-> most scrutiny. If you don't use remote-config links or remote video URLs, you can
-> remove `<all_urls>` from `host_permissions` in the store build to speed up review.
-> If you DO use them, keep it and paste the justification above.
+> **Permissions are already slimmed for the Store.** `build-extension-zip.sh` removes
+> the broad `<all_urls>` host permission from the store build (it forces an in-depth
+> review and raises rejection odds), keeping only the four hosts above. The
+> self-hosted / fleet build keeps `<all_urls>` for remote-config-from-any-URL and
+> remote video fetch; the Store build trades those for a cleaner review.
 
 ---
 

@@ -39,14 +39,22 @@ for f in "${FILES[@]}"; do
   cp "$ROOT/$f" "$STAGE/$f"
 done
 
-# Strip the "key" field from the store manifest (CWS issues its own ID).
+# Store-specific manifest: drop the dev "key" (CWS issues its own ID) AND narrow
+# host_permissions to only what the single purpose needs — removing <all_urls>,
+# which otherwise forces an in-depth review and raises rejection odds.
 node -e '
   const fs = require("fs");
   const p = process.argv[1];
   const m = JSON.parse(fs.readFileSync(p, "utf8"));
   delete m.key;
+  m.host_permissions = [
+    "https://*.messenger.com/*",
+    "https://*.facebook.com/*",
+    "https://api.anthropic.com/*",
+    "https://*.supabase.co/*"
+  ];
   fs.writeFileSync(p, JSON.stringify(m, null, 2) + "\n");
-  console.log("manifest.json: removed \"key\" for store build (version " + m.version + ")");
+  console.log("store manifest: dropped key + <all_urls>; host_permissions =", m.host_permissions.join(", "));
 ' "$STAGE/manifest.json"
 
 # Zip the staged folder's CONTENTS (manifest.json must be at the zip root).
