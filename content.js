@@ -195,6 +195,19 @@
       .map((m) => (m.role === "buyer" ? "Buyer: " : "You: ") + m.text)
       .join("\n");
   }
+  // How many times WE (the bot) spoke in a row at the very end of the chat.
+  // 0 = buyer spoke last; 1 = we replied once; 2+ = we've already followed up.
+  // This is the anti-spam cap: read straight from the conversation, never a counter
+  // that can drift out of sync.
+  function botTailCount() {
+    const convo = readConversation();
+    let n = 0;
+    for (let i = convo.length - 1; i >= 0; i--) {
+      if (convo[i].role === "me") n++;
+      else break;
+    }
+    return n;
+  }
 
   /* ---------------- type + send (and VERIFY it sent) ---------------- */
   function composerText(el) {
@@ -452,21 +465,31 @@
     try {
       const settings = (await ask({ type: "GET_SETTINGS" })).settings || {};
       if (!settings.smartFollowupEnabled) return;
-      const maxCount = Number(settings.smartFollowupMaxCount) || 1;
+      const maxCount = Math.max(0, Number(settings.smartFollowupMaxCount) || 0);
+      if (maxCount <= 0) return;
       const quietH = settings.smartFollowupQuietHours != null ? Number(settings.smartFollowupQuietHours) : 6;
       const gapH = settings.smartFollowupGapHours != null ? Number(settings.smartFollowupGapHours) : 24;
 
+      // ---- ANTI-SPAM CAP (read from the actual conversation) ----
+      // Count how many messages in a row at the end are OURS. The first is our
+      // reply; any beyond that are follow-ups already sent. If we've hit the cap,
+      // send NOTHING. (max=1 → stop once the last 2 messages are both ours.)
+      const botTail = botTailCount();
+      if (botTail === 0) return; // buyer actually spoke last → not a follow-up case
+      const followupsDone = botTail - 1;
+      if (followupsDone >= maxCount) return; // already followed up enough → STOP
+
+      // ---- TIME GATE ----
       const store = (await getLocal(["followUpState"])).followUpState || {};
       const now = Date.now();
       let st = store[id];
       if (!st) {
         // First time we notice this quiet chat — start the clock; don't message yet.
-        store[id] = { lastAt: now, count: 0 };
+        store[id] = { lastAt: now };
         await setLocal({ followUpState: store });
         return;
       }
-      if ((st.count || 0) >= maxCount) return; // already followed up the max times
-      const thresholdMs = ((st.count || 0) === 0 ? quietH : gapH) * 3600 * 1000;
+      const thresholdMs = (followupsDone === 0 ? quietH : gapH) * 3600 * 1000;
       if (now - (st.lastAt || 0) < thresholdMs) return; // not quiet long enough yet
 
       const transcript = fullTranscript();
@@ -478,9 +501,9 @@
       }
       // Push the clock forward whether we send or skip, so we don't re-ask every cycle.
       st.lastAt = now;
+      store[id] = st;
+      await setLocal({ followUpState: store });
       if (r.skip || !r.text || !r.text.trim()) {
-        store[id] = st;
-        await setLocal({ followUpState: store });
         setStatus({ lastAction: "follow-up: no room (" + (r.reason || "skip") + ")", currentThread: name });
         return;
       }
@@ -489,15 +512,10 @@
       setStatus({ lastAction: "follow-up: sending…", currentThread: name });
       const ok = await typeAndSend(composer, r.text);
       if (ok) {
-        st.count = (st.count || 0) + 1;
-        store[id] = st;
-        await setLocal({ followUpState: store });
         cooldowns[id] = Date.now() + COOLDOWN_MS;
-        setStatus({ lastAction: `follow-up sent ✓ (${st.count}/${maxCount})`, lastReplySent: trunc(r.text, 200), currentThread: name });
+        setStatus({ lastAction: `follow-up sent ✓ (${followupsDone + 1}/${maxCount})`, lastReplySent: trunc(r.text, 200), currentThread: name });
         ask({ type: "LOG_EVENT", entry: { thread: name, action: "followup", reply: r.text } });
       } else {
-        store[id] = st;
-        await setLocal({ followUpState: store });
         setStatus({ lastError: "follow-up: typed but couldn't send" });
       }
     } catch (e) {
@@ -593,11 +611,11 @@
     // reply, so it only fires after the conversation has gone quiet. Fire-and-forget.
     ask({ type: "BOT_REPLIED", threadId: id });
 
-    // Buyer re-engaged and we replied — restart the smart follow-up clock + count
-    // for this chat (so follow-ups resume only after it goes quiet again).
+    // Buyer re-engaged and we replied — restart the smart follow-up clock for this
+    // chat (the per-chat cap itself is read live from the conversation tail).
     try {
       const fs = (await getLocal(["followUpState"])).followUpState || {};
-      fs[id] = { lastAt: Date.now(), count: 0 };
+      fs[id] = { lastAt: Date.now() };
       await setLocal({ followUpState: fs });
     } catch (e) {
       /* non-fatal */
