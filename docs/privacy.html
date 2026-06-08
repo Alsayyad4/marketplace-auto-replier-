@@ -1,0 +1,80 @@
+<!DOCTYPE html>
+<html lang="en">
+  <head>
+    <meta charset="utf-8" />
+    <meta name="viewport" content="width=device-width, initial-scale=1" />
+    <title>SubSell Auto-Reply — Privacy Policy</title>
+    <style>
+      body { font-family: -apple-system, Segoe UI, Roboto, Arial, sans-serif; max-width: 760px; margin: 40px auto; padding: 0 18px; line-height: 1.6; color: #222; }
+      h1 { font-size: 24px; } h2 { font-size: 18px; margin-top: 28px; }
+      code { background: #f0f0f0; padding: 1px 5px; border-radius: 4px; }
+      .note { background: #fff7e0; border: 1px solid #e3c200; padding: 10px 12px; border-radius: 8px; }
+    </style>
+  </head>
+  <body>
+    <h1>SubSell Auto-Reply — Privacy Policy</h1>
+    <p><em>Last updated: 2026-06-07</em></p>
+
+    <p>
+      SubSell Auto-Reply ("the extension") is a single-operator tool that helps a
+      seller auto-reply to their own Facebook Marketplace / Messenger buyer
+      conversations using the Anthropic Claude API. This policy explains exactly
+      what data it touches and where that data goes.
+    </p>
+
+    <h2>What the extension accesses</h2>
+    <ul>
+      <li><b>Messenger / Marketplace conversation text</b> — when you turn the bot ON, it
+        reads the latest message in your open conversations so it can generate a reply.
+        Only the relevant recent message text is used.</li>
+      <li><b>Your Anthropic API key</b> — you provide this. It is used to authenticate
+        requests to Anthropic on your behalf.</li>
+      <li><b>Your settings</b> — business info, listings, prompts, follow-ups, and limits
+        that you enter.</li>
+    </ul>
+
+    <h2>Where data is sent</h2>
+    <ul>
+      <li><b>Anthropic (api.anthropic.com)</b> — the buyer's latest message and your
+        system prompt are sent to Anthropic's Claude API to generate the reply. See
+        Anthropic's privacy policy at
+        <a href="https://www.anthropic.com/legal/privacy">anthropic.com/legal/privacy</a>.</li>
+      <li><b>Facebook / Messenger</b> — generated replies are typed into your own
+        Messenger conversations, the same as if you typed them.</li>
+      <li><b>Optional: your own cloud (Supabase)</b> — if you choose to use the cloud
+        dashboard, your settings (including your API key) are stored in a database
+        project <em>you</em> control, protected by row-level security, so the same
+        configuration can apply to all your computers. This is optional and off unless
+        you set it up.</li>
+    </ul>
+
+    <h2>Where data is stored</h2>
+    <ul>
+      <li><b>On your computer</b> — settings and your API key are stored locally via
+        <code>chrome.storage</code>. They may sync across Chrome instances signed into the
+        same Google account (<code>chrome.storage.sync</code>) if you use that feature.</li>
+      <li><b>Demo videos</b> you upload stay on that computer only.</li>
+      <li><b>Activity log</b> (the bot's recent replies) is stored on that computer only.</li>
+    </ul>
+
+    <h2>What we do NOT do</h2>
+    <ul>
+      <li>We do <b>not</b> run any server that collects your data. The extension talks only
+        to Anthropic, to Facebook/Messenger, and — if you enable it — to your own cloud.</li>
+      <li>We do <b>not</b> sell, share, or use your data for advertising or analytics.</li>
+      <li>We do <b>not</b> collect data from anyone other than the operator running the tool.</li>
+    </ul>
+
+    <h2>Your control</h2>
+    <ul>
+      <li>Delete the extension to remove its locally stored data, or clear it from
+        <code>chrome://extensions</code> → the extension → site/storage data.</li>
+      <li>Rotate or remove your Anthropic API key at any time in the settings.</li>
+      <li>If you use the cloud dashboard, you can regenerate your config key or delete your
+        row/account in your Supabase project.</li>
+    </ul>
+
+    <h2>Contact</h2>
+    <p>Questions about this policy: <a href="mailto:hovigsabounjian@gmail.com">hovigsabounjian@gmail.com</a></p>
+  </body>
+</html>
