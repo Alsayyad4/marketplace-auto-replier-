@@ -213,7 +213,17 @@
 
         <!-- VIDEOS -->
         <section id="videos" class="pane">
-          <p class="hint">A library of demo-video <b>URLs</b> (reference list). The actual uploaded mp4 file is per-machine and lives in the extension's Settings, not here.</p>
+          <h3 style="margin:6px 0;">Demo video — sent once per chat (synced to every account)</h3>
+          <p class="hint">Upload an mp4 here once. Every connected extension downloads it and sends it as a <b>native video</b> a few seconds after its first reply — the buyer never sees a link. Keep each under ~25&nbsp;MB. (Needs the one-time Storage setup — see <code>supabase/storage.sql</code>.)</p>
+          <div class="row">
+            <input type="file" id="demoVideoFile" accept="video/mp4,video/*" />
+            <span id="demoVideoStatus" class="hint"></span>
+          </div>
+          <div><label>Send this many seconds after the reply</label><input type="number" id="demoVideoDelaySec" min="0" max="120" /></div>
+          <div id="demoVideoList" class="hint" style="margin-top:8px;">No central videos yet.</div>
+
+          <hr />
+          <h3 style="margin:6px 0;">Video URL library <span class="hint">(reference only — not auto-sent)</span></h3>
           <div class="row"><button id="addVideo">+ Add video</button></div>
           <table id="videosTable">
             <thead><tr><th>Name</th><th>URL</th><th>Notes</th><th></th></tr></thead>

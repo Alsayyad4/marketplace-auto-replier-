@@ -68,6 +68,10 @@ const DEFAULTS = {
   listings: [],
   followUps: [],
   videos: [],
+  // central demo videos (hosted in Supabase Storage, served via the config URL).
+  // The extension downloads each and sends it as a NATIVE attachment, once per chat.
+  demoVideoUrls: [], // [{ name, url }]
+  demoVideoDelaySec: 10,
 };
 
 const LOG = (...a) => console.log("[SubSell-BG]", ...a);

@@ -65,7 +65,13 @@ endpoint serves that object to the extension.
 
 ## Tab: Videos
 
-`videos` — array of rows. Each: `{ name, url, notes }`. A library of demo-video URLs (reference list).
+- `demoVideoUrls` — array of `{ name, url }`. **Central demo videos**: uploaded once in
+  the dashboard (stored in Supabase Storage), served via the config URL. Each extension
+  downloads them and sends them as **native** attachments **once per chat** — including
+  on quiet/older chats it revisits (not just right after a reply). The buyer never sees a link.
+- `demoVideoDelaySec` — number (default `10`). Seconds to wait after a fresh reply before
+  sending the video (on a revisit it's sent immediately).
+- `videos` — array of `{ name, url, notes }`. A reference URL library only (not auto-sent).
 
 ## NOT web-managed (per-machine, stay in the extension)
 

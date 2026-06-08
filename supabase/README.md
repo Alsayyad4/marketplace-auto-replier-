@@ -65,6 +65,13 @@ async function regenerateKey() {
 }
 ```
 
+## 4b) Central demo videos (optional)
+To upload demo videos in the dashboard (instead of per-machine), run
+[`storage.sql`](./storage.sql) once in the SQL editor. It creates a **public**
+`subsell-videos` bucket (+ policies scoped only to it). The dashboard's Videos tab
+then uploads the mp4 to Storage; each extension downloads it and sends it as a
+**native** attachment (the buyer never sees a link).
+
 ## 5) Test the endpoint
 ```bash
 curl "https://<project-ref>.supabase.co/functions/v1/subsell-config?key=<config_key>"

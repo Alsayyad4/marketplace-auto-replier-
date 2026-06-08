@@ -347,26 +347,75 @@
   }
   // Send the stored demo video(s) to the current chat — ONCE per chat, a set delay
   // after the text reply (default 10s). Supports MULTIPLE videos, sent in order.
-  async function maybeSendVideo(id, name) {
+  async function maybeSendVideo(id, name, immediate) {
     try {
       const cfg = await getLocal(["videoEnabled", "demoVideos", "demoVideo", "videoSentThreads", "videoDelaySec"]);
-      if (!cfg.videoEnabled) return;
-      let vids = Array.isArray(cfg.demoVideos) ? cfg.demoVideos : [];
-      if (!vids.length && cfg.demoVideo && cfg.demoVideo.dataUrl) vids = [cfg.demoVideo]; // legacy single
-      vids = vids.filter((v) => v && v.dataUrl);
-      if (!vids.length) return;
+
+      // LOCAL videos (uploaded per-machine, stored as base64 dataUrls).
+      let local = Array.isArray(cfg.demoVideos) ? cfg.demoVideos : [];
+      if (!local.length && cfg.demoVideo && cfg.demoVideo.dataUrl) local = [cfg.demoVideo]; // legacy single
+      local = local.filter((v) => v && v.dataUrl);
+
+      // CENTRAL videos (hosted in Supabase Storage, delivered via the config URL).
+      // Adding videos in the web dashboard turns this on for every machine — no
+      // per-machine toggle needed. They are still sent as NATIVE uploads.
+      let central = [];
+      let centralDelay = null;
+      try {
+        const s = (await ask({ type: "GET_SETTINGS" })).settings || {};
+        if (Array.isArray(s.demoVideoUrls)) central = s.demoVideoUrls.filter((v) => v && v.url);
+        if (s.demoVideoDelaySec != null) centralDelay = Number(s.demoVideoDelaySec);
+      } catch (e) {
+        /* background unavailable — just skip central videos this cycle */
+      }
+
+      // Send if locally enabled OR central videos exist (central = opt-in from the dashboard).
+      if (!cfg.videoEnabled && !central.length) return;
+      if (!local.length && !central.length) return;
+
       const sent = cfg.videoSentThreads || {};
       if (sent[id]) return; // already sent in this conversation
-      const delayMs = (cfg.videoDelaySec != null ? cfg.videoDelaySec : 10) * 1000;
-      setStatus({ lastAction: `video in ${Math.round(delayMs / 1000)}s…`, currentThread: name });
-      await sleep(delayMs); // wait N seconds after the text reply (default 10s)
+
+      const delaySec = centralDelay != null ? centralDelay : cfg.videoDelaySec != null ? cfg.videoDelaySec : 10;
+      const delayMs = delaySec * 1000;
+      if (!immediate) {
+        // After a fresh text reply: wait N s so the video trails it naturally.
+        // On a revisit (quiet chat) we send right away so the scan loop doesn't stall.
+        setStatus({ lastAction: `video in ${Math.round(delayMs / 1000)}s…`, currentThread: name });
+        await sleep(delayMs);
+      }
+
+      // Build the ordered File list: local base64 first, then central (downloaded via background).
+      const files = [];
+      for (const v of local) {
+        try {
+          files.push(dataUrlToFile(v.dataUrl, v.name, v.type));
+        } catch (e) {
+          /* skip a bad local video */
+        }
+      }
+      for (const v of central) {
+        try {
+          const r = await ask({ type: "FETCH_VIDEO", url: v.url });
+          if (r && r.ok && r.base64) {
+            const mime = r.mime || "video/mp4";
+            files.push(dataUrlToFile(`data:${mime};base64,${r.base64}`, v.name || "video.mp4", mime));
+          }
+        } catch (e) {
+          /* skip a video that failed to download */
+        }
+      }
+      if (!files.length) {
+        setStatus({ lastError: "video: nothing to send (download failed?)" });
+        return;
+      }
+
       let anyOk = false;
-      for (let i = 0; i < vids.length; i++) {
-        setStatus({ lastAction: `sending video ${i + 1}/${vids.length}…`, currentThread: name });
-        const file = dataUrlToFile(vids[i].dataUrl, vids[i].name, vids[i].type);
-        const ok = await injectVideo(file);
+      for (let i = 0; i < files.length; i++) {
+        setStatus({ lastAction: `sending video ${i + 1}/${files.length}…`, currentThread: name });
+        const ok = await injectVideo(files[i]);
         anyOk = anyOk || ok;
-        if (i < vids.length - 1) await sleep(rand(4000, 7000)); // gap between videos
+        if (i < files.length - 1) await sleep(rand(4000, 7000)); // gap between videos
       }
       if (anyOk) {
         sent[id] = true; // mark so we never send the video(s) twice in the same chat
@@ -403,7 +452,11 @@
     const turn = buyerSpokeLast();
     if (!turn) {
       cooldowns[id] = Date.now() + IDLE_COOLDOWN_MS;
-      setStatus({ lastAction: "skip — you spoke last (nothing to answer)", currentThread: name });
+      // You spoke last — nothing to reply to. But if this chat never received the
+      // demo video, send it now (once per chat, no delay), so quiet/older chats
+      // still get it instead of being skipped outright.
+      await maybeSendVideo(id, name, true);
+      setStatus({ lastAction: "skip — you spoke last (checked for missing video)", currentThread: name });
       return;
     }
     if (lastHandled[id] === turn.buyerMessage) {

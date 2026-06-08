@@ -49,7 +49,11 @@
     listings: [],
     followUps: [],
     videos: [],
+    demoVideoUrls: [], // central demo videos (uploaded to Supabase Storage) [{name,url}]
+    demoVideoDelaySec: 10,
   };
+
+  const VIDEO_BUCKET = "subsell-videos"; // Supabase Storage bucket for central demo videos
 
   const FIELDS = [
     ["apiKey", "value"], ["model", "value"],
@@ -65,6 +69,7 @@
     ["businessName", "value"], ["businessAddress", "value"], ["businessHoursText", "value"],
     ["businessInfo", "value"], ["instructions", "value"], ["examples", "value"],
     ["closerGoals", "value"], ["priceList", "value"], ["visitConfirmMessage", "value"],
+    ["demoVideoDelaySec", "number"],
   ];
 
   let settings = Object.assign({}, DEFAULTS); // working copy (preserves loaded advanced fields)
@@ -167,14 +172,71 @@
     renderVideos();
   });
 
+  /* ----- central demo videos (uploaded to Supabase Storage) ----- */
+  function renderDemoVideos() {
+    const el = $("demoVideoList");
+    if (!el) return;
+    const vids = settings.demoVideoUrls || [];
+    if (!vids.length) {
+      el.textContent = "No central videos yet.";
+      return;
+    }
+    el.innerHTML = "";
+    vids.forEach((v, i) => {
+      const row = document.createElement("div");
+      row.className = "row";
+      const a = document.createElement("a");
+      a.href = v.url;
+      a.target = "_blank";
+      a.textContent = `${i + 1}. ${v.name || "video"}`;
+      const del = document.createElement("button");
+      del.type = "button";
+      del.className = "danger";
+      del.textContent = "Remove";
+      del.addEventListener("click", () => {
+        vids.splice(i, 1);
+        renderDemoVideos();
+      });
+      row.appendChild(a);
+      row.appendChild(del);
+      el.appendChild(row);
+    });
+  }
+  if ($("demoVideoFile")) {
+    $("demoVideoFile").addEventListener("change", async () => {
+      const f = $("demoVideoFile").files && $("demoVideoFile").files[0];
+      if (!f) return;
+      const status = $("demoVideoStatus");
+      status.className = "hint";
+      status.textContent = `Uploading ${f.name}…`;
+      const safe = f.name.replace(/[^a-zA-Z0-9.\-_]/g, "_");
+      const path = `${session.user.id}/${Date.now()}-${safe}`;
+      const up = await client.storage.from(VIDEO_BUCKET).upload(path, f, { upsert: true, contentType: f.type || "video/mp4" });
+      if (up.error) {
+        status.className = "err";
+        status.textContent = "Upload failed: " + up.error.message + " (did you run the Storage setup SQL?)";
+        return;
+      }
+      const url = client.storage.from(VIDEO_BUCKET).getPublicUrl(path).data.publicUrl;
+      settings.demoVideoUrls = settings.demoVideoUrls || [];
+      settings.demoVideoUrls.push({ name: f.name, url });
+      renderDemoVideos();
+      status.className = "saved";
+      status.textContent = "Uploaded ✓ — now click Save to cloud.";
+      $("demoVideoFile").value = "";
+    });
+  }
+
   function renderAll() {
     settings.listings = settings.listings || [];
     settings.followUps = settings.followUps || [];
     settings.videos = settings.videos || [];
+    settings.demoVideoUrls = settings.demoVideoUrls || [];
     fieldsToForm();
     renderListings();
     renderFollowUps();
     renderVideos();
+    renderDemoVideos();
   }
 
   /* ---------------- config URL ---------------- */
