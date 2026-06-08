@@ -3,7 +3,7 @@
 This is the **authoritative list** of every setting the web dashboard edits and the
 extension consumes. It is generated from `DEFAULTS` in `background.js` and the tab
 layout in `options.html`. The web editor (`docs/`) mirrors these tabs/fields exactly,
-stores them all in one **config JSON object**, and the `supabase/functions/config`
+stores them all in one **config JSON object**, and the `supabase/functions/subsell-config`
 endpoint serves that object to the extension.
 
 - The config JSON is the same shape as the extension's "Export config" output.

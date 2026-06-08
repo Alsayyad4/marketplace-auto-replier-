@@ -180,7 +180,7 @@
   /* ---------------- config URL ---------------- */
   function buildUrl() {
     const base = (window.SUBSELL_SUPABASE_URL || "").replace(/\/+$/, "");
-    $("configUrl").value = configKey ? `${base}/functions/v1/config?key=${configKey}` : "";
+    $("configUrl").value = configKey ? `${base}/functions/v1/subsell-config?key=${configKey}` : "";
   }
   $("copyUrl").addEventListener("click", async () => {
     const v = $("configUrl").value;

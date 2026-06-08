@@ -13,7 +13,7 @@ every computer.
 > Security), and a tiny **Edge Function** serves them at a per-user **config URL** you
 > paste into the extension's existing **Settings → General → Remote config URL** — so
 > **zero extension changes** are needed. Setup in `supabase/README.md` (SQL in
-> `supabase/schema.sql`, function in `supabase/functions/config/`, web UI in `docs/`); the
+> `supabase/schema.sql`, function in `supabase/functions/subsell-config/`, web UI in `docs/`); the
 > JSON contract is `SPEC-webapp.md`. Purely additive — the reply/video/follow-up logic is
 > untouched; on/off stays per-machine.
 >
@@ -106,7 +106,7 @@ every computer.
 | `options.html` / `options.js` | Tabbed settings (see below). Paste your web-app **config URL** in **General → Remote config URL** to pull settings from the cloud. |
 | `icon16/48/128.png` | Action + notification icons. |
 | `docs/` | The cloud **dashboard** — a static web app (`index.html`, `app.js`, `config.js`) deployed to GitHub Pages; sign in (Google/email) to edit settings and copy your config URL. |
-| `supabase/` | Backend: `schema.sql` (table + RLS + signup trigger), `functions/config/index.ts` (public config Edge Function), and `README.md` (deploy steps). |
+| `supabase/` | Backend: `schema.sql` (table + RLS + signup trigger), `functions/subsell-config/index.ts` (public config Edge Function), and `README.md` (deploy steps). |
 | `SPEC-webapp.md` | The config-JSON contract between the web app and the extension. |
 | `SETTINGS-REFERENCE.md` | Every tab/field the editor mirrors + types/defaults (from `DEFAULTS`). |
 
