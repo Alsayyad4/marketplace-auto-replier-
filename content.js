@@ -179,6 +179,15 @@
       .join("\n");
     return { buyerMessage: last.text, transcript };
   }
+  // Transcript regardless of who spoke last (used for smart follow-ups on quiet chats).
+  function fullTranscript() {
+    const convo = readConversation();
+    if (!convo.length) return null;
+    return convo
+      .slice(-12)
+      .map((m) => (m.role === "buyer" ? "Buyer: " : "You: ") + m.text)
+      .join("\n");
+  }
 
   /* ---------------- type + send (and VERIFY it sent) ---------------- */
   function composerText(el) {
@@ -429,6 +438,66 @@
     }
   }
 
+  // Smart follow-up on a quiet chat (WE spoke last). Gated by configurable quiet
+  // period + a per-chat count cap so it can never spam. Claude decides whether
+  // there's room (or returns [SKIP]). State per thread: { lastAt, count }.
+  async function maybeFollowUp(id, name) {
+    try {
+      const settings = (await ask({ type: "GET_SETTINGS" })).settings || {};
+      if (!settings.smartFollowupEnabled) return;
+      const maxCount = Number(settings.smartFollowupMaxCount) || 1;
+      const quietH = settings.smartFollowupQuietHours != null ? Number(settings.smartFollowupQuietHours) : 6;
+      const gapH = settings.smartFollowupGapHours != null ? Number(settings.smartFollowupGapHours) : 24;
+
+      const store = (await getLocal(["followUpState"])).followUpState || {};
+      const now = Date.now();
+      let st = store[id];
+      if (!st) {
+        // First time we notice this quiet chat — start the clock; don't message yet.
+        store[id] = { lastAt: now, count: 0 };
+        await setLocal({ followUpState: store });
+        return;
+      }
+      if ((st.count || 0) >= maxCount) return; // already followed up the max times
+      const thresholdMs = ((st.count || 0) === 0 ? quietH : gapH) * 3600 * 1000;
+      if (now - (st.lastAt || 0) < thresholdMs) return; // not quiet long enough yet
+
+      const transcript = fullTranscript();
+      if (!transcript) return;
+      const r = await ask({ type: "GET_FOLLOWUP", context: transcript, threadName: name });
+      if (!r || !r.ok) {
+        setStatus({ lastError: "follow-up: " + (r && r.error), currentThread: name });
+        return;
+      }
+      // Push the clock forward whether we send or skip, so we don't re-ask every cycle.
+      st.lastAt = now;
+      if (r.skip || !r.text || !r.text.trim()) {
+        store[id] = st;
+        await setLocal({ followUpState: store });
+        setStatus({ lastAction: "follow-up: no room (" + (r.reason || "skip") + ")", currentThread: name });
+        return;
+      }
+      const composer = findComposer();
+      if (!composer) return;
+      setStatus({ lastAction: "follow-up: sending…", currentThread: name });
+      const ok = await typeAndSend(composer, r.text);
+      if (ok) {
+        st.count = (st.count || 0) + 1;
+        store[id] = st;
+        await setLocal({ followUpState: store });
+        cooldowns[id] = Date.now() + COOLDOWN_MS;
+        setStatus({ lastAction: `follow-up sent ✓ (${st.count}/${maxCount})`, lastReplySent: trunc(r.text, 200), currentThread: name });
+        ask({ type: "LOG_EVENT", entry: { thread: name, action: "followup", reply: r.text } });
+      } else {
+        store[id] = st;
+        await setLocal({ followUpState: store });
+        setStatus({ lastError: "follow-up: typed but couldn't send" });
+      }
+    } catch (e) {
+      setStatus({ lastError: "follow-up error: " + e.message });
+    }
+  }
+
   /* ---------------- handle ONE conversation ---------------- */
   async function handleThread(anchor) {
     const id = threadId(anchor);
@@ -452,11 +521,12 @@
     const turn = buyerSpokeLast();
     if (!turn) {
       cooldowns[id] = Date.now() + IDLE_COOLDOWN_MS;
-      // You spoke last — nothing to reply to. But if this chat never received the
-      // demo video, send it now (once per chat, no delay), so quiet/older chats
-      // still get it instead of being skipped outright.
+      // You spoke last — nothing to reply to. But still: (1) send the demo video if
+      // this chat never got one, and (2) consider a smart, capped follow-up if the
+      // chat has been quiet long enough. Both are once/limited per chat — no spam.
       await maybeSendVideo(id, name, true);
-      setStatus({ lastAction: "skip — you spoke last (checked for missing video)", currentThread: name });
+      await maybeFollowUp(id, name);
+      setStatus({ lastAction: "skip — you spoke last (checked video + follow-up)", currentThread: name });
       return;
     }
     if (lastHandled[id] === turn.buyerMessage) {
@@ -502,6 +572,16 @@
     // Schedule a follow-up (background handles the timing). Re-armed on every
     // reply, so it only fires after the conversation has gone quiet. Fire-and-forget.
     ask({ type: "BOT_REPLIED", threadId: id });
+
+    // Buyer re-engaged and we replied — restart the smart follow-up clock + count
+    // for this chat (so follow-ups resume only after it goes quiet again).
+    try {
+      const fs = (await getLocal(["followUpState"])).followUpState || {};
+      fs[id] = { lastAt: Date.now(), count: 0 };
+      await setLocal({ followUpState: fs });
+    } catch (e) {
+      /* non-fatal */
+    }
 
     // After the text reply, send the demo video once per chat (optional, isolated).
     await maybeSendVideo(id, name);

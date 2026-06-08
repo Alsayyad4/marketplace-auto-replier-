@@ -204,6 +204,16 @@
 
         <!-- FOLLOWUPS -->
         <section id="followups" class="pane">
+          <h3 style="margin:6px 0;">Smart follow-up on quiet chats</h3>
+          <p class="hint">When a buyer goes quiet, the bot shows Claude the conversation and either writes <b>one short, tailored nudge</b> or skips it (no good reason). Capped per chat so it never spams. ⚠️ This is <b>proactive outbound</b> messaging — higher ban risk than replies; keep counts low and the quiet window generous.</p>
+          <label class="check"><input type="checkbox" id="smartFollowupEnabled" /> Enable smart follow-up</label>
+          <div class="inline">
+            <div><label>Max follow-ups per chat <span class="hint">e.g. 1 or 2</span></label><input type="number" id="smartFollowupMaxCount" min="0" max="5" /></div>
+            <div><label>Quiet hours before the 1st <span class="hint">wait this long after your last msg</span></label><input type="number" id="smartFollowupQuietHours" min="1" /></div>
+            <div><label>Hours between follow-ups <span class="hint">gap before the 2nd, 3rd…</span></label><input type="number" id="smartFollowupGapHours" min="1" /></div>
+          </div>
+          <hr />
+          <h3 style="margin:6px 0;">Simple timer follow-up <span class="hint">(fixed message; separate from smart — use one or the other)</span></h3>
           <div class="row"><button id="addFollowUp">+ Add follow-up</button></div>
           <table id="followupsTable">
             <thead><tr><th>Name</th><th>After (min)</th><th>Message</th><th>On</th><th></th></tr></thead>

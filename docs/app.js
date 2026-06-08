@@ -51,6 +51,10 @@
     videos: [],
     demoVideoUrls: [], // central demo videos (uploaded to Supabase Storage) [{name,url}]
     demoVideoDelaySec: 10,
+    smartFollowupEnabled: false,
+    smartFollowupMaxCount: 1,
+    smartFollowupQuietHours: 6,
+    smartFollowupGapHours: 24,
   };
 
   const VIDEO_BUCKET = "subsell-videos"; // Supabase Storage bucket for central demo videos
@@ -70,6 +74,8 @@
     ["businessInfo", "value"], ["instructions", "value"], ["examples", "value"],
     ["closerGoals", "value"], ["priceList", "value"], ["visitConfirmMessage", "value"],
     ["demoVideoDelaySec", "number"],
+    ["smartFollowupEnabled", "checked"], ["smartFollowupMaxCount", "number"],
+    ["smartFollowupQuietHours", "number"], ["smartFollowupGapHours", "number"],
   ];
 
   let settings = Object.assign({}, DEFAULTS); // working copy (preserves loaded advanced fields)

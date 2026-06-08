@@ -61,7 +61,14 @@ endpoint serves that object to the extension.
 
 ## Tab: Follow-ups
 
-`followUps` — array of rows. Each: `{ name, afterMinutes (number), message, enabled (bool) }`. After the bot replies it arms a timer; if the buyer stays quiet that long it sends `message` once.
+**Smart follow-up** (proactive; Claude decides per chat, capped so it never spams):
+- `smartFollowupEnabled` — bool (default `false`). Master on/off for proactive follow-ups on quiet chats.
+- `smartFollowupMaxCount` — number (default `1`). Max follow-ups per chat, total (e.g. 1 or 2).
+- `smartFollowupQuietHours` — number (default `6`). Hours a chat must be quiet before the **first** follow-up.
+- `smartFollowupGapHours` — number (default `24`). Hours between follow-ups (2nd, 3rd…).
+
+**Simple timer follow-up** (fixed message; separate feature — use one or the other):
+- `followUps` — array of `{ name, afterMinutes (number), message, enabled (bool) }`. After the bot replies it arms a timer; if the buyer stays quiet that long it sends `message` once.
 
 ## Tab: Videos
 

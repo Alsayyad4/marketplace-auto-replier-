@@ -72,6 +72,11 @@ const DEFAULTS = {
   // The extension downloads each and sends it as a NATIVE attachment, once per chat.
   demoVideoUrls: [], // [{ name, url }]
   demoVideoDelaySec: 10,
+  // smart follow-up on quiet chats (proactive — off by default; all knobs configurable)
+  smartFollowupEnabled: false, // master on/off for proactive follow-ups
+  smartFollowupMaxCount: 1, // how many follow-ups per chat, total (e.g. 1 or 2) — anti-spam cap
+  smartFollowupQuietHours: 6, // hours the chat must be quiet before the FIRST follow-up
+  smartFollowupGapHours: 24, // hours between follow-ups (for the 2nd, 3rd…)
 };
 
 const LOG = (...a) => console.log("[SubSell-BG]", ...a);
@@ -670,6 +675,53 @@ async function callClaude(settings, buyerMessage, extraContext) {
   }
 }
 
+/* ---------------- smart follow-up (proactive, quiet chats) ----------------
+ * Shows Claude a quiet conversation (we spoke last, buyer didn't reply) and asks
+ * for ONE short, non-pushy nudge — or [SKIP] if there's no genuine reason to
+ * follow up. The content script gates this by a configurable quiet period and a
+ * per-chat count cap, so it can never spam. */
+async function callClaudeFollowup(settings, context, threadName) {
+  if (!settings.apiKey) return { error: "No API key set." };
+  const body = {
+    model: settings.model || "claude-sonnet-4-6",
+    max_tokens: 512,
+    system: buildSystemPrompt(settings),
+    messages: [
+      {
+        role: "user",
+        content:
+          "FOLLOW-UP DECISION. This Marketplace chat has gone quiet — YOU (the seller) sent the last message and the buyer hasn't replied. " +
+          "Decide whether there is a genuine, non-pushy reason to send ONE short follow-up to re-engage them (e.g. they showed real interest, asked about a model, or a question was left open). " +
+          "If YES: reply with ONLY the follow-up message — short, casual, in the buyer's language, freshly worded (never reuse a previous line), no pressure, steer gently toward a call/visit. " +
+          "If there is NO good reason (they declined, said no, it's resolved, or another nudge would be spammy): reply with exactly [SKIP].\n\n" +
+          "Conversation so far (most recent last):\n" +
+          (context || ""),
+      },
+    ],
+  };
+  try {
+    const resp = await fetch("https://api.anthropic.com/v1/messages", {
+      method: "POST",
+      headers: {
+        "content-type": "application/json",
+        "x-api-key": settings.apiKey,
+        "anthropic-version": "2023-06-01",
+        "anthropic-dangerous-direct-browser-access": "true",
+      },
+      body: JSON.stringify(body),
+    });
+    if (!resp.ok) {
+      const t = await resp.text();
+      return { error: `Anthropic ${resp.status}: ${t.slice(0, 200)}` };
+    }
+    const data = await resp.json();
+    const text = (data.content || []).filter((b) => b.type === "text").map((b) => b.text).join("").trim();
+    return { text };
+  } catch (e) {
+    return { error: "Fetch failed: " + e.message };
+  }
+}
+
 /* ---------------- reply token parsing ---------------- */
 
 function parseReply(text) {
@@ -984,6 +1036,44 @@ chrome.runtime.onMessage.addListener((msg, _sender, sendResponse) => {
           await incrementCounters();
           await appendLog({ thread: msg.threadName, buyer: msg.buyerMessage, action: "text", reply: text });
           sendResponse({ ok: true, text });
+          break;
+        }
+        case "GET_FOLLOWUP": {
+          // Smart follow-up: gated by the same business-hours + rate-limit safety as
+          // a normal reply, then Claude decides ([SKIP] = no room). Anything that
+          // looks like a token (incl. [HUMAN]/[VIDEO]) is treated as "skip" — a
+          // follow-up only ever sends clean text.
+          const settings = await getSettings();
+          if (!settings.smartFollowupEnabled) {
+            sendResponse({ ok: true, skip: true, reason: "smart follow-up off" });
+            break;
+          }
+          if (!withinBusinessHours(settings)) {
+            sendResponse({ ok: true, skip: true, reason: "outside business hours" });
+            break;
+          }
+          const cf = rollWindows(await getCounters(), Date.now());
+          if (settings.hourlyCap && cf.hourCount >= settings.hourlyCap) {
+            sendResponse({ ok: true, skip: true, reason: "hourly cap reached" });
+            break;
+          }
+          if (settings.dailyCap && cf.dayCount >= settings.dailyCap) {
+            sendResponse({ ok: true, skip: true, reason: "daily cap reached" });
+            break;
+          }
+          const fr = await callClaudeFollowup(settings, msg.context, msg.threadName);
+          if (fr.error) {
+            sendResponse({ ok: false, error: fr.error });
+            break;
+          }
+          const ftext = (fr.text || "").trim();
+          if (!ftext || ftext.startsWith("[")) {
+            sendResponse({ ok: true, skip: true, reason: "no room to follow up" });
+            break;
+          }
+          await incrementCounters();
+          await appendLog({ thread: msg.threadName, buyer: "(quiet — follow-up)", action: "followup", reply: ftext });
+          sendResponse({ ok: true, text: ftext });
           break;
         }
         case "GET_VISITS": {
