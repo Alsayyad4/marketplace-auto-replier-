@@ -625,7 +625,11 @@ function buildSystemPrompt(settings) {
   lines.push("");
   lines.push("HOW TO READ THE INPUT: you are given the recent conversation and the buyer's latest message. Respond ONLY to what the buyer actually wrote. If their message is empty, a sticker/emoji only, a system line, or makes no sense, reply with a short friendly greeting that invites them to say what they're looking for — do NOT invent a topic, and never react to UI words like 'Privacy & support', 'Marketplace', or menu labels. If you are unsure what they meant, ask a brief clarifying question in their language.");
   lines.push("");
-  lines.push("Reply with the message text only (or one token). Keep it short and human, like a real seller texting on their phone — contractions, casual, sometimes a one-word answer. Never reuse the exact same opening sentence twice.");
+  lines.push("Keep it short and human, like a real seller texting on their phone — contractions, casual, sometimes a one-word answer. Never reuse the exact same opening sentence twice.");
+  lines.push("");
+  lines.push(
+    "CRITICAL — OUTPUT FORMAT: Output ONLY the exact text to send to the buyer (or a single token like [HUMAN]). Send NOTHING else — no reasoning, no preamble, no commentary about what the buyer 'really meant', no mention of 'UI prompts', 'quick-reply buttons', 'automated suggestion', or the buyer's name as a note, and never a '---' separator. The buyer sees your output VERBATIM, so if you wouldn't want them to read a line, do not write it. Begin directly with the first word of the message."
+  );
   return lines.join("\n");
 }
 
@@ -724,9 +728,23 @@ async function callClaudeFollowup(settings, context, threadName) {
 
 /* ---------------- reply token parsing ---------------- */
 
+// Safety net: a model sometimes prepends its reasoning and then a "---" before the
+// real reply (which would otherwise be sent to the buyer verbatim). If we see a
+// horizontal-rule separator and the text before it reads like reasoning, keep only
+// the part after the LAST separator.
+function stripReasoning(text) {
+  if (!text || text.indexOf("---") === -1) return text;
+  const parts = text.split(/\s*-{3,}\s*/);
+  if (parts.length < 2) return text;
+  const tail = parts[parts.length - 1].trim();
+  const head = parts.slice(0, -1).join(" ").toLowerCase();
+  const hints = /(repl|buyer|message|\bui\b|prompt|i'?ll|i will|real question|automated|quick-reply|marketplace|not actual)/;
+  return tail && hints.test(head) ? tail : text;
+}
+
 function parseReply(text) {
   if (!text) return { kind: "empty" };
-  text = text.trim();
+  text = stripReasoning(text.trim()).trim();
 
   // [VISIT:yes|no|maybe] is a silent prefix — capture it, strip it, then parse
   // whatever real reply follows (text or even a video).
