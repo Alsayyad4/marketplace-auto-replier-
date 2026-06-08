@@ -38,6 +38,22 @@
   const lastHandled = {}; // threadId -> the buyer message we last replied to (don't repeat)
   let tick = {}; // live status shown in the popup
 
+  // Texts WE recently sent — a hard guard so the bot never replies to its own
+  // message even if alignment detection ever slips (prevents self-reply spam).
+  const recentSent = [];
+  const normMsg = (s) => (s || "").toLowerCase().replace(/\s+/g, " ").trim();
+  function rememberSent(t) {
+    const m = normMsg(t);
+    if (!m) return;
+    recentSent.push(m);
+    if (recentSent.length > 20) recentSent.shift();
+  }
+  function isOwnEcho(msg) {
+    const m = normMsg(msg);
+    if (!m) return false;
+    return recentSent.some((s) => s === m || (m.length > 12 && (s.includes(m) || m.includes(s))));
+  }
+
   /* ---------------- popup status ---------------- */
   function setStatus(patch) {
     tick = Object.assign(
@@ -169,7 +185,14 @@
       const key = text + "@" + Math.round(r.top);
       if (seen.has(key)) continue;
       seen.add(key);
-      out.push({ role: cx > center ? "me" : "buyer", text, top: r.top });
+      // Role by WHICH SIDE the bubble is pushed to (robust to width). The old
+      // center test mis-read our own long/wide replies as the buyer's — a wide
+      // right-aligned bubble's center can fall left of middle — which caused the
+      // bot to reply to its own messages in a loop. Compare the side gaps instead:
+      // pushed right (bigger left gap) = us; pushed left (bigger right gap) = buyer.
+      const leftGap = r.left - left;
+      const rightGap = right - r.right;
+      out.push({ role: leftGap > rightGap ? "me" : "buyer", text, top: r.top });
     }
     out.sort((a, b) => a.top - b.top);
     return out;
@@ -512,6 +535,7 @@
       setStatus({ lastAction: "follow-up: sending…", currentThread: name });
       const ok = await typeAndSend(composer, r.text);
       if (ok) {
+        rememberSent(r.text); // so we never mistake our follow-up for a buyer message
         cooldowns[id] = Date.now() + COOLDOWN_MS;
         setStatus({ lastAction: `follow-up sent ✓ (${followupsDone + 1}/${maxCount})`, lastReplySent: trunc(r.text, 200), currentThread: name });
         ask({ type: "LOG_EVENT", entry: { thread: name, action: "followup", reply: r.text } });
@@ -567,6 +591,13 @@
       setStatus({ lastAction: "skip — you spoke last (checked video + follow-up)", currentThread: name });
       return;
     }
+    if (isOwnEcho(turn.buyerMessage)) {
+      // The "last message" is actually OUR OWN (alignment mis-read) — never reply to
+      // ourselves. Hard stop against self-reply spam.
+      cooldowns[id] = Date.now() + IDLE_COOLDOWN_MS;
+      setStatus({ lastAction: "skip — that last message was ours, not the buyer", currentThread: name });
+      return;
+    }
     if (lastHandled[id] === turn.buyerMessage) {
       setStatus({ lastAction: "skip — already replied to this message", currentThread: name });
       return;
@@ -603,6 +634,7 @@
       setStatus({ lastError: "typed the reply but couldn't send it" });
       return;
     }
+    rememberSent(reply.text); // so we never mistake this for a buyer message later
     lastHandled[id] = turn.buyerMessage;
     cooldowns[id] = Date.now() + COOLDOWN_MS;
     setStatus({ lastAction: "replied ✓", lastReplySent: trunc(reply.text, 200), currentThread: name });
