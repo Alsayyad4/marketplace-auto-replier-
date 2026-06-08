@@ -203,6 +203,14 @@
 
       <!-- FOLLOWUPS -->
       <section id="followups">
+        <label class="check"><input type="checkbox" id="smartFollowupEnabled" /> Smart follow-up on quiet chats <span class="hint">when a buyer goes quiet, Claude writes ONE short tailored nudge or skips — capped so it never spams. ⚠️ proactive outbound = higher ban risk; keep counts low.</span></label>
+        <div class="inline">
+          <div><label>Max follow-ups per chat <span class="hint">e.g. 1 or 2</span></label><input type="number" id="smartFollowupMaxCount" min="0" max="5" /></div>
+          <div><label>Quiet hours before the 1st</label><input type="number" id="smartFollowupQuietHours" min="1" /></div>
+          <div><label>Hours between follow-ups</label><input type="number" id="smartFollowupGapHours" min="1" /></div>
+        </div>
+        <hr />
+        <label>Simple timer follow-up <span class="hint">fixed message; separate from smart — use one or the other</span></label>
         <div class="row"><button id="addFollowUp">+ Add follow-up</button></div>
         <table id="followupsTable">
           <thead><tr><th>Name</th><th>After (min)</th><th>Message</th><th>On</th><th></th></tr></thead>
@@ -212,6 +220,11 @@
 
       <!-- VIDEOS -->
       <section id="videos">
+        <label>☁️ Central demo videos <span class="hint">uploaded in the web app (Videos tab) and synced here. Sent as a native attachment, once per chat. Upload/remove them in the web app.</span></label>
+        <div id="centralVideoList" class="hint">None set in the web app.</div>
+        <div><label>Send central video(s) this many seconds after the reply</label><input type="number" id="demoVideoDelaySec" min="0" max="120" /></div>
+        <hr />
+        <label>Video URL library <span class="hint">reference list only (not auto-sent)</span></label>
         <div class="row"><button id="addVideo">+ Add video</button></div>
         <table id="videosTable">
           <thead><tr><th>Name</th><th>URL</th><th>Notes</th><th></th></tr></thead>

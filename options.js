@@ -47,6 +47,12 @@
     listings: [],
     followUps: [],
     videos: [],
+    demoVideoUrls: [],
+    demoVideoDelaySec: 10,
+    smartFollowupEnabled: false,
+    smartFollowupMaxCount: 1,
+    smartFollowupQuietHours: 6,
+    smartFollowupGapHours: 24,
   };
 
   let settings = Object.assign({}, DEFAULTS);
@@ -98,6 +104,11 @@
     ["warmupEnabled", "checked"],
     ["warmupDays", "number"],
     ["warmupStartCap", "number"],
+    ["smartFollowupEnabled", "checked"],
+    ["smartFollowupMaxCount", "number"],
+    ["smartFollowupQuietHours", "number"],
+    ["smartFollowupGapHours", "number"],
+    ["demoVideoDelaySec", "number"],
   ];
 
   function fieldsToForm() {
@@ -199,6 +210,26 @@
       [{ key: "name" }, { key: "url" }, { key: "notes", type: "textarea" }],
       renderVideos
     );
+  }
+  // Read-only list of central demo videos (uploaded/removed in the web app).
+  function renderCentralVideos() {
+    const el = $("centralVideoList");
+    if (!el) return;
+    const vids = Array.isArray(settings.demoVideoUrls) ? settings.demoVideoUrls : [];
+    if (!vids.length) {
+      el.textContent = "None set in the web app.";
+      return;
+    }
+    el.innerHTML = "";
+    vids.forEach((v, i) => {
+      const row = document.createElement("div");
+      const a = document.createElement("a");
+      a.href = v.url;
+      a.target = "_blank";
+      a.textContent = `${i + 1}. ${v.name || "video"}`;
+      row.appendChild(a);
+      el.appendChild(row);
+    });
   }
 
   $("addListing").addEventListener("click", () => {
@@ -575,6 +606,7 @@
       renderListings();
       renderFollowUps();
       renderVideos();
+      renderCentralVideos();
     });
   }
 
