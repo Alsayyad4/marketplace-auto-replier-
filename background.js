@@ -480,6 +480,44 @@ async function callClaude(settings, buyerMessage, extraContext) {
   }
 }
 
+// Like callClaude but sends a custom user message verbatim (no "Buyer's latest
+// message:" wrapper). Used by the SMART follow-up so we can give Claude the whole
+// conversation + an instruction to write a contextual nudge.
+async function callClaudeRaw(settings, userText) {
+  if (!settings.apiKey) return { error: "No API key set." };
+  const body = {
+    model: settings.model || "claude-sonnet-4-6",
+    max_tokens: 1024,
+    system: buildSystemPrompt(settings),
+    messages: [{ role: "user", content: userText }],
+  };
+  try {
+    const resp = await fetch("https://api.anthropic.com/v1/messages", {
+      method: "POST",
+      headers: {
+        "content-type": "application/json",
+        "x-api-key": settings.apiKey,
+        "anthropic-version": "2023-06-01",
+        "anthropic-dangerous-direct-browser-access": "true",
+      },
+      body: JSON.stringify(body),
+    });
+    if (!resp.ok) {
+      const t = await resp.text();
+      return { error: `Anthropic ${resp.status}: ${t.slice(0, 300)}` };
+    }
+    const data = await resp.json();
+    const text = (data.content || [])
+      .filter((b) => b.type === "text")
+      .map((b) => b.text)
+      .join("")
+      .trim();
+    return { text };
+  } catch (e) {
+    return { error: "Fetch failed: " + e.message };
+  }
+}
+
 /* ---------------- reply token parsing ---------------- */
 
 function parseReply(text) {
@@ -629,7 +667,7 @@ chrome.alarms.onAlarm.addListener(async (alarm) => {
   }
   chrome.tabs.sendMessage(
     tab.id,
-    { type: "SEND_FOLLOWUP", threadId, text: f.message },
+    { type: "SEND_FOLLOWUP", threadId, text: f.message, smart: f.smart !== false },
     () => {
       if (chrome.runtime.lastError) LOG("follow-up send error", chrome.runtime.lastError.message);
     }
@@ -790,6 +828,39 @@ chrome.runtime.onMessage.addListener((msg, _sender, sendResponse) => {
         case "BOT_REPLIED": {
           await scheduleFollowUps(msg.threadId);
           sendResponse({ ok: true });
+          break;
+        }
+        case "GET_FOLLOWUP_REPLY": {
+          // SMART follow-up: read the conversation and write a contextual nudge,
+          // instead of a canned line. (content.js sends the transcript + the
+          // follow-up's message as a style/intent hint.)
+          const settings = await getSettings();
+          const prompt =
+            "This buyer messaged you earlier and then went QUIET (no reply from them for a while). " +
+            "Here is the conversation so far (most recent last):\n" +
+            (msg.transcript && msg.transcript.trim() ? msg.transcript : "(no visible messages)") +
+            "\n\nWrite ONE short, friendly FOLLOW-UP to gently re-engage them and move toward a call or a visit to the shop. " +
+            "Make it natural and clearly DIFFERENT from anything already said above — do not repeat earlier lines. Keep it to 1–2 sentences, in the buyer's language. " +
+            (msg.intent ? 'Use this as a style/intent hint (don\'t copy it word for word): "' + msg.intent + '". ' : "") +
+            "Reply with ONLY the message text — no labels, no quotes.";
+          const result = await callClaudeRaw(settings, prompt);
+          if (result.error) {
+            sendResponse({ ok: false, error: result.error });
+            break;
+          }
+          const parsed = parseReply(result.text);
+          if (parsed.kind === "human") {
+            sendResponse({ ok: false, skip: true, reason: parsed.reason });
+            break;
+          }
+          const text = parsed.kind === "video" ? parsed.caption || "" : parsed.text;
+          if (!text || !text.trim()) {
+            sendResponse({ ok: false, error: "empty follow-up" });
+            break;
+          }
+          await incrementCounters();
+          await appendLog({ thread: msg.threadName, buyer: "(went quiet)", action: "follow-up", reply: text });
+          sendResponse({ ok: true, text });
           break;
         }
         case "BUYER_REPLIED": {

@@ -179,6 +179,16 @@
       .join("\n");
     return { buyerMessage: last.text, transcript };
   }
+  // The whole conversation as a labeled string (regardless of who spoke last) —
+  // used by the SMART follow-up so Claude can write something contextual.
+  function getTranscript() {
+    const convo = readConversation();
+    if (!convo.length) return "";
+    return convo
+      .slice(-12)
+      .map((m) => (m.role === "buyer" ? "Buyer: " : "You: ") + m.text)
+      .join("\n");
+  }
 
   /* ---------------- type + send (and VERIFY it sent) ---------------- */
   function composerText(el) {
@@ -512,8 +522,20 @@
             setStatus({ lastAction: "follow-up skipped — buyer already active", currentThread: anchorName(anchor) });
             return send({ ok: true, skipped: true });
           }
-          const ok = await typeAndSend(composer, msg.text);
-          setStatus({ lastAction: ok ? "follow-up sent ✓" : "follow-up failed", currentThread: anchorName(anchor) });
+          // SMART follow-up: read the conversation and write a contextual nudge.
+          // Falls back to the fixed message if vision/AI fails or smart is off.
+          let text = msg.text;
+          if (msg.smart !== false) {
+            setStatus({ lastAction: "writing smart follow-up…", currentThread: anchorName(anchor) });
+            const r = await ask({ type: "GET_FOLLOWUP_REPLY", transcript: getTranscript(), intent: msg.text, threadName: anchorName(anchor) });
+            if (r && r.ok && r.text && r.text.trim()) text = r.text;
+          }
+          if (!text || !text.trim()) {
+            setStatus({ lastAction: "follow-up skipped — nothing to send", currentThread: anchorName(anchor) });
+            return send({ ok: false });
+          }
+          const ok = await typeAndSend(composer, text);
+          setStatus({ lastAction: ok ? "follow-up sent ✓" : "follow-up failed", lastReplySent: trunc(text, 200), currentThread: anchorName(anchor) });
           send({ ok });
         } catch (e) {
           send({ ok: false, error: e.message });
