@@ -518,7 +518,20 @@
     }
     await sleep(700); // let the last bubbles settle
 
-    const turn = buyerSpokeLast();
+    // Wait for the thread's messages to actually render before reading them. On slow
+    // loads / Remote Desktop the message list can lag behind the URL change, so a
+    // naive read would grab the PREVIOUS chat and reply with the wrong context
+    // ("answering the wrong person"). Require two identical reads in a row = settled.
+    let turn = buyerSpokeLast();
+    let prevSig = turn ? turn.transcript : "(you-last)";
+    for (let i = 0; i < 5; i++) {
+      await sleep(600);
+      const t = buyerSpokeLast();
+      const sig = t ? t.transcript : "(you-last)";
+      turn = t;
+      if (sig === prevSig) break; // stable → safe to act
+      prevSig = sig;
+    }
     if (!turn) {
       cooldowns[id] = Date.now() + IDLE_COOLDOWN_MS;
       // You spoke last — nothing to reply to. But still: (1) send the demo video if
