@@ -637,16 +637,21 @@
 
       const now = Date.now();
       const done = cfg.videoSentThreads || {};
-      const isDone = (v) => v === true || (v && v.done); // tolerate the old `true` value
 
-      // (1) CONFIRMED already sent — durable flag OR a video is visibly in the chat
-      // (inside a real message row). Ground truth → never resend.
-      if (isDone(done[id]) || chatAlreadyHasOurVideo()) {
-        if (!isDone(done[id])) {
-          done[id] = { done: true, at: now };
-          await setLocal({ videoSentThreads: done });
-        }
+      // (1) CONFIRMED sent → never resend. Only the NEW {done:true} is authoritative.
+      if (done[id] && done[id].done) return;
+      // A video is visibly in the chat (real message row) → it's sent; mark + stop.
+      if (chatAlreadyHasOurVideo()) {
+        done[id] = { done: true, at: now };
+        await setLocal({ videoSentThreads: done });
         return;
+      }
+      // A leftover OLD boolean `true` mark with NO actual video in the chat was a
+      // premature "marked up-front" mark from the old bug — clear it so this chat
+      // (the backlog that never got its video) gets it now.
+      if (done[id] === true) {
+        delete done[id];
+        await setLocal({ videoSentThreads: done });
       }
       // (2) Backoff / give-up so a chat whose upload keeps failing isn't retried forever.
       const att0 = (cfg.videoAttempts || {})[id] || null;
