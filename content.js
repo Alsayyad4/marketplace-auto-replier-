@@ -469,6 +469,31 @@
     }
     return true;
   }
+  // Belt-and-suspenders: does THIS open chat already show a video on our side?
+  // A sent video renders with a duration badge like "0:16". If the persistent
+  // "already sent" flag is ever lost, this still stops us re-sending.
+  function chatAlreadyHasOurVideo() {
+    const main = getMain();
+    const composer = findComposer();
+    if (!main || !composer) return false;
+    const top = safe(() => composer.getBoundingClientRect().top, 0);
+    const half = window.innerWidth * 0.5;
+    const nodes = safe(() => Array.from(main.querySelectorAll('[dir="auto"]')), []);
+    for (const n of nodes) {
+      const t = safe(() => (n.innerText || "").trim(), "");
+      if (!/^\d{1,2}:\d{2}$/.test(t)) continue; // a video duration badge
+      const r = safe(() => n.getBoundingClientRect(), null);
+      if (!r || r.top >= top) continue; // in the message area, above the composer
+      if (looksLikeOurBubble(n) || r.left > half) return true; // ours (right side)
+    }
+    const vids = safe(() => Array.from(main.querySelectorAll("video")), []);
+    for (const v of vids) {
+      const r = safe(() => v.getBoundingClientRect(), null);
+      if (r && r.left > half) return true;
+    }
+    return false;
+  }
+
   // Send the stored demo video(s) to the current chat — ONCE per chat, a set delay
   // after the text reply (default 10s). Supports MULTIPLE videos, sent in order.
   async function maybeSendVideo(id, name, immediate) {
@@ -498,7 +523,15 @@
       if (!local.length && !central.length) return;
 
       const sent = cfg.videoSentThreads || {};
-      if (sent[id]) return; // already sent in this conversation
+      // Already sent? Either the persistent per-chat flag, OR a video is already
+      // visible in this thread on our side (covers the flag ever being lost).
+      if (sent[id] || chatAlreadyHasOurVideo()) {
+        if (!sent[id]) {
+          sent[id] = true;
+          await setLocal({ videoSentThreads: sent });
+        }
+        return;
+      }
       // Mark as sent NOW — BEFORE the delay/upload. The upload is best-effort and can
       // be flaky; marking up-front guarantees exactly ONE attempt per chat so a failed
       // or slow upload can never make us re-send the video on the next pass.
