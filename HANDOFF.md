@@ -35,19 +35,26 @@ computer/Facebook account.
 
 ## Bugs already fixed (do NOT regress these)
 - **Reply leaked the model's reasoning** ("…her real question was… ---") → strong CRITICAL output rule in `buildSystemPrompt` + `stripReasoning()` safety net in `parseReply`.
-- **Replied to its own messages (self-reply spam)** → role detection now uses which side the bubble is pushed to (`leftGap`/`rightGap`), not the bubble center (wide bubbles broke center). Plus a `recentSent`/`isOwnEcho` guard: never reply to a "last message" we just sent.
-- **Duplicate/garbled sends** → `typeAndSend` clears the box first and **bails (won't send) unless the box exactly matches** the intended text.
-- **Follow-up spam** → smart follow-up cap is read live from the conversation: count consecutive trailing "me" messages; `followupsDone = botTail - 1`; stop when `>= smartFollowupMaxCount` (max=1 ⇒ never more than 2 of our messages in a row). Per-chat, plus quiet-time gate.
-- **Replied to Facebook system lines** → `isNoise()` filters "you can now rate", "X is waiting for your response", "automated suggestion", "add video to listing / update listing", "sent you a message", etc.
-- **Re-sent the demo video** → `maybeSendVideo` marks the chat "sent" UP FRONT (before the flaky upload), so it never re-sends.
-- **Clicked the mic** → `clickSend` skips voice/clip/mic-labelled buttons.
-- **Wrong-thread context on slow loads / Remote Desktop** → `handleThread` waits for two identical transcript reads before acting.
+- **Replied to its own messages (self-reply spam)** → `looksLikeOurBubble()` is now **tri-state**: `true` (blue/gradient bubble = ours) / `false` (neutral-gray = the buyer's) / `null` (unknown). In `readConversation` pass 2: `isOwnEcho || true ⇒ "me"`, `false ⇒ "buyer"`, `null ⇒` geometry only if it CLEARLY hugs the left, **else "me" (stay silent)**. The core rule: **a message is the buyer's only with positive evidence; ambiguity is treated as ours so the bot can never reply to itself.** Theme-agnostic (works in dark mode).
+- **Self-reply / re-reply survives reloads** → `recentSent`, `cooldowns`, `lastHandled` are **persisted to chrome.storage.local** and hydrated at boot (`persistDedup()`), so a content-script reload no longer re-arms those bugs.
+- **Duplicate/garbled sends** → `typeAndSend` inserts the whole message once, compares with an **invisible-char-tolerant** normalizer (so a correct long reply isn't falsely rejected and silently dropped), **sends once**, waits 5 s, and **only escalates to the Send button if the box still holds exactly our text** — never blind-resends. `pressEnter` = keydown only, `shiftKey:false`. `clickSend` only clicks a real Send control (never mic/like/sticker; EN+FR labels).
+- **Follow-up spam** → smart follow-up cap is read live (`botTailCount`); `followupsDone = botTail - 1`; stop when `>= smartFollowupMaxCount`. The **`SEND_FOLLOWUP` alarm path now enforces the same cap + `rememberSent` + cooldown** (previously it bypassed the cap — could post a 3rd consecutive bot message).
+- **Replied to Facebook system lines** → `isNoise()` filters EN **and FR** system lines (e.g. "attend votre réponse", "suggestion automatisée", "vous a envoyé un"); short tokens use `NOISE_EXACT` (exact match) so real buyer messages like "Sent it yet?" aren't dropped. Quick-reply preset buttons are skipped structurally via `[role="button"]`.
+- **Re-sent the demo video** → `maybeSendVideo` uses an **atomic claim** (write `videoSentThreads[id]`, re-read, verify we own it) so two passes/tabs can't both send; `chatAlreadyHasOurVideo()` tests side vs the **composer-column midpoint** (panel-proof, not window center); `injectVideo` only presses Enter when a preview actually attached and **confirms by preview-detach**.
+- **Clicked the mic** → `clickSend` skips voice/clip/mic AND like/sticker/gif buttons.
+- **Re-entrancy** → `scan()` sets `busy=true` synchronously before any `await` (no check/set gap).
+- **Wrong-thread context on slow loads** → `handleThread` waits for two identical transcript reads before acting.
 
 ## Gotchas
-- Messenger uses a **Lexical** contenteditable; `execCommand` insert/delete works but is finicky — hence the "clear + verify exact match or bail" pattern in `typeAndSend`.
-- Role/alignment is geometric and can break on layout/zoom changes — if self-replies return, revisit `readConversation()`.
+- Messenger uses a **Lexical** contenteditable; `execCommand` insert/delete works but is finicky — hence the "insert once + invisible-tolerant verify + send once" pattern.
+- Sender detection is now **color-first** (blue/gradient = us, gray = buyer) with geometry only as a last resort and **bias-to-silence on ambiguity**. If self-replies ever return, the color thresholds in `looksLikeOurBubble` likely need tuning to the current Messenger theme (log a known own-bubble and buyer-bubble `getComputedStyle().backgroundColor`/`backgroundImage`).
 - The operator runs on a **Chrome Remote Desktop** (laggy) with **one Chrome profile per Facebook account**.
-- `enabled` (on/off), the local mp4 upload, rate-limit counters, logs, and `followUpState`/`videoSentThreads` are **per-machine** (chrome.storage.local), not synced.
+- `enabled` (on/off), the local mp4 upload, rate-limit counters, logs are **per-machine**; `cooldowns`/`lastHandled`/`recentSent`/`videoSentThreads`/`followUpState` are persisted per-machine (keyed by threadId).
+
+## Deferred / known remaining (from the 3-agent audit, not yet implemented)
+- **Cross-tab lease lock (audit 3, finding 1.1):** `busy` is per-tab; if the operator opens **two Messenger tabs in one profile**, both could process the same chat and double-send. Persisted `cooldowns` + the atomic video claim reduce this, but a real per-thread lease lock in `chrome.storage.local` (acquire/verify/release around `handleThread`) is the full fix. Low likelihood for this operator (one tab/profile).
+- **Avatar/attribution as the positive buyer signal (audit 1, finding 6):** color is the current positive buyer signal; the buyer's row-start avatar / "· Buyer" attribution would be even more robust but the exact selectors must be verified against the live messenger.com build (FB obfuscates classes).
+- **`FETCH_VIDEO` base64 over messaging (audit 2, D2):** large mp4s are base64'd through `chrome.runtime` messaging; size-cap or switch to blob-URL for big files.
 
 ## Build / test / ship
 - No bundler. Validate: `node --check background.js content.js options.js popup.js docs/app.js`.
