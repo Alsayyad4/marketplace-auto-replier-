@@ -165,17 +165,49 @@
     return NOISE.some((n) => t === n || t.startsWith(n));
   }
 
+  // Is this text node inside OUR (seller) message bubble? Facebook paints the
+  // SELLER's bubbles blue / a blue-purple gradient and the BUYER's a neutral gray.
+  // Color is far more reliable than geometry (immune to window width, the right
+  // panel being open, wide bubbles, zoom, Remote-Desktop lag). We only ever use
+  // this to declare "me" — it never declares "buyer" — so it can only PREVENT the
+  // bot from replying to its own message, never cause a new misread.
+  function looksLikeOurBubble(el) {
+    let node = el;
+    for (let i = 0; i < 9 && node && node.nodeType === 1; i++) {
+      const cs = safe(() => getComputedStyle(node), null);
+      if (cs) {
+        const radius = Math.max(
+          parseFloat(cs.borderTopLeftRadius) || 0,
+          parseFloat(cs.borderTopRightRadius) || 0,
+          parseFloat(cs.borderBottomLeftRadius) || 0,
+          parseFloat(cs.borderBottomRightRadius) || 0
+        );
+        if (radius >= 8) {
+          // This is the rounded message bubble. Decide from its paint.
+          if (/gradient/i.test(cs.backgroundImage || "")) return true; // our outgoing bubble is a gradient
+          const m = (cs.backgroundColor || "").match(/rgba?\(\s*([\d.]+)\s*,\s*([\d.]+)\s*,\s*([\d.]+)\s*(?:,\s*([\d.]+))?/);
+          if (m) {
+            const r = +m[1], g = +m[2], b = +m[3], a = m[4] == null ? 1 : +m[4];
+            if (a >= 0.5 && b >= 140 && b > r + 35 && b > g + 25) return true; // clearly blue → us
+          }
+          return false; // found the bubble and it's gray/other → not ours (buyer)
+        }
+      }
+      node = node.parentElement;
+    }
+    return false;
+  }
+
   // Returns the conversation as [{ role:"buyer"|"me", text }] oldest→newest, or [].
   function readConversation() {
     const main = getMain();
     const composer = findComposer();
     if (!main || !composer) return []; // not a loaded thread → read nothing
     const c = composer.getBoundingClientRect();
-    const left = c.left;
-    const right = c.right;
-    const center = (c.left + c.right) / 2;
-    const top = c.top; // messages live above the input box
-    const out = [];
+    const cLeft = c.left, cRight = c.right, top = c.top; // messages live above the input
+
+    // Pass 1 — collect candidate message text nodes (filtered) with their rects.
+    const cands = [];
     const seen = new Set();
     let nodes = safe(() => Array.from(main.querySelectorAll('[role="row"] [dir="auto"]')), []);
     if (!nodes.length) nodes = safe(() => Array.from(main.querySelectorAll('[dir="auto"]')), []);
@@ -187,21 +219,31 @@
       const r = safe(() => el.getBoundingClientRect(), null);
       if (!r || r.width <= 0 || r.height <= 0) continue;
       const cx = r.left + r.width / 2;
-      if (cx < left - 40 || cx > right + 40) continue; // inside the message column only
+      if (cx < cLeft - 60 || cx > cRight + 60) continue; // roughly the message column
       if (r.top >= top) continue; // above the composer only
       const key = text + "@" + Math.round(r.top);
       if (seen.has(key)) continue;
       seen.add(key);
-      // Role by WHICH SIDE the bubble is pushed to (robust to width). The old
-      // center test mis-read our own long/wide replies as the buyer's — a wide
-      // right-aligned bubble's center can fall left of middle — which caused the
-      // bot to reply to its own messages in a loop. Compare the side gaps instead:
-      // pushed right (bigger left gap) = us; pushed left (bigger right gap) = buyer.
-      const leftGap = r.left - left;
-      const rightGap = right - r.right;
-      // Our OWN recently-sent text is always "me" (never read it back as the buyer's);
-      // otherwise classify by which side the bubble is pushed to (robust to width).
-      out.push({ role: isOwnEcho(text) ? "me" : leftGap > rightGap ? "me" : "buyer", text, top: r.top });
+      cands.push({ el, text, r });
+    }
+    if (!cands.length) return [];
+
+    // The real message column = the span of the bubbles themselves. Self-calibrating,
+    // so role detection no longer depends on the composer's exact width/position.
+    let colLeft = Infinity, colRight = -Infinity;
+    for (const k of cands) {
+      if (k.r.left < colLeft) colLeft = k.r.left;
+      if (k.r.right > colRight) colRight = k.r.right;
+    }
+
+    // Pass 2 — classify each bubble. Priority: our own recent text → "me"; our bubble
+    // color → "me"; else alignment within the self-calibrated column.
+    const out = [];
+    for (const { el, text, r } of cands) {
+      let role;
+      if (isOwnEcho(text) || looksLikeOurBubble(el)) role = "me";
+      else role = (r.left - colLeft) > (colRight - r.right) ? "me" : "buyer";
+      out.push({ role, text, top: r.top });
     }
     out.sort((a, b) => a.top - b.top);
     return out;
