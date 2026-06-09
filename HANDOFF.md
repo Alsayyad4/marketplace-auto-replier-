@@ -43,6 +43,7 @@ computer/Facebook account.
 - **Re-sent the demo video** → `maybeSendVideo` uses an **atomic claim** (write `videoSentThreads[id]`, re-read, verify we own it) so two passes/tabs can't both send; `chatAlreadyHasOurVideo()` tests side vs the **composer-column midpoint** (panel-proof, not window center); `injectVideo` only presses Enter when a preview actually attached and **confirms by preview-detach**.
 - **Clicked the mic** → `clickSend` skips voice/clip/mic AND like/sticker/gif buttons.
 - **Re-entrancy** → `scan()` sets `busy=true` synchronously before any `await` (no check/set gap).
+- **Cross-tab double-send** → a per-threadId **storage lease** (`acquireThreadLock`/`releaseThreadLock`, `threadLocks` in chrome.storage.local, last-writer-wins + `LOCK_MS` stale timeout, `TAB_UID` per instance) wraps `handleThread` and the `SEND_FOLLOWUP` handler, so two Messenger tabs in one profile can't process the same chat at once.
 - **Wrong-thread context on slow loads** → `handleThread` waits for two identical transcript reads before acting.
 
 ## Gotchas
@@ -52,7 +53,6 @@ computer/Facebook account.
 - `enabled` (on/off), the local mp4 upload, rate-limit counters, logs are **per-machine**; `cooldowns`/`lastHandled`/`recentSent`/`videoSentThreads`/`followUpState` are persisted per-machine (keyed by threadId).
 
 ## Deferred / known remaining (from the 3-agent audit, not yet implemented)
-- **Cross-tab lease lock (audit 3, finding 1.1):** `busy` is per-tab; if the operator opens **two Messenger tabs in one profile**, both could process the same chat and double-send. Persisted `cooldowns` + the atomic video claim reduce this, but a real per-thread lease lock in `chrome.storage.local` (acquire/verify/release around `handleThread`) is the full fix. Low likelihood for this operator (one tab/profile).
 - **Avatar/attribution as the positive buyer signal (audit 1, finding 6):** color is the current positive buyer signal; the buyer's row-start avatar / "· Buyer" attribution would be even more robust but the exact selectors must be verified against the live messenger.com build (FB obfuscates classes).
 - **`FETCH_VIDEO` base64 over messaging (audit 2, D2):** large mp4s are base64'd through `chrome.runtime` messaging; size-cap or switch to blob-URL for big files.
 

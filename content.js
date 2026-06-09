@@ -72,6 +72,35 @@
     return recentSent.some((s) => s === m || (m.length > 12 && (s.includes(m) || m.includes(s))));
   }
 
+  // Cross-tab single-flight: if the operator has >1 Messenger tab open in the SAME
+  // Chrome profile, both run their own scan loop and would otherwise grab the same
+  // chat and double-reply/double-video. A short storage "lease" per threadId — with
+  // last-writer-wins verification and a stale timeout — ensures only one tab acts on
+  // a given thread at a time. Degrades safely: a failed acquire just skips (no spam).
+  const TAB_UID = safe(
+    () => (crypto.randomUUID ? crypto.randomUUID() : String(Math.random()).slice(2)),
+    String(Date.now()) + ":" + Math.random()
+  );
+  const LOCK_MS = 120000; // a lease older than this is considered stale (crashed tab)
+  async function acquireThreadLock(id) {
+    const now = Date.now();
+    const locks = (await getLocal(["threadLocks"])).threadLocks || {};
+    const cur = locks[id];
+    if (cur && cur.tab !== TAB_UID && now - (cur.at || 0) < LOCK_MS) return false; // another tab holds a fresh lease
+    locks[id] = { at: now, tab: TAB_UID };
+    for (const k of Object.keys(locks)) if (now - (locks[k].at || 0) > LOCK_MS) delete locks[k]; // prune stale
+    await setLocal({ threadLocks: locks });
+    const after = (await getLocal(["threadLocks"])).threadLocks || {};
+    return !!(after[id] && after[id].tab === TAB_UID); // confirm we actually won the race
+  }
+  async function releaseThreadLock(id) {
+    const locks = (await getLocal(["threadLocks"])).threadLocks || {};
+    if (locks[id] && locks[id].tab === TAB_UID) {
+      delete locks[id];
+      await setLocal({ threadLocks: locks });
+    }
+  }
+
   /* ---------------- popup status ---------------- */
   function setStatus(patch) {
     tick = Object.assign(
@@ -856,7 +885,18 @@
         return !cooldowns[id] || Date.now() > cooldowns[id];
       });
       if (!target) return;
-      await handleThread(target);
+      // Cross-tab lease so a second Messenger tab in this profile can't process the
+      // same chat at the same time (double-reply / double-video).
+      const tid = threadId(target);
+      if (!(await acquireThreadLock(tid))) {
+        setStatus({ lastAction: "skip — another tab/window is handling this chat", currentThread: anchorName(target) });
+        return;
+      }
+      try {
+        await handleThread(target);
+      } finally {
+        await releaseThreadLock(tid);
+      }
     } catch (e) {
       setStatus({ lastError: "error: " + e.message });
     } finally {
@@ -883,6 +923,10 @@
         const anchor = conversationAnchors().find((a) => threadId(a) === msg.threadId);
         if (!anchor) return send({ ok: false, error: "thread not found" });
         busy = true;
+        if (!(await acquireThreadLock(msg.threadId))) {
+          busy = false;
+          return send({ ok: false, error: "another tab is handling this chat" });
+        }
         try {
           safe(() => anchor.click());
           await sleep(2200);
@@ -913,6 +957,7 @@
         } catch (e) {
           send({ ok: false, error: e.message });
         } finally {
+          await releaseThreadLock(msg.threadId);
           busy = false;
         }
       })();
