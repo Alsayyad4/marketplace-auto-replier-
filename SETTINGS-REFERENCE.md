@@ -71,9 +71,16 @@ endpoint serves that object to the extension.
 
 These live in each computer's local storage and are **not** in the config JSON:
 - `enabled` — on/off toggle per machine.
-- `videoEnabled` (bool), `videoDelaySec` (number, default 10), `demoVideos` (uploaded
-  mp4 files as base64) — the actual demo video is uploaded per machine (too big to serve
-  as JSON). The **Videos** tab above syncs video *URLs* only.
+- `videoEnabled` (bool), `videoDelaySec` (number, default 10), `videoGapSec` (number,
+  default 8 — seconds to wait between videos when more than one is set), `demoVideos`
+  (uploaded mp4 files as base64) — the actual demo video is uploaded per machine (too big
+  to serve as JSON). The **Videos** tab above syncs video *URLs* only. Each video is sent
+  at most **once per conversation** (an atomic per-thread claim in the background guards
+  against reloads and multiple tabs double-sending).
+
+`maxRepliesPerConvo` / `convoCapBehavior` are **enforced** in the reply pipeline: once a
+chat reaches the cap the bot goes quiet (`stop`) or pings you once (`notify`), even if the
+buyer keeps asking questions. The count is persisted per thread.
 
 ## Source of truth
 `DEFAULTS` and `buildSystemPrompt()` in `background.js`. The web app only stores/serves
