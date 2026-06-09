@@ -573,8 +573,11 @@
     if (!c) return false;
     const top = c.top;
     const mid = c.left + c.width / 2; // column midpoint (NOT window center — panel-proof)
-    const ours = (el, r) => looksLikeOurBubble(el) === true || (r && r.left + r.width / 2 > mid);
-    const nodes = safe(() => Array.from(main.querySelectorAll('[dir="auto"]')), []);
+    // Require a real message ROW — excludes the LISTING CARD's own video preview at
+    // the top (which was making the bot think it had already sent a video → some
+    // chats never got one).
+    const ours = (el, r) => safe(() => el.closest('[role="row"]'), null) && (looksLikeOurBubble(el) === true || (r && r.left + r.width / 2 > mid));
+    const nodes = safe(() => Array.from(main.querySelectorAll('[role="row"] [dir="auto"]')), []);
     for (const n of nodes) {
       const t = safe(() => (n.innerText || "").trim(), "");
       if (!/^\d{1,2}:\d{2}$/.test(t)) continue; // a video duration badge
@@ -582,7 +585,7 @@
       if (!r || r.top >= top) continue; // in the message area, above the composer
       if (ours(n, r)) return true;
     }
-    const vids = safe(() => Array.from(main.querySelectorAll("video")), []);
+    const vids = safe(() => Array.from(main.querySelectorAll('[role="row"] video')), []);
     for (const v of vids) {
       const r = safe(() => v.getBoundingClientRect(), null);
       if (r && r.top < top && ours(v, r)) return true;
@@ -592,63 +595,84 @@
 
   // Send the stored demo video(s) to the current chat — ONCE per chat, a set delay
   // after the text reply (default 10s). Supports MULTIPLE videos, sent in order.
+  // Demo-video state machine. Goal: send the configured clip(s) EXACTLY once per chat
+  // (with the first-video delay + the between-videos delay), CONFIRM they actually
+  // landed, RETRY later if a send genuinely failed (backoff, capped — no spam), and
+  // NEVER resend once a video is confirmed in the chat.
+  const VIDEO_CLAIM_TTL = 3 * 60 * 1000; // an in-flight claim older than this is stale
+  const VIDEO_RETRY_BACKOFF = 20 * 60 * 1000; // wait this long before retrying a failed send
+  const VIDEO_MAX_TRIES = 3; // give up after this many failed attempts
+  async function recordVideoFail(id) {
+    const am = (await getLocal(["videoAttempts"])).videoAttempts || {};
+    const a = am[id] || {};
+    am[id] = { fails: (a.fails || 0) + 1, failAt: Date.now() };
+    await setLocal({ videoAttempts: am });
+  }
   async function maybeSendVideo(id, name, immediate) {
     try {
-      const cfg = await getLocal(["videoEnabled", "demoVideos", "demoVideo", "videoSentThreads", "videoDelaySec"]);
+      const cfg = await getLocal([
+        "videoEnabled", "demoVideos", "demoVideo", "videoDelaySec", "videoSentThreads", "videoAttempts",
+      ]);
 
-      // LOCAL videos (uploaded per-machine, stored as base64 dataUrls).
+      // LOCAL videos (uploaded per-machine, base64 dataUrls).
       let local = Array.isArray(cfg.demoVideos) ? cfg.demoVideos : [];
       if (!local.length && cfg.demoVideo && cfg.demoVideo.dataUrl) local = [cfg.demoVideo]; // legacy single
       local = local.filter((v) => v && v.dataUrl);
 
-      // CENTRAL videos (hosted in Supabase Storage, delivered via the config URL).
-      // Adding videos in the web dashboard turns this on for every machine — no
-      // per-machine toggle needed. They are still sent as NATIVE uploads.
+      // CENTRAL videos + the configurable delays from the synced config.
       let central = [];
       let centralDelay = null;
+      let betweenSec = null;
       try {
         const s = (await ask({ type: "GET_SETTINGS" })).settings || {};
         if (Array.isArray(s.demoVideoUrls)) central = s.demoVideoUrls.filter((v) => v && v.url);
         if (s.demoVideoDelaySec != null) centralDelay = Number(s.demoVideoDelaySec);
+        if (s.demoVideoBetweenSec != null) betweenSec = Number(s.demoVideoBetweenSec);
       } catch (e) {
         /* background unavailable — just skip central videos this cycle */
       }
 
-      // Send if locally enabled OR central videos exist (central = opt-in from the dashboard).
       if (!cfg.videoEnabled && !central.length) return;
       if (!local.length && !central.length) return;
 
-      const sent = cfg.videoSentThreads || {};
-      // Already sent? Either the persistent per-chat flag, OR a video is already
-      // visible in this thread on our side (covers the flag ever being lost).
-      if (sent[id] || chatAlreadyHasOurVideo()) {
-        if (!sent[id]) {
-          sent[id] = true;
-          await setLocal({ videoSentThreads: sent });
+      const now = Date.now();
+      const done = cfg.videoSentThreads || {};
+      const isDone = (v) => v === true || (v && v.done); // tolerate the old `true` value
+
+      // (1) CONFIRMED already sent — durable flag OR a video is visibly in the chat
+      // (inside a real message row). Ground truth → never resend.
+      if (isDone(done[id]) || chatAlreadyHasOurVideo()) {
+        if (!isDone(done[id])) {
+          done[id] = { done: true, at: now };
+          await setLocal({ videoSentThreads: done });
         }
         return;
       }
-      // ATOMIC CLAIM: mark sent up-front, then RE-READ and verify we actually own the
-      // claim. If another pass/tab claimed it in the race window, back off. This makes
-      // "once per chat" hold even with two tabs or a reload mid-send.
-      const stamp = Date.now() + ":" + Math.random();
-      const fresh = (await getLocal(["videoSentThreads"])).videoSentThreads || {};
-      if (fresh[id]) return; // someone claimed it since our first read
-      fresh[id] = stamp;
-      await setLocal({ videoSentThreads: fresh });
-      const after = (await getLocal(["videoSentThreads"])).videoSentThreads || {};
-      if (after[id] !== stamp) return; // lost the race → another pass owns it
+      // (2) Backoff / give-up so a chat whose upload keeps failing isn't retried forever.
+      const att0 = (cfg.videoAttempts || {})[id] || null;
+      if (att0) {
+        if ((att0.fails || 0) >= VIDEO_MAX_TRIES) return; // gave up
+        if (att0.claimAt && now - att0.claimAt < VIDEO_CLAIM_TTL && att0.claimTab !== TAB_UID) return; // in flight elsewhere
+        if (att0.failAt && now - att0.failAt < VIDEO_RETRY_BACKOFF) return; // backing off
+      }
+      // (3) Short-lived claim (TTL) so two passes/tabs don't both send right now.
+      const attempts = (await getLocal(["videoAttempts"])).videoAttempts || {};
+      const cur = attempts[id];
+      if (cur && cur.claimAt && now - cur.claimAt < VIDEO_CLAIM_TTL && cur.claimTab !== TAB_UID) return;
+      attempts[id] = Object.assign({}, cur, { claimAt: now, claimTab: TAB_UID });
+      await setLocal({ videoAttempts: attempts });
+      const verify = (await getLocal(["videoAttempts"])).videoAttempts || {};
+      if (!(verify[id] && verify[id].claimTab === TAB_UID)) return; // lost the claim race
 
-      const delaySec = centralDelay != null ? centralDelay : cfg.videoDelaySec != null ? cfg.videoDelaySec : 10;
-      const delayMs = delaySec * 1000;
+      // Delays (configurable): pause before the FIRST video + pause BETWEEN videos.
+      const firstSec = centralDelay != null ? centralDelay : cfg.videoDelaySec != null ? cfg.videoDelaySec : 10;
+      const gapSec = betweenSec != null && betweenSec >= 0 ? betweenSec : 8;
       if (!immediate) {
-        // After a fresh text reply: wait N s so the video trails it naturally.
-        // On a revisit (quiet chat) we send right away so the scan loop doesn't stall.
-        setStatus({ lastAction: `video in ${Math.round(delayMs / 1000)}s…`, currentThread: name });
-        await sleep(delayMs);
+        setStatus({ lastAction: `video in ${Math.round(firstSec)}s…`, currentThread: name });
+        await sleep(firstSec * 1000);
       }
 
-      // Build the ordered File list: local base64 first, then central (downloaded via background).
+      // Build the ordered File list (local first, then central downloaded via background).
       const files = [];
       for (const v of local) {
         try {
@@ -669,19 +693,32 @@
         }
       }
       if (!files.length) {
-        setStatus({ lastError: "video: nothing to send (download failed?)" });
+        await recordVideoFail(id);
+        setStatus({ lastError: "video: couldn't load any clip — will retry later", currentThread: name });
         return;
       }
 
-      let anyOk = false;
+      let okCount = 0;
       for (let i = 0; i < files.length; i++) {
         setStatus({ lastAction: `sending video ${i + 1}/${files.length}…`, currentThread: name });
-        const ok = await injectVideo(files[i]);
-        anyOk = anyOk || ok;
-        if (i < files.length - 1) await sleep(rand(4000, 7000)); // gap between videos
+        if (await injectVideo(files[i])) okCount++;
+        if (i < files.length - 1) await sleep(gapSec * 1000 + rand(0, 1500)); // pause BETWEEN videos
       }
-      // Already marked sent up-front, so we never re-send even if this was imperfect.
-      setStatus({ lastAction: anyOk ? "demo video(s) sent ✓" : "video attach was best-effort (won't retry)", currentThread: name });
+
+      // (4) Confirm it actually landed. ONLY then mark permanently sent — otherwise
+      // record a failure (backoff) so it retries, never a "marked but never sent".
+      const landed = okCount > 0 || chatAlreadyHasOurVideo();
+      if (landed) {
+        const dm = (await getLocal(["videoSentThreads"])).videoSentThreads || {};
+        dm[id] = { done: true, at: Date.now() };
+        const am = (await getLocal(["videoAttempts"])).videoAttempts || {};
+        delete am[id];
+        await setLocal({ videoSentThreads: dm, videoAttempts: am });
+        setStatus({ lastAction: `demo video(s) sent ✓ (${okCount}/${files.length})`, currentThread: name });
+      } else {
+        await recordVideoFail(id);
+        setStatus({ lastError: "video didn't attach — will retry later", currentThread: name });
+      }
     } catch (e) {
       setStatus({ lastError: "video error: " + e.message });
     }

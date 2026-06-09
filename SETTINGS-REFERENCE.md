@@ -77,7 +77,9 @@ endpoint serves that object to the extension.
   downloads them and sends them as **native** attachments **once per chat** — including
   on quiet/older chats it revisits (not just right after a reply). The buyer never sees a link.
 - `demoVideoDelaySec` — number (default `10`). Seconds to wait after a fresh reply before
-  sending the video (on a revisit it's sent immediately).
+  sending the first video (on a revisit it's sent immediately).
+- `demoVideoBetweenSec` — number (default `8`). Seconds to pause **between** videos when
+  several are configured.
 - `videos` — array of `{ name, url, notes }`. A reference URL library only (not auto-sent).
 
 ## NOT web-managed (per-machine, stay in the extension)

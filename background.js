@@ -71,7 +71,8 @@ const DEFAULTS = {
   // central demo videos (hosted in Supabase Storage, served via the config URL).
   // The extension downloads each and sends it as a NATIVE attachment, once per chat.
   demoVideoUrls: [], // [{ name, url }]
-  demoVideoDelaySec: 10,
+  demoVideoDelaySec: 10, // pause before the FIRST video (after the reply)
+  demoVideoBetweenSec: 8, // pause BETWEEN videos when several are configured
   // smart follow-up on quiet chats (proactive — off by default; all knobs configurable)
   smartFollowupEnabled: false, // master on/off for proactive follow-ups
   smartFollowupMaxCount: 1, // how many follow-ups per chat, total (e.g. 1 or 2) — anti-spam cap

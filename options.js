@@ -49,6 +49,7 @@
     videos: [],
     demoVideoUrls: [],
     demoVideoDelaySec: 10,
+    demoVideoBetweenSec: 8,
     smartFollowupEnabled: false,
     smartFollowupMaxCount: 1,
     smartFollowupQuietHours: 6,
@@ -109,6 +110,7 @@
     ["smartFollowupQuietHours", "number"],
     ["smartFollowupGapHours", "number"],
     ["demoVideoDelaySec", "number"],
+    ["demoVideoBetweenSec", "number"],
   ];
 
   function fieldsToForm() {

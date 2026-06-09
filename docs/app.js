@@ -51,6 +51,7 @@
     videos: [],
     demoVideoUrls: [], // central demo videos (uploaded to Supabase Storage) [{name,url}]
     demoVideoDelaySec: 10,
+    demoVideoBetweenSec: 8,
     smartFollowupEnabled: false,
     smartFollowupMaxCount: 1,
     smartFollowupQuietHours: 6,
@@ -73,7 +74,7 @@
     ["businessName", "value"], ["businessAddress", "value"], ["businessHoursText", "value"],
     ["businessInfo", "value"], ["instructions", "value"], ["examples", "value"],
     ["closerGoals", "value"], ["priceList", "value"], ["visitConfirmMessage", "value"],
-    ["demoVideoDelaySec", "number"],
+    ["demoVideoDelaySec", "number"], ["demoVideoBetweenSec", "number"],
     ["smartFollowupEnabled", "checked"], ["smartFollowupMaxCount", "number"],
     ["smartFollowupQuietHours", "number"], ["smartFollowupGapHours", "number"],
   ];
