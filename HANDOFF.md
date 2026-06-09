@@ -45,6 +45,7 @@ computer/Facebook account.
 - **Re-entrancy** → `scan()` sets `busy=true` synchronously before any `await` (no check/set gap).
 - **Cross-tab double-send** → a per-threadId **storage lease** (`acquireThreadLock`/`releaseThreadLock`, `threadLocks` in chrome.storage.local, last-writer-wins + `LOCK_MS` stale timeout, `TAB_UID` per instance) wraps `handleThread` and the `SEND_FOLLOWUP` handler, so two Messenger tabs in one profile can't process the same chat at once.
 - **Wrong-thread context on slow loads** → `handleThread` waits for two identical transcript reads before acting.
+- **`maxRepliesPerConvo` was defined but never enforced** (bot replied forever) → `handleThread` now keeps a **persisted per-thread `replyCounts[id]`** (chrome.storage.local, capped/persisted via `persistDedup`, hydrated at boot). Gate runs before the Claude call: if `replyCounts[id] >= maxRepliesPerConvo` (cap>0) the chat goes silent for good (`convoCapBehavior` `stop`/`notify`); the counter increments **only on a confirmed `typeAndSend`**, so **videos and follow-ups never count** (those are separate paths/caps). A capped chat still gets its one-time demo video (idempotent `maybeSendVideo`). Set to N → at most N text replies for the whole conversation, even if the buyer keeps asking.
 
 ## Gotchas
 - Messenger uses a **Lexical** contenteditable; `execCommand` insert/delete works but is finicky — hence the "insert once + invisible-tolerant verify + send once" pattern.

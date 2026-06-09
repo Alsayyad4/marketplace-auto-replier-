@@ -1,7 +1,7 @@
 {
   "manifest_version": 3,
   "name": "SubSell Marketplace Auto-Reply",
-  "version": "0.12.0",
+  "version": "0.12.1",
   "description": "Auto-replies to Facebook Marketplace buyer messages using the Anthropic Claude API. Bilingual FR/EN, casual Quebec tone. Optional cloud sync (web app) across all your computers.",
   "key": "MIIBIjANBgkqhkiG9w0BAQEFAAOCAQ8AMIIBCgKCAQEAtzxhiSAv8yukv8FurCG5VxDNYhmvT7SFUR/WG6xobb08wv5cv1XBlHQCQMwW+5N7PkkePqPdW38S19Wpyeoo96Q6JJeLBH+bCPlcx7wi3HPzsjZV+fHR+7iCj2pSm+2jwCRy/ACw7GU5WLOmaBwQa65E1BYHm9fNGFc7V4OPxYS2ULTMrUtNCwXwDoBAOATV0vofwgWKbkO30fUtom8szxlFu12ukY6TIH2GKg7lnzGTzbRwllhapMxI7tfjV31a4Rd3q//UQ1WcuoKl0IASJROManSJ4yJcx8h9a65AVQCaWMGIVeoVlrYcc2yZ8Xpgu/YwJilV392vQzWvEI2P/QIDAQAB",
   "permissions": [

@@ -36,6 +36,12 @@
   let busy = false;
   let cooldowns = {}; // threadId -> timestamp we may re-check it (persisted, shared across tabs)
   let lastHandled = {}; // threadId -> the buyer message we last replied to (persisted)
+  // threadId -> how many TEXT replies the bot has sent in this whole conversation.
+  // This is the hard per-conversation reply cap (maxRepliesPerConvo). Counted ONLY on a
+  // confirmed text send, so videos and follow-ups never inflate it. Persisted, so it
+  // survives convo-switching, page reloads and content-script restarts — once a chat
+  // hits the cap it stays capped even when the buyer keeps asking questions.
+  let replyCounts = {};
   let tick = {}; // live status shown in the popup
 
   // Texts WE recently sent — a hard guard so the bot never replies to its own
@@ -45,10 +51,11 @@
   const normMsg = (s) => (s || "").toLowerCase().replace(/\s+/g, " ").trim();
   // Hydrate persisted state at boot.
   safe(() =>
-    chrome.storage.local.get(["recentSent", "cooldowns", "lastHandled"], (r) => {
+    chrome.storage.local.get(["recentSent", "cooldowns", "lastHandled", "replyCounts"], (r) => {
       if (r && Array.isArray(r.recentSent)) recentSent = r.recentSent;
       if (r && r.cooldowns && typeof r.cooldowns === "object") cooldowns = r.cooldowns;
       if (r && r.lastHandled && typeof r.lastHandled === "object") lastHandled = r.lastHandled;
+      if (r && r.replyCounts && typeof r.replyCounts === "object") replyCounts = r.replyCounts;
     })
   );
   function rememberSent(t) {
@@ -60,11 +67,11 @@
   }
   function persistDedup() {
     // keep the persisted maps from growing unbounded (cap ~400 threads)
-    for (const map of [cooldowns, lastHandled]) {
+    for (const map of [cooldowns, lastHandled, replyCounts]) {
       const keys = Object.keys(map);
       if (keys.length > 400) for (const k of keys.slice(0, keys.length - 400)) delete map[k];
     }
-    safe(() => chrome.storage.local.set({ cooldowns, lastHandled }));
+    safe(() => chrome.storage.local.set({ cooldowns, lastHandled, replyCounts }));
   }
   function isOwnEcho(msg) {
     const m = normMsg(msg);
@@ -850,6 +857,28 @@
       setStatus({ lastAction: "skip — already replied to this message", currentThread: name });
       return;
     }
+
+    // ---- HARD PER-CONVERSATION REPLY CAP (maxRepliesPerConvo) ----
+    // Count = TEXT replies the bot has already sent in THIS chat (videos & follow-ups
+    // are separate and never counted). Once a chat reaches the cap we go silent for the
+    // rest of the conversation — even if the buyer keeps asking more questions. Checked
+    // here, before spending a Claude call. cap 0 = unlimited.
+    const settings = (await ask({ type: "GET_SETTINGS" })).settings || {};
+    const replyCap = Math.max(0, Number(settings.maxRepliesPerConvo) || 0);
+    const repliesSoFar = replyCounts[id] || 0;
+    if (replyCap > 0 && repliesSoFar >= replyCap) {
+      cooldowns[id] = Date.now() + IDLE_COOLDOWN_MS;
+      // No more text replies — but the demo video is separate ("2 + videos"), so still
+      // make sure this chat got its one-time video (idempotent: no-op if already sent).
+      await maybeSendVideo(id, name);
+      if ((settings.convoCapBehavior || "stop") === "notify") {
+        setStatus({ lastAction: "needs you — reply cap reached (" + repliesSoFar + "/" + replyCap + "), buyer still messaging", currentThread: name });
+      } else {
+        setStatus({ lastAction: "skip — reply cap reached (" + repliesSoFar + "/" + replyCap + ") for this chat", currentThread: name });
+      }
+      return;
+    }
+
     setStatus({ lastAction: "buyer said: " + trunc(turn.buyerMessage, 80), currentThread: name });
 
     const reply = await ask({ type: "GET_REPLY_SIMPLE", buyerMessage: turn.buyerMessage, context: turn.transcript, threadName: name });
@@ -871,8 +900,7 @@
       return;
     }
 
-    // small, human-ish delay before replying
-    const settings = (await ask({ type: "GET_SETTINGS" })).settings || {};
+    // small, human-ish delay before replying (settings already fetched above for the cap)
     const delayMs = (settings.responseDelaySec || 15) * 1000 + rand(0, (settings.jitterSec || 15) * 1000);
     setStatus({ lastAction: "waiting " + Math.round(delayMs / 1000) + "s before replying", currentThread: name });
     await sleep(delayMs);
@@ -884,9 +912,14 @@
     }
     rememberSent(reply.text); // so we never mistake this for a buyer message later
     lastHandled[id] = turn.buyerMessage;
+    replyCounts[id] = repliesSoFar + 1; // count this text reply toward the per-convo cap
     cooldowns[id] = Date.now() + COOLDOWN_MS;
-    persistDedup(); // survive a content-script reload — don't re-reply the same message
-    setStatus({ lastAction: "replied ✓", lastReplySent: trunc(reply.text, 200), currentThread: name });
+    persistDedup(); // survive a content-script reload — don't re-reply the same message (and keep the cap count)
+    setStatus({
+      lastAction: "replied ✓" + (replyCap > 0 ? " (" + replyCounts[id] + "/" + replyCap + ")" : ""),
+      lastReplySent: trunc(reply.text, 200),
+      currentThread: name,
+    });
 
     // Schedule a follow-up (background handles the timing). Re-armed on every
     // reply, so it only fires after the conversation has gone quiet. Fire-and-forget.

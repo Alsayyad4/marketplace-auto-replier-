@@ -20,8 +20,8 @@ endpoint serves that object to the extension.
 | Jitter (s) | `jitterSec` | number | `60` | Extra random 0–N s added to the delay. |
 | Hourly cap | `hourlyCap` | number | `30` | Max replies/hour. |
 | Daily cap | `dailyCap` | number | `200` | Max replies/day. |
-| Max replies / conversation | `maxRepliesPerConvo` | number | `5` | Total bot replies in one chat (0 = unlimited). |
-| When that cap is hit | `convoCapBehavior` | enum | `stop` | `stop` (go quiet) or `notify` (ping operator). |
+| Max replies / conversation | `maxRepliesPerConvo` | number | `5` | **Hard cap** on bot **text replies** in one chat, counted across the whole conversation. Once hit, the bot stays silent even if the buyer keeps asking more questions. Demo videos and follow-ups are separate and do **not** count toward it. `0` = unlimited. |
+| When that cap is hit | `convoCapBehavior` | enum | `stop` | `stop` (go quiet) or `notify` (flag the chat as needs-you in the popup). |
 | Typing WPM min | `wpmMin` | number | `38` | Lower bound of human typing speed. |
 | Typing WPM max | `wpmMax` | number | `78` | Upper bound of human typing speed. |
 | Respect business hours | `businessHoursEnabled` | bool | `true` | Only reply between the hours below. |
