@@ -155,6 +155,13 @@
     if (/started this chat/.test(t)) return true; // "X started this chat"
     if (/^mark as sold$/.test(t)) return true;
     if (/^view buyer/.test(t)) return true; // "View buyer" / "View buyer profile"
+    if (/automated suggestion/.test(t)) return true; // "This is an automated suggestion."
+    if (/waiting for your response/.test(t)) return true; // "X is waiting for your response."
+    if (/add video to listing|update listing/.test(t)) return true;
+    if (/allow other buyers|part of your marketplace listing/.test(t)) return true;
+    if (/^message sent$/.test(t)) return true;
+    if (/ sent you a (message|video|photo|gif)/.test(t)) return true; // "X sent you a message"
+    if (/^more options$|^view listing$|^see listing$/.test(t)) return true;
     return NOISE.some((n) => t === n || t.startsWith(n));
   }
 
@@ -255,13 +262,15 @@
     const main = getMain() || document;
     const sels = [
       'div[aria-label="Press Enter to send"]',
-      '[aria-label="Send"][role="button"]',
       '[aria-label*="Send" i][role="button"]',
       '[aria-label*="Envoyer" i][role="button"]',
     ];
     for (const s of sels) {
-      const b = safe(() => main.querySelector(s), null);
-      if (b) {
+      const els = safe(() => Array.from(main.querySelectorAll(s)), []);
+      for (const b of els) {
+        const al = (safe(() => b.getAttribute("aria-label"), "") || "").toLowerCase();
+        // Never click the voice-clip / mic button (it triggers the mic permission prompt).
+        if (/voice|vocal|clip|audio|micro|record|enregistr/.test(al)) continue;
         safe(() => b.click());
         return true;
       }
@@ -280,22 +289,41 @@
   async function typeAndSend(el, text) {
     const want = String(text).replace(/\s*\n\s*/g, " ").trim();
     if (!want) return false;
-    el.focus();
-    // Type word-by-word (reliable on Messenger's editor; reads a bit human).
+    const norm = (s) => (s || "").replace(/\s+/g, " ").trim();
+    const clear = () => {
+      el.focus();
+      safe(() => document.execCommand("selectAll", false, null));
+      safe(() => document.execCommand("delete", false, null));
+    };
+
+    // Clear anything already in the box first — appending to leftover text is what
+    // made replies send TWICE.
+    clear();
+    await sleep(80);
+
+    // Type word-by-word (human-ish).
     const words = want.split(" ");
     for (let i = 0; i < words.length; i++) {
       insertText(el, (i ? " " : "") + words[i]);
       await sleep(rand(40, 130));
     }
     await sleep(rand(200, 450));
-    if (composerText(el) !== want) {
-      // one corrective pass — clear + insert the whole thing at once
-      el.focus();
-      safe(() => document.execCommand("selectAll", false, null));
+
+    // The box must contain EXACTLY the intended text. Retype once if not…
+    if (norm(composerText(el)) !== norm(want)) {
+      clear();
+      await sleep(80);
       safe(() => document.execCommand("insertText", false, want));
       await sleep(250);
     }
-    if (!composerText(el)) return false;
+    // …and if it STILL doesn't match, bail without sending — better to send nothing
+    // than a duplicated/garbled message to a customer.
+    if (norm(composerText(el)) !== norm(want)) {
+      clear();
+      setStatus({ lastError: "compose mismatch — skipped to avoid a duplicate/garbled send" });
+      return false;
+    }
+
     pressEnter(el);
     if (await composerEmptied(el)) return true; // 1) Enter
     clickSend();
@@ -427,6 +455,11 @@
 
       const sent = cfg.videoSentThreads || {};
       if (sent[id]) return; // already sent in this conversation
+      // Mark as sent NOW — BEFORE the delay/upload. The upload is best-effort and can
+      // be flaky; marking up-front guarantees exactly ONE attempt per chat so a failed
+      // or slow upload can never make us re-send the video on the next pass.
+      sent[id] = true;
+      await setLocal({ videoSentThreads: sent });
 
       const delaySec = centralDelay != null ? centralDelay : cfg.videoDelaySec != null ? cfg.videoDelaySec : 10;
       const delayMs = delaySec * 1000;
@@ -469,13 +502,8 @@
         anyOk = anyOk || ok;
         if (i < files.length - 1) await sleep(rand(4000, 7000)); // gap between videos
       }
-      if (anyOk) {
-        sent[id] = true; // mark so we never send the video(s) twice in the same chat
-        await setLocal({ videoSentThreads: sent });
-        setStatus({ lastAction: "demo video(s) sent ✓", currentThread: name });
-      } else {
-        setStatus({ lastError: "couldn't attach video (no uploader found) — will retry" });
-      }
+      // Already marked sent up-front, so we never re-send even if this was imperfect.
+      setStatus({ lastAction: anyOk ? "demo video(s) sent ✓" : "video attach was best-effort (won't retry)", currentThread: name });
     } catch (e) {
       setStatus({ lastError: "video error: " + e.message });
     }
