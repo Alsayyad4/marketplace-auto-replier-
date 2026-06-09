@@ -199,7 +199,9 @@
       // pushed right (bigger left gap) = us; pushed left (bigger right gap) = buyer.
       const leftGap = r.left - left;
       const rightGap = right - r.right;
-      out.push({ role: leftGap > rightGap ? "me" : "buyer", text, top: r.top });
+      // Our OWN recently-sent text is always "me" (never read it back as the buyer's);
+      // otherwise classify by which side the bubble is pushed to (robust to width).
+      out.push({ role: isOwnEcho(text) ? "me" : leftGap > rightGap ? "me" : "buyer", text, top: r.top });
     }
     out.sort((a, b) => a.top - b.top);
     return out;
@@ -295,29 +297,21 @@
       safe(() => document.execCommand("selectAll", false, null));
       safe(() => document.execCommand("delete", false, null));
     };
-
-    // Clear anything already in the box first — appending to leftover text is what
-    // made replies send TWICE.
-    clear();
-    await sleep(80);
-
-    // Type word-by-word (human-ish).
-    const words = want.split(" ");
-    for (let i = 0; i < words.length; i++) {
-      insertText(el, (i ? " " : "") + words[i]);
-      await sleep(rand(40, 130));
-    }
-    await sleep(rand(200, 450));
-
-    // The box must contain EXACTLY the intended text. Retype once if not…
-    if (norm(composerText(el)) !== norm(want)) {
+    const setWhole = () => {
+      // Insert the ENTIRE message in ONE operation. Typing word-by-word raced and
+      // jumbled/duplicated on Messenger's editor over a laggy Remote Desktop.
       clear();
-      await sleep(80);
       safe(() => document.execCommand("insertText", false, want));
-      await sleep(250);
+    };
+
+    setWhole();
+    await sleep(350);
+    if (norm(composerText(el)) !== norm(want)) {
+      setWhole(); // one clean retry
+      await sleep(450);
     }
-    // …and if it STILL doesn't match, bail without sending — better to send nothing
-    // than a duplicated/garbled message to a customer.
+    // If the box still isn't EXACTLY the intended message, bail — never send a
+    // duplicated/garbled message to a customer.
     if (norm(composerText(el)) !== norm(want)) {
       clear();
       setStatus({ lastError: "compose mismatch — skipped to avoid a duplicate/garbled send" });
