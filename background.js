@@ -314,6 +314,63 @@ function getCapNotified() {
     chrome.storage.local.get(["capNotified"], (res) => resolve(res.capNotified || {}));
   });
 }
+function setCapNotified(threadId) {
+  return new Promise((resolve) => {
+    chrome.storage.local.get(["capNotified"], (res) => {
+      const map = res.capNotified || {};
+      map[threadId] = Date.now();
+      chrome.storage.local.set({ capNotified: map }, () => resolve());
+    });
+  });
+}
+
+/* Last buyer message we ANSWERED in each thread (persisted, keyed by threadId).
+ * This is the "we already replied to this person's latest message" guard: it
+ * survives page reloads and service-worker restarts (the old in-memory check in
+ * content.js did not), and it's shared across every tab of this Chrome profile —
+ * so the bot stops re-sending the same reply after a refresh. */
+function getAnsweredMap() {
+  return new Promise((resolve) => {
+    chrome.storage.local.get(["answeredMap"], (res) => resolve(res.answeredMap || {}));
+  });
+}
+async function getLastAnswered(threadId) {
+  const map = await getAnsweredMap();
+  return map[threadId];
+}
+async function setLastAnswered(threadId, buyerMessage) {
+  const map = await getAnsweredMap();
+  map[threadId] = buyerMessage;
+  const keys = Object.keys(map);
+  if (keys.length > 2000) delete map[keys[0]]; // bound storage growth
+  return new Promise((resolve) => chrome.storage.local.set({ answeredMap: map }, () => resolve()));
+}
+
+/* Demo-video "already sent" per thread (persisted) + an in-memory claim set.
+ * The service worker is a singleton per Chrome profile, so the synchronous
+ * check-and-add on `videoClaims` is atomic across all tabs — it blocks a second
+ * tab/scan from sending the same video while the first is mid-send. */
+const videoClaims = new Set();
+function getVideoSentThreads() {
+  return new Promise((resolve) => {
+    chrome.storage.local.get(["videoSentThreads"], (res) => resolve(res.videoSentThreads || {}));
+  });
+}
+function markVideoSent(threadId) {
+  return new Promise((resolve) => {
+    chrome.storage.local.get(["videoSentThreads"], (res) => {
+      const map = res.videoSentThreads || {};
+      map[threadId] = true;
+      chrome.storage.local.set({ videoSentThreads: map }, () => resolve());
+    });
+  });
+}
+
+/* In-memory per-thread reply lock. Two tabs of the same account both scanning
+ * could otherwise generate + send a reply to the same thread at once (double
+ * message). Acquired synchronously at the top of GET_REPLY_SIMPLE, released in a
+ * finally — atomic because the worker is single-threaded. */
+const processingThreads = new Set();
 
 /* Visit intent per conversation — recorded SILENTLY (no operator notification).
  * Shape: { [threadId]: { status, thread, at, history:[{status,at}] } } */
@@ -505,6 +562,78 @@ function parseReply(text) {
     return { kind: "video", url: video[1].trim(), caption: (video[2] || "").trim(), visit };
   }
   return { kind: "text", text: text.trim(), visit };
+}
+
+/* ---------------- the reply pipeline ----------------
+ * The ONE reply path. Order of the gates matters — cheap/cap checks first so we
+ * never spend an API call (or a reply slot) we shouldn't:
+ *   1. business hours
+ *   2. de-dupe: did we already answer this exact buyer message? (persisted)
+ *   3. per-conversation reply cap (the user's "max N replies in one chat")
+ *   4. hourly / daily caps
+ *   5. ask Claude, parse, and — only when we actually return text — count it,
+ *      bump the conversation counter, and remember the message we answered.
+ */
+async function handleGetReplySimple(msg) {
+  const settings = await getSettings();
+  if (!withinBusinessHours(settings)) return { ok: true, skip: true, reason: "outside business hours" };
+
+  const threadId = msg.threadId || null;
+
+  // 2) Already answered this person's latest message? Don't say it twice.
+  if (threadId) {
+    const last = await getLastAnswered(threadId);
+    if (last != null && last === msg.buyerMessage) {
+      return { ok: true, skip: true, reason: "already answered this message" };
+    }
+  }
+
+  // 3) Per-conversation reply cap (total bot replies allowed in ONE chat).
+  if (threadId && settings.maxRepliesPerConvo && settings.maxRepliesPerConvo > 0) {
+    const count = await convoReplyCount(threadId);
+    if (count >= settings.maxRepliesPerConvo) {
+      if (settings.convoCapBehavior === "notify") {
+        const notified = await getCapNotified();
+        if (!notified[threadId]) {
+          notifyHuman(`hit its ${settings.maxRepliesPerConvo}-reply limit — take over`, msg.threadName);
+          await setCapNotified(threadId);
+          await appendLog({ thread: msg.threadName, buyer: msg.buyerMessage, action: "cap", reply: `[CAP] reached ${settings.maxRepliesPerConvo} replies — notified operator` });
+        }
+      }
+      return { ok: true, skip: true, reason: `conversation reply cap reached (${settings.maxRepliesPerConvo})` };
+    }
+  }
+
+  // 4) Hourly / daily caps.
+  const c = rollWindows(await getCounters(), Date.now());
+  if (settings.hourlyCap && c.hourCount >= settings.hourlyCap) return { ok: true, skip: true, reason: "hourly cap reached" };
+  if (settings.dailyCap && c.dayCount >= settings.dailyCap) return { ok: true, skip: true, reason: "daily cap reached" };
+
+  // 5) Ask Claude.
+  const result = await callClaude(
+    settings,
+    msg.buyerMessage,
+    msg.context ? "Conversation so far (most recent last):\n" + msg.context : ""
+  );
+  if (result.error) return { ok: false, error: result.error };
+
+  const parsed = parseReply(result.text);
+  if (parsed.kind === "human") {
+    notifyHuman(parsed.reason, msg.threadName);
+    await appendLog({ thread: msg.threadName, buyer: msg.buyerMessage, action: "human", reply: "[HUMAN] " + parsed.reason });
+    return { ok: true, human: true, reason: parsed.reason };
+  }
+  // A [VIDEO:url] just sends its caption as text in the simple build.
+  const text = parsed.kind === "video" ? parsed.caption || "" : parsed.text;
+  if (!text || !text.trim()) return { ok: true, skip: true, reason: "empty reply" };
+
+  await incrementCounters();
+  if (threadId) {
+    await bumpConvoReply(threadId); // counts toward the per-conversation cap
+    await setLastAnswered(threadId, msg.buyerMessage); // so a reload won't repeat it
+  }
+  await appendLog({ thread: msg.threadName, buyer: msg.buyerMessage, action: "text", reply: text });
+  return { ok: true, text };
 }
 
 /* ---------------- video fetch ---------------- */
@@ -723,48 +852,54 @@ chrome.runtime.onMessage.addListener((msg, _sender, sendResponse) => {
           break;
         }
         case "GET_REPLY_SIMPLE": {
-          // The ONLY reply path now. Two safety checks (business hours + a plain
-          // hourly/daily cap, no warm-up ramp), then ask Claude and hand back the
-          // text. [HUMAN] still pings you; everything else is just a reply.
-          const settings = await getSettings();
-          if (!withinBusinessHours(settings)) {
-            sendResponse({ ok: true, skip: true, reason: "outside business hours" });
+          // The ONLY reply path. All gating (business hours, de-dupe, per-convo
+          // cap, hourly/daily caps) lives in handleGetReplySimple. We wrap it in a
+          // per-thread lock so two tabs of the same account can't both reply at once.
+          const threadId = msg.threadId || null;
+          if (threadId && processingThreads.has(threadId)) {
+            sendResponse({ ok: true, skip: true, reason: "already handling this thread" });
             break;
           }
-          const c = rollWindows(await getCounters(), Date.now());
-          if (settings.hourlyCap && c.hourCount >= settings.hourlyCap) {
-            sendResponse({ ok: true, skip: true, reason: "hourly cap reached" });
+          if (threadId) processingThreads.add(threadId);
+          try {
+            sendResponse(await handleGetReplySimple(msg));
+          } finally {
+            if (threadId) processingThreads.delete(threadId);
+          }
+          break;
+        }
+        case "CLAIM_VIDEO": {
+          // Atomic "may I send the demo video to this chat?" claim. The sync
+          // check-and-add on videoClaims can't race (singleton worker); the
+          // persisted map covers reloads / past sessions.
+          const id = msg.threadId;
+          if (!id) {
+            sendResponse({ ok: true, already: false });
             break;
           }
-          if (settings.dailyCap && c.dayCount >= settings.dailyCap) {
-            sendResponse({ ok: true, skip: true, reason: "daily cap reached" });
+          if (videoClaims.has(id)) {
+            sendResponse({ ok: true, already: true });
             break;
           }
-          const result = await callClaude(
-            settings,
-            msg.buyerMessage,
-            msg.context ? "Conversation so far (most recent last):\n" + msg.context : ""
-          );
-          if (result.error) {
-            sendResponse({ ok: false, error: result.error });
-            break;
+          videoClaims.add(id); // claim now, synchronously
+          const sentMap = await getVideoSentThreads();
+          sendResponse({ ok: true, already: !!sentMap[id] });
+          break;
+        }
+        case "VIDEO_SENT": {
+          // Persist so we never send the demo video to this chat again.
+          if (msg.threadId) {
+            videoClaims.add(msg.threadId);
+            await markVideoSent(msg.threadId);
           }
-          const parsed = parseReply(result.text);
-          if (parsed.kind === "human") {
-            notifyHuman(parsed.reason, msg.threadName);
-            await appendLog({ thread: msg.threadName, buyer: msg.buyerMessage, action: "human", reply: "[HUMAN] " + parsed.reason });
-            sendResponse({ ok: true, human: true, reason: parsed.reason });
-            break;
-          }
-          // A [VIDEO:url] just sends its caption as text in the simple build.
-          const text = parsed.kind === "video" ? parsed.caption || "" : parsed.text;
-          if (!text || !text.trim()) {
-            sendResponse({ ok: true, skip: true, reason: "empty reply" });
-            break;
-          }
-          await incrementCounters();
-          await appendLog({ thread: msg.threadName, buyer: msg.buyerMessage, action: "text", reply: text });
-          sendResponse({ ok: true, text });
+          sendResponse({ ok: true });
+          break;
+        }
+        case "VIDEO_FAILED": {
+          // No uploader found / error — release the in-memory claim so a later
+          // turn can retry (the persisted "sent" flag was never written).
+          if (msg.threadId) videoClaims.delete(msg.threadId);
+          sendResponse({ ok: true });
           break;
         }
         case "GET_VISITS": {

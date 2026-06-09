@@ -123,6 +123,12 @@
     "media, files and links", "media files and links", "rate seller", "more options",
     "marketplace", "mute", "search", "block", "you sent", "enter", "sent", "delivered",
     "seen", "active now", "view profile", "view seller profile", "see listing", "report", "archive",
+    // Marketplace UI chrome that sits inside the message column but isn't a message.
+    // (Buyer-plausible phrases like "is this still available?" are intentionally NOT
+    // here — the suggested-reply CHIP version is dropped by the role="button" filter,
+    // while a real buyer who types it still gets answered.)
+    "this is an automated suggestion", "add video to listing", "update listing",
+    "allow other buyers", "view buyer", "mark as sold", "make offer",
   ];
   function isNoise(text) {
     const t = text.trim().toLowerCase().replace(/\s+/g, " ");
@@ -135,34 +141,85 @@
     return NOISE.some((n) => t === n || t.startsWith(n));
   }
 
+  // Received (buyer) messages show the sender's avatar to the LEFT of the bubble;
+  // our own (sent) messages never do. Used only to break a near-symmetric tie.
+  function hasLeftAvatar(row, leafLeft) {
+    if (!row) return false;
+    const imgs = safe(() => Array.from(row.querySelectorAll('img, image, [role="img"]')), []);
+    for (const im of imgs) {
+      const r = safe(() => im.getBoundingClientRect(), null);
+      if (!r || r.width < 12 || r.width > 64 || r.height < 12 || r.height > 64) continue; // avatar-sized only
+      if (r.right <= leafLeft + 6) return true; // sits to the left of the text
+    }
+    return false;
+  }
+
   // Returns the conversation as [{ role:"buyer"|"me", text }] oldest→newest, or [].
+  //
+  // Role is decided by which side of the message COLUMN a bubble hugs — not by
+  // comparing to the composer's centre. The composer is inset/narrower than the
+  // real message column, which made long (wide) outgoing bubbles drift left of
+  // its centre and get misread as the buyer's — so the bot answered ITSELF. We
+  // start from the composer as an absolute reference, then widen the column to
+  // include any bubble that extends past it (buyer bubbles reveal the true left,
+  // ours reveal the true right). Ambiguous/near-symmetric bubbles default to
+  // "me", so the worst-case error is staying quiet — never replying to ourselves.
   function readConversation() {
     const main = getMain();
     const composer = findComposer();
     if (!main || !composer) return []; // not a loaded thread → read nothing
     const c = composer.getBoundingClientRect();
-    const left = c.left;
-    const right = c.right;
-    const center = (c.left + c.right) / 2;
     const top = c.top; // messages live above the input box
-    const out = [];
+    // Bubbles stay within the conversation column, which roughly tracks the
+    // composer (±a small inset). A generous margin keeps every real bubble while
+    // dropping text from the OTHER columns (thread list / info panel), so a stray
+    // far-side string can't blow out the column bounds below.
+    const MARGIN = Math.max(80, (c.right - c.left) * 0.2);
+
+    // Pass 1 — collect candidate text leaves (skip noise, links, and the
+    // Marketplace suggested-reply CHIPS, which are buttons, not messages).
+    const cands = [];
     const seen = new Set();
     let nodes = safe(() => Array.from(main.querySelectorAll('[role="row"] [dir="auto"]')), []);
     if (!nodes.length) nodes = safe(() => Array.from(main.querySelectorAll('[dir="auto"]')), []);
     for (const el of nodes) {
       if (safe(() => el.querySelector('[dir="auto"]'), null)) continue; // leaf text only
       if (safe(() => el.closest("a[href]"), null)) continue; // skip links (listing card, profile)
+      if (safe(() => el.closest('[role="button"]'), null)) continue; // skip suggested-reply chips / buttons
       const text = safe(() => (el.innerText || el.textContent || "").trim(), "");
       if (!text || isNoise(text)) continue;
       const r = safe(() => el.getBoundingClientRect(), null);
       if (!r || r.width <= 0 || r.height <= 0) continue;
-      const cx = r.left + r.width / 2;
-      if (cx < left - 40 || cx > right + 40) continue; // inside the message column only
       if (r.top >= top) continue; // above the composer only
+      const cx = r.left + r.width / 2;
+      if (cx < c.left - MARGIN || cx > c.right + MARGIN) continue; // inside the conversation column only
       const key = text + "@" + Math.round(r.top);
       if (seen.has(key)) continue;
       seen.add(key);
-      out.push({ role: cx > center ? "me" : "buyer", text, top: r.top });
+      cands.push({ text, left: r.left, right: r.right, top: r.top, row: safe(() => el.closest('[role="row"]'), null) });
+    }
+    if (!cands.length) return [];
+
+    // Establish the true message-column bounds: composer first, then widened by
+    // any (in-column) bubble that reaches past it.
+    let colLeft = c.left;
+    let colRight = c.right;
+    for (const m of cands) {
+      if (m.left < colLeft) colLeft = m.left;
+      if (m.right > colRight) colRight = m.right;
+    }
+    const colWidth = Math.max(1, colRight - colLeft);
+    const TOL = Math.max(28, colWidth * 0.07); // how decisively a bubble must hug one side
+
+    const out = [];
+    for (const m of cands) {
+      const distLeft = m.left - colLeft; // gap from the column's left edge
+      const distRight = colRight - m.right; // gap from the column's right edge
+      let role;
+      if (distRight - distLeft > TOL) role = "buyer"; // clearly hugs the left
+      else if (distLeft - distRight > TOL) role = "me"; // clearly hugs the right
+      else role = hasLeftAvatar(m.row, m.left) ? "buyer" : "me"; // ambiguous → avatar decides, else "me"
+      out.push({ role, text: m.text, top: m.top });
     }
     out.sort((a, b) => a.top - b.top);
     return out;
@@ -263,15 +320,6 @@
       }
     });
   }
-  function setLocal(obj) {
-    return new Promise((resolve) => {
-      try {
-        chrome.storage.local.set(obj, () => resolve());
-      } catch (e) {
-        resolve();
-      }
-    });
-  }
   function dataUrlToFile(dataUrl, name, type) {
     const b64 = dataUrl.slice(dataUrl.indexOf(",") + 1);
     const bin = atob(b64);
@@ -347,35 +395,51 @@
   }
   // Send the stored demo video(s) to the current chat — ONCE per chat, a set delay
   // after the text reply (default 10s). Supports MULTIPLE videos, sent in order.
+  //
+  // "Did we already send the video to this person?" is answered by an ATOMIC claim
+  // in the background service worker (a singleton for the whole Chrome profile):
+  //   - CLAIM_VIDEO returns already=true if the video was sent before (persisted,
+  //     survives page reloads) OR another tab/scan is sending it right now.
+  //   - We mark VIDEO_SENT as soon as a file is actually injected — not on the
+  //     flaky upload-preview detection — so we never resend on a false negative.
+  //   - VIDEO_FAILED releases the claim only when no uploader was found at all,
+  //     so a genuine failure can retry on a later turn.
   async function maybeSendVideo(id, name) {
     try {
-      const cfg = await getLocal(["videoEnabled", "demoVideos", "demoVideo", "videoSentThreads", "videoDelaySec"]);
+      const cfg = await getLocal(["videoEnabled", "demoVideos", "demoVideo", "videoDelaySec", "videoGapSec"]);
       if (!cfg.videoEnabled) return;
       let vids = Array.isArray(cfg.demoVideos) ? cfg.demoVideos : [];
       if (!vids.length && cfg.demoVideo && cfg.demoVideo.dataUrl) vids = [cfg.demoVideo]; // legacy single
       vids = vids.filter((v) => v && v.dataUrl);
       if (!vids.length) return;
-      const sent = cfg.videoSentThreads || {};
-      if (sent[id]) return; // already sent in this conversation
+
+      const claim = await ask({ type: "CLAIM_VIDEO", threadId: id });
+      if (!claim || !claim.ok || claim.already) {
+        setStatus({ lastAction: "video already sent to this chat — skipping", currentThread: name });
+        return; // already sent (or being sent elsewhere) → never double up
+      }
+
       const delayMs = (cfg.videoDelaySec != null ? cfg.videoDelaySec : 10) * 1000;
+      const gapMs = (cfg.videoGapSec != null ? cfg.videoGapSec : 8) * 1000; // your set gap between videos
       setStatus({ lastAction: `video in ${Math.round(delayMs / 1000)}s…`, currentThread: name });
       await sleep(delayMs); // wait N seconds after the text reply (default 10s)
-      let anyOk = false;
+      let injectedAny = false;
       for (let i = 0; i < vids.length; i++) {
         setStatus({ lastAction: `sending video ${i + 1}/${vids.length}…`, currentThread: name });
         const file = dataUrlToFile(vids[i].dataUrl, vids[i].name, vids[i].type);
         const ok = await injectVideo(file);
-        anyOk = anyOk || ok;
-        if (i < vids.length - 1) await sleep(rand(4000, 7000)); // gap between videos
+        injectedAny = injectedAny || ok;
+        if (i < vids.length - 1) await sleep(gapMs + rand(0, 1500)); // honor the configured inter-video gap
       }
-      if (anyOk) {
-        sent[id] = true; // mark so we never send the video(s) twice in the same chat
-        await setLocal({ videoSentThreads: sent });
+      if (injectedAny) {
+        await ask({ type: "VIDEO_SENT", threadId: id }); // persist: never send again to this chat
         setStatus({ lastAction: "demo video(s) sent ✓", currentThread: name });
       } else {
+        await ask({ type: "VIDEO_FAILED", threadId: id }); // no uploader found — release for a later retry
         setStatus({ lastError: "couldn't attach video (no uploader found) — will retry" });
       }
     } catch (e) {
+      safe(() => ask({ type: "VIDEO_FAILED", threadId: id })); // release on error so we can retry
       setStatus({ lastError: "video error: " + e.message });
     }
   }
@@ -412,7 +476,7 @@
     }
     setStatus({ lastAction: "buyer said: " + trunc(turn.buyerMessage, 80), currentThread: name });
 
-    const reply = await ask({ type: "GET_REPLY_SIMPLE", buyerMessage: turn.buyerMessage, context: turn.transcript, threadName: name });
+    const reply = await ask({ type: "GET_REPLY_SIMPLE", buyerMessage: turn.buyerMessage, context: turn.transcript, threadName: name, threadId: id });
     if (!reply || !reply.ok) {
       setStatus({ lastError: "Claude error: " + (reply && reply.error) });
       return;

@@ -423,9 +423,10 @@
     });
   }
   function loadVideo() {
-    chrome.storage.local.get(["videoEnabled", "demoVideos", "demoVideo", "videoDelaySec"], (r) => {
+    chrome.storage.local.get(["videoEnabled", "demoVideos", "demoVideo", "videoDelaySec", "videoGapSec"], (r) => {
       if ($("videoEnabled")) $("videoEnabled").checked = !!r.videoEnabled;
       if ($("videoDelaySec")) $("videoDelaySec").value = r.videoDelaySec != null ? r.videoDelaySec : 10;
+      if ($("videoGapSec")) $("videoGapSec").value = r.videoGapSec != null ? r.videoGapSec : 8;
       demoVideos = Array.isArray(r.demoVideos) ? r.demoVideos : [];
       if (!demoVideos.length && r.demoVideo && r.demoVideo.dataUrl) demoVideos = [r.demoVideo]; // migrate legacy single
       renderVideoList();
@@ -439,6 +440,11 @@
   if ($("videoDelaySec")) {
     $("videoDelaySec").addEventListener("change", () => {
       chrome.storage.local.set({ videoDelaySec: Number($("videoDelaySec").value) || 0 });
+    });
+  }
+  if ($("videoGapSec")) {
+    $("videoGapSec").addEventListener("change", () => {
+      chrome.storage.local.set({ videoGapSec: Number($("videoGapSec").value) || 0 });
     });
   }
   if ($("videoFile")) {
