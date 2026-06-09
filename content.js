@@ -34,19 +34,37 @@
   const trunc = (s, n) => (s == null ? null : String(s).length > n ? String(s).slice(0, n) : String(s));
 
   let busy = false;
-  const cooldowns = {}; // threadId -> timestamp we may re-check it
-  const lastHandled = {}; // threadId -> the buyer message we last replied to (don't repeat)
+  let cooldowns = {}; // threadId -> timestamp we may re-check it (persisted, shared across tabs)
+  let lastHandled = {}; // threadId -> the buyer message we last replied to (persisted)
   let tick = {}; // live status shown in the popup
 
   // Texts WE recently sent — a hard guard so the bot never replies to its own
-  // message even if alignment detection ever slips (prevents self-reply spam).
-  const recentSent = [];
+  // message even if alignment detection ever slips. PERSISTED so a content-script
+  // reload (common on laggy Remote Desktop) doesn't re-arm the self-reply bug.
+  let recentSent = [];
   const normMsg = (s) => (s || "").toLowerCase().replace(/\s+/g, " ").trim();
+  // Hydrate persisted state at boot.
+  safe(() =>
+    chrome.storage.local.get(["recentSent", "cooldowns", "lastHandled"], (r) => {
+      if (r && Array.isArray(r.recentSent)) recentSent = r.recentSent;
+      if (r && r.cooldowns && typeof r.cooldowns === "object") cooldowns = r.cooldowns;
+      if (r && r.lastHandled && typeof r.lastHandled === "object") lastHandled = r.lastHandled;
+    })
+  );
   function rememberSent(t) {
     const m = normMsg(t);
     if (!m) return;
     recentSent.push(m);
-    if (recentSent.length > 20) recentSent.shift();
+    while (recentSent.length > 60) recentSent.shift();
+    safe(() => chrome.storage.local.set({ recentSent }));
+  }
+  function persistDedup() {
+    // keep the persisted maps from growing unbounded (cap ~400 threads)
+    for (const map of [cooldowns, lastHandled]) {
+      const keys = Object.keys(map);
+      if (keys.length > 400) for (const k of keys.slice(0, keys.length - 400)) delete map[k];
+    }
+    safe(() => chrome.storage.local.set({ cooldowns, lastHandled }));
   }
   function isOwnEcho(msg) {
     const m = normMsg(msg);
@@ -134,12 +152,17 @@
   }
 
   // Things that are NOT chat messages (menus, the listing card, system notices).
+  // Multi-word phrases are matched as a prefix; SHORT single words must match EXACTLY
+  // (so a real buyer message like "Sent it yet?" or "Mute point…" isn't dropped).
   const NOISE = [
     "privacy & support", "privacy and support", "customize chat", "chat members",
     "media, files and links", "media files and links", "rate seller", "more options",
-    "marketplace", "mute", "search", "block", "you sent", "enter", "sent", "delivered",
-    "seen", "active now", "view profile", "view seller profile", "see listing", "report", "archive",
+    "you sent", "view profile", "view seller profile", "see listing",
   ];
+  const NOISE_EXACT = new Set([
+    "marketplace", "mute", "search", "block", "enter", "sent", "delivered",
+    "seen", "active now", "report", "archive", "vu", "distribué", "envoyé",
+  ]);
   function isNoise(text) {
     const t = text.trim().toLowerCase().replace(/\s+/g, " ");
     if (!t) return true;
@@ -164,9 +187,16 @@
     if (/^more options$|^view listing$|^see listing$/.test(t)) return true;
     // Facebook "Send a quick response" card + its preset reply buttons (seller options,
     // NOT buyer messages).
-    if (/send a quick response|tap a response/.test(t)) return true;
+    if (/send a quick response|tap a response|réponse rapide|envoyer une réponse/.test(t)) return true;
     if (/^(yes, are you interested|in talks|sorry,? it'?s not available|is this still available|yes,? it'?s available|when can you|is this available)/.test(t)) return true;
-    return NOISE.some((n) => t === n || t.startsWith(n));
+    // FRENCH equivalents of the system/UI lines above (operator runs FR accounts too).
+    if (/suggestion automatis/.test(t)) return true; // "Ceci est une suggestion automatisée"
+    if (/attend (ta|votre) réponse/.test(t)) return true; // "X attend ta/votre réponse"
+    if (/vous a envoyé un|t'a envoyé un/.test(t)) return true; // "X vous a envoyé un message"
+    if (/a démarré (cette|la) discussion|a lancé cette conversation/.test(t)) return true;
+    if (/ajouter (une |la )?vidéo|mettre à jour l'annonce|voir l'acheteur|marquer comme vendu/.test(t)) return true;
+    if (/^(jour|hier|aujourd|lun|mar|mer|jeu|ven|sam|dim)\b/.test(t)) return true; // FR date headers
+    return NOISE_EXACT.has(t) || NOISE.some((n) => t === n || t.startsWith(n));
   }
 
   // Is this text node inside OUR (seller) message bubble? Facebook paints the
@@ -175,9 +205,12 @@
   // panel being open, wide bubbles, zoom, Remote-Desktop lag). We only ever use
   // this to declare "me" — it never declares "buyer" — so it can only PREVENT the
   // bot from replying to its own message, never cause a new misread.
+  // TRI-STATE: true = ours (blue/gradient), false = the buyer's (neutral gray),
+  // null = can't tell. "null" must NEVER be treated as "buyer" by callers — that was
+  // the bug that made ambiguity default to a reply. Theme-agnostic (works in dark mode).
   function looksLikeOurBubble(el) {
     let node = el;
-    for (let i = 0; i < 9 && node && node.nodeType === 1; i++) {
+    for (let i = 0; i < 12 && node && node.nodeType === 1; i++) {
       const cs = safe(() => getComputedStyle(node), null);
       if (cs) {
         const radius = Math.max(
@@ -190,16 +223,17 @@
           // This is the rounded message bubble. Decide from its paint.
           if (/gradient/i.test(cs.backgroundImage || "")) return true; // our outgoing bubble is a gradient
           const m = (cs.backgroundColor || "").match(/rgba?\(\s*([\d.]+)\s*,\s*([\d.]+)\s*,\s*([\d.]+)\s*(?:,\s*([\d.]+))?/);
-          if (m) {
-            const r = +m[1], g = +m[2], b = +m[3], a = m[4] == null ? 1 : +m[4];
-            if (a >= 0.5 && b >= 140 && b > r + 35 && b > g + 25) return true; // clearly blue → us
-          }
-          return false; // found the bubble and it's gray/other → not ours (buyer)
+          if (!m) return null; // no solid bg → unknown
+          const r = +m[1], g = +m[2], b = +m[3], a = m[4] == null ? 1 : +m[4];
+          if (a < 0.2) return null; // transparent / not painted yet → unknown
+          if (b > r + 20 && b > g + 12 && b >= 120) return true; // blue-dominant → us
+          if (Math.abs(r - g) < 18 && Math.abs(g - b) < 22) return false; // neutral gray → the buyer's
+          return null; // colored but not clearly blue → unknown
         }
       }
       node = node.parentElement;
     }
-    return false;
+    return null; // never found a bubble → unknown
   }
 
   // Returns the conversation as [{ role:"buyer"|"me", text }] oldest→newest, or [].
@@ -244,13 +278,22 @@
       if (k.r.right > colRight) colRight = k.r.right;
     }
 
-    // Pass 2 — classify each bubble. Priority: our own recent text → "me"; our bubble
-    // color → "me"; else alignment within the self-calibrated column.
+    // Pass 2 — classify each bubble. A message is the BUYER's ONLY with positive
+    // evidence (neutral-gray bubble, or — if color is unknown — clearly hugging the
+    // left). Everything ambiguous is treated as "me" so the bot can never reply to
+    // its own message. This is the core anti-self-reply rule.
     const out = [];
     for (const { el, text, r } of cands) {
+      const ours = looksLikeOurBubble(el); // true | false | null
       let role;
-      if (isOwnEcho(text) || looksLikeOurBubble(el)) role = "me";
-      else role = (r.left - colLeft) > (colRight - r.right) ? "me" : "buyer";
+      if (isOwnEcho(text) || ours === true) {
+        role = "me"; // our own message
+      } else if (ours === false) {
+        role = "buyer"; // neutral-gray bubble = the buyer's (ours are blue/gradient)
+      } else {
+        // color inconclusive → only call it the buyer when it CLEARLY hugs the left
+        role = (colRight - r.right) - (r.left - colLeft) > 30 ? "buyer" : "me";
+      }
       out.push({ role, text, top: r.top });
     }
     out.sort((a, b) => a.top - b.top);
@@ -293,7 +336,14 @@
 
   /* ---------------- type + send (and VERIFY it sent) ---------------- */
   function composerText(el) {
-    return safe(() => (el.innerText || el.textContent || "").replace(/ /g, " ").trim(), "");
+    return safe(
+      () =>
+        (el.innerText || el.textContent || "")
+          .replace(/[\u200b-\u200d\ufeff]/g, "") // zero-width chars Lexical injects
+          .replace(/[\u00a0\u2009\u202f]/g, " ") // nbsp / thin / narrow no-break
+          .trim(),
+      ""
+    );
   }
   function insertText(el, str) {
     el.focus();
@@ -306,26 +356,26 @@
   }
   function pressEnter(el) {
     el.focus();
-    for (const type of ["keydown", "keypress", "keyup"]) {
-      el.dispatchEvent(new KeyboardEvent(type, { key: "Enter", code: "Enter", keyCode: 13, which: 13, bubbles: true, cancelable: true }));
-    }
+    // keydown only (Lexical sends on keydown); shiftKey:false so it's a SEND, not a
+    // soft line-break. Don't dispatch keypress/keyup — that caused double handling.
+    el.dispatchEvent(
+      new KeyboardEvent("keydown", { key: "Enter", code: "Enter", keyCode: 13, which: 13, shiftKey: false, bubbles: true, cancelable: true })
+    );
   }
   function clickSend() {
     const main = getMain() || document;
-    const sels = [
-      'div[aria-label="Press Enter to send"]',
-      '[aria-label*="Send" i][role="button"]',
-      '[aria-label*="Envoyer" i][role="button"]',
-    ];
-    for (const s of sels) {
-      const els = safe(() => Array.from(main.querySelectorAll(s)), []);
-      for (const b of els) {
-        const al = (safe(() => b.getAttribute("aria-label"), "") || "").toLowerCase();
-        // Never click the voice-clip / mic button (it triggers the mic permission prompt).
-        if (/voice|vocal|clip|audio|micro|record|enregistr/.test(al)) continue;
-        safe(() => b.click());
-        return true;
-      }
+    // Only ever click a real SEND control (the label filter below). When nothing is
+    // staged, Messenger shows like/mic instead of Send, so this naturally no-ops —
+    // and it still works for a video-only send (empty text but an attachment staged).
+    const els = safe(() => Array.from(main.querySelectorAll('[role="button"]')), []);
+    for (const b of els) {
+      const al = (safe(() => b.getAttribute("aria-label"), "") || "").toLowerCase();
+      if (!al) continue;
+      if (/voice|vocal|clip|audio|micro|record|enregistr/.test(al)) continue; // mic / voice clip
+      if (/like|j'?aime|sticker|autocollant|gif|emoji|r[ée]action/.test(al)) continue; // like/sticker/gif
+      if (!(/\bsend\b/.test(al) || /press enter to send/.test(al) || /envoyer un message/.test(al) || /^envoyer\b/.test(al))) continue;
+      safe(() => b.click());
+      return true;
     }
     return false;
   }
@@ -341,7 +391,10 @@
   async function typeAndSend(el, text) {
     const want = String(text).replace(/\s*\n\s*/g, " ").trim();
     if (!want) return false;
-    const norm = (s) => (s || "").replace(/\s+/g, " ").trim();
+    // Compare ignoring invisible chars Lexical injects, so a CORRECT long/multiline
+    // reply isn't falsely rejected (which used to make the bot silently never reply).
+    const norm = (s) =>
+      (s || "").replace(/[\u200b-\u200d\ufeff]/g, "").replace(/[\u00a0\u2009\u202f]/g, " ").replace(/\s+/g, " ").trim();
     const clear = () => {
       el.focus();
       safe(() => document.execCommand("selectAll", false, null));
@@ -368,13 +421,17 @@
       return false;
     }
 
+    // Send ONCE. The box clearing = it sent. Wait generously (laggy Remote Desktop),
+    // and only escalate to the Send button if the box STILL holds exactly our text —
+    // so we can NEVER fire a second send / a stray sticker after it already went.
     pressEnter(el);
-    if (await composerEmptied(el)) return true; // 1) Enter
-    clickSend();
-    if (await composerEmptied(el)) return true; // 2) Send button
-    el.focus();
-    pressEnter(el);
-    return await composerEmptied(el); // 3) Enter again
+    if (await composerEmptied(el, 5000)) return true;
+    if (norm(composerText(el)) === norm(want)) {
+      clickSend();
+      if (await composerEmptied(el, 4000)) return true;
+    }
+    // Ambiguous (box neither cleared nor still our exact text) — do NOT blind-resend.
+    return !composerText(el);
   }
 
   /* ---------------- demo video (optional, ONCE per chat) ---------------- */
@@ -449,7 +506,7 @@
     }
     if (!injected) return false;
 
-    // Wait for the upload preview to attach (poll up to ~25s for a NEW preview).
+    // Wait for the upload preview to actually attach (poll up to ~25s for a NEW one).
     const start = Date.now();
     let attached = false;
     while (Date.now() - start < 25000) {
@@ -460,14 +517,21 @@
         break;
       }
     }
-    await sleep(attached ? 1500 : 1000);
+    if (!attached) return false; // nothing attached → NEVER blind-press Enter (caused stray sends)
+    await sleep(1500);
     const composer2 = findComposer();
-    if (composer2) {
-      pressEnter(composer2);
-      await sleep(800);
-      clickSend();
+    if (!composer2) return false;
+    // Send once, then CONFIRM the preview detached (= it actually sent) before giving up.
+    const previews = safe(() => main.querySelectorAll(previewSel).length, before);
+    pressEnter(composer2);
+    const s2 = Date.now();
+    while (Date.now() - s2 < 6000) {
+      await sleep(300);
+      if (safe(() => main.querySelectorAll(previewSel).length, previews) < previews) return true;
     }
-    return true;
+    clickSend(); // single fallback
+    await sleep(1500);
+    return safe(() => main.querySelectorAll(previewSel).length, previews) < previews;
   }
   // Belt-and-suspenders: does THIS open chat already show a video on our side?
   // A sent video renders with a duration badge like "0:16". If the persistent
@@ -476,20 +540,23 @@
     const main = getMain();
     const composer = findComposer();
     if (!main || !composer) return false;
-    const top = safe(() => composer.getBoundingClientRect().top, 0);
-    const half = window.innerWidth * 0.5;
+    const c = safe(() => composer.getBoundingClientRect(), null);
+    if (!c) return false;
+    const top = c.top;
+    const mid = c.left + c.width / 2; // column midpoint (NOT window center — panel-proof)
+    const ours = (el, r) => looksLikeOurBubble(el) === true || (r && r.left + r.width / 2 > mid);
     const nodes = safe(() => Array.from(main.querySelectorAll('[dir="auto"]')), []);
     for (const n of nodes) {
       const t = safe(() => (n.innerText || "").trim(), "");
       if (!/^\d{1,2}:\d{2}$/.test(t)) continue; // a video duration badge
       const r = safe(() => n.getBoundingClientRect(), null);
       if (!r || r.top >= top) continue; // in the message area, above the composer
-      if (looksLikeOurBubble(n) || r.left > half) return true; // ours (right side)
+      if (ours(n, r)) return true;
     }
     const vids = safe(() => Array.from(main.querySelectorAll("video")), []);
     for (const v of vids) {
       const r = safe(() => v.getBoundingClientRect(), null);
-      if (r && r.left > half) return true;
+      if (r && r.top < top && ours(v, r)) return true;
     }
     return false;
   }
@@ -532,11 +599,16 @@
         }
         return;
       }
-      // Mark as sent NOW — BEFORE the delay/upload. The upload is best-effort and can
-      // be flaky; marking up-front guarantees exactly ONE attempt per chat so a failed
-      // or slow upload can never make us re-send the video on the next pass.
-      sent[id] = true;
-      await setLocal({ videoSentThreads: sent });
+      // ATOMIC CLAIM: mark sent up-front, then RE-READ and verify we actually own the
+      // claim. If another pass/tab claimed it in the race window, back off. This makes
+      // "once per chat" hold even with two tabs or a reload mid-send.
+      const stamp = Date.now() + ":" + Math.random();
+      const fresh = (await getLocal(["videoSentThreads"])).videoSentThreads || {};
+      if (fresh[id]) return; // someone claimed it since our first read
+      fresh[id] = stamp;
+      await setLocal({ videoSentThreads: fresh });
+      const after = (await getLocal(["videoSentThreads"])).videoSentThreads || {};
+      if (after[id] !== stamp) return; // lost the race → another pass owns it
 
       const delaySec = centralDelay != null ? centralDelay : cfg.videoDelaySec != null ? cfg.videoDelaySec : 10;
       const delayMs = delaySec * 1000;
@@ -742,6 +814,7 @@
     rememberSent(reply.text); // so we never mistake this for a buyer message later
     lastHandled[id] = turn.buyerMessage;
     cooldowns[id] = Date.now() + COOLDOWN_MS;
+    persistDedup(); // survive a content-script reload — don't re-reply the same message
     setStatus({ lastAction: "replied ✓", lastReplySent: trunc(reply.text, 200), currentThread: name });
 
     // Schedule a follow-up (background handles the timing). Re-armed on every
@@ -767,22 +840,22 @@
     return /messenger\.com/.test(location.host) || /facebook\.com\/(messages|marketplace)/.test(location.href);
   }
   async function scan() {
-    if (busy) return;
-    const anchors = conversationAnchors();
-    const settings = (await ask({ type: "GET_SETTINGS" })).settings || {};
-    setStatus({ marketplaceAnchorCount: anchors.length, lastAction: settings.enabled ? "scanning" : "off" });
-    if (!settings.enabled || !onMarketplace()) return;
-
-    // the next conversation whose cooldown has passed (rotates through all of them)
-    const target = anchors.find((a) => {
-      const id = threadId(a);
-      return !cooldowns[id] || Date.now() > cooldowns[id];
-    });
-    if (!target) return;
-
+    // Claim the lock SYNCHRONOUSLY before any await, so two scans (interval +
+    // heartbeat) can never both get past here (no check/set gap).
     if (busy) return;
     busy = true;
     try {
+      const anchors = conversationAnchors();
+      const settings = (await ask({ type: "GET_SETTINGS" })).settings || {};
+      setStatus({ marketplaceAnchorCount: anchors.length, lastAction: settings.enabled ? "scanning" : "off" });
+      if (!settings.enabled || !onMarketplace()) return;
+
+      // the next conversation whose cooldown has passed (rotates through all of them)
+      const target = anchors.find((a) => {
+        const id = threadId(a);
+        return !cooldowns[id] || Date.now() > cooldowns[id];
+      });
+      if (!target) return;
       await handleThread(target);
     } catch (e) {
       setStatus({ lastError: "error: " + e.message });
@@ -820,7 +893,21 @@
             setStatus({ lastAction: "follow-up skipped — buyer already active", currentThread: anchorName(anchor) });
             return send({ ok: true, skipped: true });
           }
+          // Enforce the SAME anti-spam cap the smart-follow-up path uses, so the
+          // alarm path can't post a 3rd consecutive bot message.
+          const tail = botTailCount();
+          const settings = (await ask({ type: "GET_SETTINGS" })).settings || {};
+          const maxCount = Math.max(0, Number(settings.smartFollowupMaxCount) || 1);
+          if (tail === 0 || tail - 1 >= maxCount) {
+            setStatus({ lastAction: "follow-up skipped — cap reached", currentThread: anchorName(anchor) });
+            return send({ ok: true, skipped: "cap" });
+          }
           const ok = await typeAndSend(composer, msg.text);
+          if (ok) {
+            rememberSent(msg.text); // never read our own follow-up back as a buyer message
+            cooldowns[msg.threadId] = Date.now() + COOLDOWN_MS;
+            persistDedup();
+          }
           setStatus({ lastAction: ok ? "follow-up sent ✓" : "follow-up failed", currentThread: anchorName(anchor) });
           send({ ok });
         } catch (e) {
