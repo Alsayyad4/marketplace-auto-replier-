@@ -162,6 +162,10 @@
     if (/^message sent$/.test(t)) return true;
     if (/ sent you a (message|video|photo|gif)/.test(t)) return true; // "X sent you a message"
     if (/^more options$|^view listing$|^see listing$/.test(t)) return true;
+    // Facebook "Send a quick response" card + its preset reply buttons (seller options,
+    // NOT buyer messages).
+    if (/send a quick response|tap a response/.test(t)) return true;
+    if (/^(yes, are you interested|in talks|sorry,? it'?s not available|is this still available|yes,? it'?s available|when can you|is this available)/.test(t)) return true;
     return NOISE.some((n) => t === n || t.startsWith(n));
   }
 
@@ -214,6 +218,10 @@
     for (const el of nodes) {
       if (safe(() => el.querySelector('[dir="auto"]'), null)) continue; // leaf text only
       if (safe(() => el.closest("a[href]"), null)) continue; // skip links (listing card, profile)
+      // Skip anything inside a button/menu — Facebook's "Send a quick response" preset
+      // buttons (Yes, are you interested? / Sorry, it's not available. …) and other UI
+      // chips look like gray left-aligned bubbles but are NOT buyer messages.
+      if (safe(() => el.closest('[role="button"],[role="menuitem"],button'), null)) continue;
       const text = safe(() => (el.innerText || el.textContent || "").trim(), "");
       if (!text || isNoise(text)) continue;
       const r = safe(() => el.getBoundingClientRect(), null);
