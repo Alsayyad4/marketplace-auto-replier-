@@ -556,18 +556,24 @@
     if (!attached) return false; // nothing attached → NEVER blind-press Enter (caused stray sends)
     await sleep(1500);
     const composer2 = findComposer();
-    if (!composer2) return false;
-    // Send once, then CONFIRM the preview detached (= it actually sent) before giving up.
-    const previews = safe(() => main.querySelectorAll(previewSel).length, before);
-    pressEnter(composer2);
-    const s2 = Date.now();
-    while (Date.now() - s2 < 6000) {
-      await sleep(300);
-      if (safe(() => main.querySelectorAll(previewSel).length, previews) < previews) return true;
+    // The clip ATTACHED (uploaded into the composer). Press Enter to send, with a
+    // click-Send fallback. We return TRUE on attach + send-attempt and do NOT require
+    // observing the preview detach: that confirmation is flaky on slow uploads, and a
+    // false "not sent" was making the caller record a failure and RETRY → duplicate
+    // videos. Attach + Enter is a reliable "it's on its way"; the caller marks the chat
+    // done so it can never re-send.
+    if (composer2) {
+      const previews = safe(() => main.querySelectorAll(previewSel).length, before);
+      pressEnter(composer2);
+      const s2 = Date.now();
+      while (Date.now() - s2 < 6000) {
+        await sleep(300);
+        if (safe(() => main.querySelectorAll(previewSel).length, previews) < previews) return true; // confirmed gone = sent
+      }
+      clickSend(); // single fallback for layouts where Enter doesn't send
+      await sleep(1500);
     }
-    clickSend(); // single fallback
-    await sleep(1500);
-    return safe(() => main.querySelectorAll(previewSel).length, previews) < previews;
+    return true; // attached + send attempted — treat as sent (never re-upload to this chat)
   }
   // Belt-and-suspenders: does THIS open chat already show a video on our side?
   // A sent video renders as a thumbnail with a play button and a small duration
@@ -656,11 +662,15 @@
       const done = cfg.videoSentThreads || {};
 
       // (1) CONFIRMED sent → never resend. Only the NEW {done:true} is authoritative.
-      if (done[id] && done[id].done) return;
+      if (done[id] && done[id].done) {
+        console.debug("[SubSell] video: skip — chat already marked sent", id);
+        return;
+      }
       // A video is visibly in the chat (real message row) → it's sent; mark + stop.
       if (chatAlreadyHasOurVideo()) {
         done[id] = { done: true, at: now };
         await setLocal({ videoSentThreads: done });
+        console.debug("[SubSell] video: skip — video already visible in chat", id);
         return;
       }
       // A leftover OLD boolean `true` mark with NO actual video in the chat was a
@@ -694,6 +704,21 @@
         await sleep(firstSec * 1000);
       }
 
+      // Re-check AFTER the delay: during the wait the chat may have received a video
+      // (another pass finished, or one finally rendered). Re-read storage + the DOM so
+      // we never pile a second clip onto a chat that already has one.
+      {
+        const fresh = (await getLocal(["videoSentThreads"])).videoSentThreads || {};
+        if ((fresh[id] && fresh[id].done) || chatAlreadyHasOurVideo()) {
+          if (!(fresh[id] && fresh[id].done)) {
+            fresh[id] = { done: true, at: Date.now() };
+            await setLocal({ videoSentThreads: fresh });
+          }
+          console.debug("[SubSell] video: skip after delay — chat already has a video", id);
+          return;
+        }
+      }
+
       // Build the ordered File list (local first, then central downloaded via background).
       const files = [];
       for (const v of local) {
@@ -719,35 +744,49 @@
         setStatus({ lastError: "video: couldn't load any clip — will retry later", currentThread: name });
         return;
       }
+      console.debug("[SubSell] video: sending " + files.length + " clip(s) to", id);
 
-      let okCount = 0;
-      for (let i = 0; i < files.length; i++) {
-        setStatus({ lastAction: `sending video ${i + 1}/${files.length}…`, currentThread: name });
-        if (await injectVideo(files[i])) okCount++;
-        if (i < files.length - 1) await sleep(gapSec * 1000 + rand(0, 1500)); // pause BETWEEN videos
-      }
-
-      // (4) Confirm it actually landed. ONLY then mark permanently sent — otherwise
-      // record a failure (backoff) so it retries, never a "marked but never sent".
-      // A freshly-sent clip takes a moment to render its bubble, so when injectVideo
-      // wasn't sure (okCount 0) we POLL the chat for a few seconds before deciding it
-      // failed — otherwise a slow upload is misread as a failure and retried, which
-      // is exactly what produced duplicate videos.
-      let landed = okCount > 0;
-      for (let i = 0; i < 6 && !landed; i++) {
-        await sleep(1500);
-        if (chatAlreadyHasOurVideo()) landed = true;
-      }
-      if (landed) {
+      // Persist the permanent "sent" flag for THIS chat + clear any pending attempt.
+      // Called the INSTANT the first clip attaches — not after a flaky send-confirm —
+      // so a mid-send reload or an unconfirmed send can never cause a re-send.
+      const markDone = async () => {
         const dm = (await getLocal(["videoSentThreads"])).videoSentThreads || {};
         dm[id] = { done: true, at: Date.now() };
         const am = (await getLocal(["videoAttempts"])).videoAttempts || {};
         delete am[id];
         await setLocal({ videoSentThreads: dm, videoAttempts: am });
+        console.debug("[SubSell] video: marked chat done — will never resend", id);
+      };
+
+      let okCount = 0;
+      for (let i = 0; i < files.length; i++) {
+        setStatus({ lastAction: `sending video ${i + 1}/${files.length}…`, currentThread: name });
+        const attached = await injectVideo(files[i]);
+        if (attached) {
+          okCount++;
+          if (okCount === 1) await markDone(); // lock the chat the moment a clip attaches
+        }
+        if (i < files.length - 1) await sleep(gapSec * 1000 + rand(0, 1500)); // pause BETWEEN videos
+      }
+
+      // (4) If a clip attached, the chat is already marked done above — never resend.
+      // If NOTHING attached, double-check the chat (a clip may have rendered anyway);
+      // otherwise record a genuine failure so it retries later (capped, with backoff).
+      if (okCount > 0) {
         setStatus({ lastAction: `demo video(s) sent ✓ (${okCount}/${files.length})`, currentThread: name });
       } else {
-        await recordVideoFail(id);
-        setStatus({ lastError: "video didn't attach — will retry later", currentThread: name });
+        let landed = false;
+        for (let i = 0; i < 4 && !landed; i++) {
+          await sleep(1500);
+          if (chatAlreadyHasOurVideo()) landed = true;
+        }
+        if (landed) {
+          await markDone();
+          setStatus({ lastAction: "demo video already in chat ✓", currentThread: name });
+        } else {
+          await recordVideoFail(id);
+          setStatus({ lastError: "video didn't attach — will retry later", currentThread: name });
+        }
       }
     } catch (e) {
       setStatus({ lastError: "video error: " + e.message });
