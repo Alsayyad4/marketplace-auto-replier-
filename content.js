@@ -570,8 +570,11 @@
     return safe(() => main.querySelectorAll(previewSel).length, previews) < previews;
   }
   // Belt-and-suspenders: does THIS open chat already show a video on our side?
-  // A sent video renders with a duration badge like "0:16". If the persistent
-  // "already sent" flag is ever lost, this still stops us re-sending.
+  // A sent video renders as a thumbnail with a play button and a small duration
+  // badge ("0:16"). Facebook renders that badge as a plain overlay span (NOT a
+  // [dir="auto"] text node) and shows no real <video> element until you press play
+  // — so we must scan broadly for the badge, not just [dir="auto"]. If the
+  // persistent "already sent" flag is ever lost, this still stops us re-sending.
   function chatAlreadyHasOurVideo() {
     const main = getMain();
     const composer = findComposer();
@@ -580,22 +583,29 @@
     if (!c) return false;
     const top = c.top;
     const mid = c.left + c.width / 2; // column midpoint (NOT window center — panel-proof)
-    // Require a real message ROW — excludes the LISTING CARD's own video preview at
-    // the top (which was making the bot think it had already sent a video → some
-    // chats never got one).
-    const ours = (el, r) => safe(() => el.closest('[role="row"]'), null) && (looksLikeOurBubble(el) === true || (r && r.left + r.width / 2 > mid));
-    const nodes = safe(() => Array.from(main.querySelectorAll('[role="row"] [dir="auto"]')), []);
-    for (const n of nodes) {
-      const t = safe(() => (n.innerText || "").trim(), "");
-      if (!/^\d{1,2}:\d{2}$/.test(t)) continue; // a video duration badge
-      const r = safe(() => n.getBoundingClientRect(), null);
-      if (!r || r.top >= top) continue; // in the message area, above the composer
-      if (ours(n, r)) return true;
-    }
+    // On our (seller) side AND a real message — `[role="row"]` excludes the pinned
+    // LISTING CARD's own video/preview at the top (which isn't a message row).
+    const ours = (el, r) =>
+      !!safe(() => el.closest('[role="row"]'), null) &&
+      (looksLikeOurBubble(el) === true || (r && r.left + r.width / 2 > mid));
+
+    // (a) An actual <video> element on our side (present once the clip renders).
     const vids = safe(() => Array.from(main.querySelectorAll('[role="row"] video')), []);
     for (const v of vids) {
       const r = safe(() => v.getBoundingClientRect(), null);
-      if (r && r.top < top && ours(v, r)) return true;
+      if (r && r.top < top && r.width > 0 && ours(v, r)) return true;
+    }
+    // (b) The duration badge ("0:16", "1:03"). It's a small overlay element on the
+    //     thumbnail — usually NOT [dir="auto"] — so scan every leaf element in the
+    //     message rows for one whose OWN text is exactly mm:ss and is badge-sized.
+    const leaves = safe(() => Array.from(main.querySelectorAll('[role="row"] span, [role="row"] div')), []);
+    for (const n of leaves) {
+      if (n.childElementCount !== 0) continue; // the badge itself, not a wrapper
+      const t = safe(() => (n.textContent || "").trim(), "");
+      if (!/^\d{1,2}:\d{2}$/.test(t)) continue; // a video duration badge
+      const r = safe(() => n.getBoundingClientRect(), null);
+      if (!r || r.top >= top || r.width <= 0 || r.width > 90) continue; // small badge, in the msg area
+      if (ours(n, r)) return true;
     }
     return false;
   }
@@ -719,7 +729,15 @@
 
       // (4) Confirm it actually landed. ONLY then mark permanently sent — otherwise
       // record a failure (backoff) so it retries, never a "marked but never sent".
-      const landed = okCount > 0 || chatAlreadyHasOurVideo();
+      // A freshly-sent clip takes a moment to render its bubble, so when injectVideo
+      // wasn't sure (okCount 0) we POLL the chat for a few seconds before deciding it
+      // failed — otherwise a slow upload is misread as a failure and retried, which
+      // is exactly what produced duplicate videos.
+      let landed = okCount > 0;
+      for (let i = 0; i < 6 && !landed; i++) {
+        await sleep(1500);
+        if (chatAlreadyHasOurVideo()) landed = true;
+      }
       if (landed) {
         const dm = (await getLocal(["videoSentThreads"])).videoSentThreads || {};
         dm[id] = { done: true, at: Date.now() };
