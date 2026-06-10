@@ -86,6 +86,7 @@ endpoint serves that object to the extension.
 
 These live in each computer's local storage and are **not** in the config JSON:
 - `enabled` — on/off toggle per machine.
+- `machineLabel` — how this computer/account shows up in the web app's **Activity** log (Settings → "This computer's label"). Falls back to a stable random id.
 - `videoEnabled` (bool), `videoDelaySec` (number, default 10), `demoVideos` (uploaded
   mp4 files as base64) — the actual demo video is uploaded per machine (too big to serve
   as JSON). The **Videos** tab above syncs video *URLs* only.

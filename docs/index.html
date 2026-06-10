@@ -101,6 +101,7 @@
         <div class="tab" data-tab="listings">Listings</div>
         <div class="tab" data-tab="followups">Follow-ups</div>
         <div class="tab" data-tab="videos">Videos</div>
+        <div class="tab" data-tab="activity">Activity</div>
       </div>
 
       <main>
@@ -244,6 +245,21 @@
             <tbody></tbody>
           </table>
         </section>
+
+        <!-- ACTIVITY -->
+        <section id="activity" class="pane">
+          <div class="row" style="justify-content:space-between;align-items:center;">
+            <h3 style="margin:6px 0;">Activity — every message your bots send, across all computers</h3>
+            <button id="refreshActivity" type="button">⟳ Refresh</button>
+          </div>
+          <div id="activityTotals" class="hint">Open this tab to load.</div>
+          <div id="activityByMachine" class="hint" style="margin:6px 0;"></div>
+          <table id="activityTable">
+            <thead><tr><th>When</th><th>Machine</th><th>Chat</th><th>Type</th><th>Buyer said</th><th>Bot reply</th></tr></thead>
+            <tbody></tbody>
+          </table>
+          <p class="hint" style="margin-top:8px;">Needs the one-time setup: run <code>supabase/schema.sql</code> (adds the messages table) and deploy the log endpoint — <code>supabase functions deploy subsell-log --no-verify-jwt</code>. Each extension reports automatically once it has your config URL.</p>
+        </section>
       </main>
 
       <div class="bar">
@@ -253,8 +269,8 @@
       </div>
     </div>
 
-    <script src="config.js?v=20260608"></script>
+    <script src="config.js?v=20260610"></script>
     <script src="https://cdn.jsdelivr.net/npm/@supabase/supabase-js@2"></script>
-    <script src="app.js?v=20260608"></script>
+    <script src="app.js?v=20260610"></script>
   </body>
 </html>

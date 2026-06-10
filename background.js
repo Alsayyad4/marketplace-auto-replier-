@@ -259,6 +259,66 @@ function getCloudCreds() {
   });
 }
 
+/* ---------------- central activity log (mirror every sent message to the web app) ----
+ * Each machine fire-and-forgets the messages it sends to the subsell-log Edge
+ * Function, which inserts them (service role) under the account that owns the
+ * config_key. The web dashboard then shows ONE combined feed + totals across all
+ * computers/accounts. This NEVER blocks or alters the reply/video paths. */
+
+// The config_key the dashboard issued — pulled from the Remote config URL's ?key=,
+// then cached. (Same key the extension already uses to fetch settings.)
+async function getConfigKey() {
+  const cached = await new Promise((r) =>
+    chrome.storage.local.get(["configKey"], (x) => r((x && x.configKey) || ""))
+  );
+  if (cached) return cached;
+  let url = "";
+  try { url = await getRemoteConfigUrl(); } catch (e) { /* none */ }
+  let k = "";
+  if (url) { try { k = new URL(url).searchParams.get("key") || ""; } catch (e) { /* not a URL */ } }
+  if (k) chrome.storage.local.set({ configKey: k });
+  return k;
+}
+
+// A friendly per-machine label for the activity log (set in Settings; falls back to
+// a stable random id so each computer/account is still distinguishable).
+function getMachineLabel() {
+  return new Promise((resolve) => {
+    chrome.storage.local.get(["machineLabel", "machineId"], (r) => {
+      let id = r && r.machineId;
+      if (!id) { id = "PC-" + Math.random().toString(36).slice(2, 7); chrome.storage.local.set({ machineId: id }); }
+      const label = r && r.machineLabel && String(r.machineLabel).trim();
+      resolve(label || id);
+    });
+  });
+}
+
+async function mirrorToCloud(entry) {
+  try {
+    const key = await getConfigKey();
+    if (!key) return; // no config URL on this machine → nothing to attribute it to
+    const { url, key: anon } = await getCloudCreds();
+    if (!url) return;
+    const machine = await getMachineLabel();
+    const ev = {
+      machine,
+      kind: entry.action || "text",
+      thread_name: entry.thread != null ? String(entry.thread) : null,
+      thread_id: entry.threadId != null ? String(entry.threadId) : null,
+      buyer_text: entry.buyer != null ? String(entry.buyer) : null,
+      bot_text: entry.reply != null ? String(entry.reply) : null,
+      sent_at: Date.now(),
+    };
+    await fetch(url + "/functions/v1/subsell-log", {
+      method: "POST",
+      headers: { "content-type": "application/json", apikey: anon, authorization: "Bearer " + anon },
+      body: JSON.stringify({ key, events: [ev] }),
+    });
+  } catch (e) {
+    /* fire-and-forget — a logging hiccup must never disturb the bot */
+  }
+}
+
 function getCloudAuth() {
   return new Promise((resolve) =>
     chrome.storage.local.get(["cloudAuth"], (r) => resolve((r && r.cloudAuth) || null))
@@ -924,6 +984,9 @@ function notifyHuman(reason, threadName) {
 const LOG_MAX = 500;
 
 function appendLog(entry) {
+  // Mirror to the cloud activity log — fire-and-forget, NOT awaited, so it can never
+  // add latency to the reply path. Any failure is swallowed inside mirrorToCloud.
+  mirrorToCloud(entry);
   return new Promise((resolve) => {
     chrome.storage.local.get(["replyLog"], (res) => {
       const logArr = res.replyLog || [];

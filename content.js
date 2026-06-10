@@ -788,6 +788,8 @@
         if (i < files.length - 1) await sleep(gapSec * 1000 + rand(0, 1500)); // pause BETWEEN videos
       }
       setStatus({ lastAction: `demo video(s) sent ✓ (${okCount}/${files.length})`, currentThread: name });
+      // Mirror to the local + cloud activity log (fire-and-forget; no effect on sending).
+      ask({ type: "LOG_EVENT", entry: { thread: name, threadId: id, buyer: "(demo video)", action: "video", reply: okCount + " demo video(s) sent" } });
     } catch (e) {
       setStatus({ lastError: "video error: " + e.message });
     }

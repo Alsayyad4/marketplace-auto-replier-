@@ -304,6 +304,73 @@
   $("save").addEventListener("click", saveConfig);
   $("reload").addEventListener("click", loadConfig);
 
+  /* ---------------- activity log (combined feed across all machines) ---------------- */
+  const truncTxt = (s, n) => { s = s == null ? "" : String(s); return s.length > n ? s.slice(0, n) + "…" : s; };
+
+  async function loadActivity() {
+    if (!client || !session) return;
+    const totalsEl = $("activityTotals");
+    totalsEl.className = "hint";
+    totalsEl.textContent = "Loading…";
+    const { data, error } = await client
+      .from("subsell_messages")
+      .select("created_at, sent_at, machine, thread_name, kind, buyer_text, bot_text")
+      .order("created_at", { ascending: false })
+      .limit(300);
+    if (error) {
+      totalsEl.className = "err";
+      totalsEl.textContent =
+        "Couldn't load activity: " + error.message +
+        " — run supabase/schema.sql and deploy the subsell-log function.";
+      return;
+    }
+    const rows = data || [];
+
+    // All-time + today totals (cheap head counts).
+    let total = rows.length, today = 0;
+    try {
+      const all = await client.from("subsell_messages").select("id", { count: "exact", head: true });
+      if (all.count != null) total = all.count;
+      const start = new Date(); start.setHours(0, 0, 0, 0);
+      const td = await client.from("subsell_messages").select("id", { count: "exact", head: true }).gte("created_at", start.toISOString());
+      if (td.count != null) today = td.count;
+    } catch (e) { /* counts are best-effort */ }
+
+    totalsEl.innerHTML = `<b>${total}</b> messages all-time &nbsp;·&nbsp; <b>${today}</b> today &nbsp;·&nbsp; showing latest ${rows.length}`;
+
+    const byMachine = {};
+    for (const r of rows) { const m = r.machine || "—"; byMachine[m] = (byMachine[m] || 0) + 1; }
+    const parts = Object.entries(byMachine).sort((a, b) => b[1] - a[1]).map(([m, c]) => `${m}: ${c}`);
+    $("activityByMachine").textContent = parts.length ? "Recent by machine — " + parts.join("   ·   ") : "";
+
+    const tb = $("activityTable").querySelector("tbody");
+    tb.innerHTML = "";
+    if (!rows.length) {
+      const tr = document.createElement("tr"), td = document.createElement("td");
+      td.colSpan = 6; td.className = "hint";
+      td.textContent = "No messages yet — once your extensions reply or send a video they'll show up here.";
+      tr.appendChild(td); tb.appendChild(tr); return;
+    }
+    for (const r of rows) {
+      const tr = document.createElement("tr");
+      const cells = [
+        new Date(r.created_at).toLocaleString(),
+        r.machine || "—",
+        r.thread_name || "—",
+        r.kind || "text",
+        truncTxt(r.buyer_text, 160),
+        truncTxt(r.bot_text, 240),
+      ];
+      for (const c of cells) { const td = document.createElement("td"); td.textContent = c; tr.appendChild(td); }
+      tb.appendChild(tr);
+    }
+  }
+  if ($("refreshActivity")) $("refreshActivity").addEventListener("click", loadActivity);
+  {
+    const at = document.querySelector('.tab[data-tab="activity"]');
+    if (at) at.addEventListener("click", loadActivity);
+  }
+
   /* ---------------- auth ---------------- */
   function showApp(sess) {
     session = sess;

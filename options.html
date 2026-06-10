@@ -95,6 +95,10 @@
         </div>
         <div class="hint">⚠️ Your API key lives inside that file — keep the link PRIVATE/secret, and rotate the key if it ever leaks. While a URL is set, the shared file is the source of truth (this page's fields are ignored).</div>
 
+        <hr />
+        <label>This computer's label <span class="hint">how this machine/account shows up in the web app's Activity log (e.g. "Shop PC — Nathan"). Local to this computer.</span></label>
+        <input type="text" id="machineLabel" placeholder="e.g. Shop PC — account 1" />
+
         <div class="inline">
           <div><label>Response delay (s)</label><input type="number" id="responseDelaySec" min="0" /></div>
           <div><label>Jitter (s)</label><input type="number" id="jitterSec" min="0" /></div>

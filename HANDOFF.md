@@ -23,6 +23,7 @@ computer/Facebook account.
 - DB: table `public.subsell_configs` (`user_id`, `config` jsonb, `config_key`, `updated_at`) — see `supabase/schema.sql`.
 - Edge Function `subsell-config` (`supabase/functions/subsell-config/index.ts`), **Verify JWT = OFF**, serves `config` by `?key=`.
 - Storage bucket `subsell-videos` (public) for central demo videos — see `supabase/storage.sql`.
+- Table `public.subsell_messages` (activity log) + Edge Function `subsell-log` (**Verify JWT = OFF**, `supabase/functions/subsell-log/index.ts`): every extension fire-and-forgets each sent message (reply/video/follow-up/human) to it via the `config_key`; the dashboard's **Activity** tab reads its own rows (RLS) and shows a combined feed + all-time/today totals + per-machine breakdown. Mirror is wired into `appendLog()` in `background.js` (fire-and-forget, never blocks replies); videos add one `LOG_EVENT` in `content.js maybeSendVideo`. Per-machine name = `machineLabel` (Settings → "This computer's label").
 - Dashboard: `https://alsayyad4.github.io/marketplace-auto-replier-/docs/` (Google or email login).
 - ⚠️ This Supabase project is **shared with another app**, so everything is namespaced `subsell_*` — never use generic names like `configs` or a generic `on_auth_user_created` trigger.
 

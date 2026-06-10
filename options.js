@@ -382,15 +382,22 @@
 
   /* ----- remote config (the "permanent link") ----- */
   function loadRemoteConfig() {
-    chrome.storage.local.get(["remoteConfigUrl", "remoteConfigAt"], (r) => {
+    chrome.storage.local.get(["remoteConfigUrl", "remoteConfigAt", "machineLabel"], (r) => {
       if ($("remoteConfigUrl")) $("remoteConfigUrl").value = (r && r.remoteConfigUrl) || "";
+      if ($("machineLabel")) $("machineLabel").value = (r && r.machineLabel) || "";
       if ($("configStatus") && r && r.remoteConfigAt)
         $("configStatus").textContent = "last synced " + new Date(r.remoteConfigAt).toLocaleString();
     });
   }
   if ($("remoteConfigUrl")) {
     $("remoteConfigUrl").addEventListener("change", () => {
-      chrome.storage.local.set({ remoteConfigUrl: ($("remoteConfigUrl").value || "").trim() });
+      // Clear the cached config_key so the activity log re-derives it from the new URL.
+      chrome.storage.local.set({ remoteConfigUrl: ($("remoteConfigUrl").value || "").trim(), configKey: "" });
+    });
+  }
+  if ($("machineLabel")) {
+    $("machineLabel").addEventListener("change", () => {
+      chrome.storage.local.set({ machineLabel: ($("machineLabel").value || "").trim() });
     });
   }
   if ($("fetchConfig")) {
