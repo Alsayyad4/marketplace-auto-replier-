@@ -625,6 +625,10 @@
   const VIDEO_CLAIM_TTL = 3 * 60 * 1000; // an in-flight claim older than this is stale
   const VIDEO_RETRY_BACKOFF = 20 * 60 * 1000; // wait this long before retrying a failed send
   const VIDEO_MAX_TRIES = 3; // give up after this many failed attempts
+  // Synchronous, in-memory guard: threadIds this content-script instance has already
+  // committed a video to. Checked with ZERO awaits at the very top of maybeSendVideo,
+  // so even if chrome.storage writes lag, a chat can't be sent to twice in one session.
+  const videoLocked = new Set();
   async function recordVideoFail(id) {
     const am = (await getLocal(["videoAttempts"])).videoAttempts || {};
     const a = am[id] || {};
@@ -633,6 +637,12 @@
   }
   async function maybeSendVideo(id, name, immediate) {
     try {
+      // SYNCHRONOUS guard first (no awaits): if this instance already committed a video
+      // to this chat, never touch it again — closes the rapid-re-entry "non-stop" loop.
+      if (id && videoLocked.has(id)) {
+        console.debug("[SubSell] video: skip — already locked this session", id);
+        return;
+      }
       const cfg = await getLocal([
         "videoEnabled", "demoVideos", "demoVideo", "videoDelaySec", "videoSentThreads", "videoAttempts",
       ]);
@@ -663,11 +673,13 @@
 
       // (1) CONFIRMED sent → never resend. Only the NEW {done:true} is authoritative.
       if (done[id] && done[id].done) {
+        videoLocked.add(id);
         console.debug("[SubSell] video: skip — chat already marked sent", id);
         return;
       }
       // A video is visibly in the chat (real message row) → it's sent; mark + stop.
       if (chatAlreadyHasOurVideo()) {
+        videoLocked.add(id);
         done[id] = { done: true, at: now };
         await setLocal({ videoSentThreads: done });
         console.debug("[SubSell] video: skip — video already visible in chat", id);
@@ -709,7 +721,8 @@
       // we never pile a second clip onto a chat that already has one.
       {
         const fresh = (await getLocal(["videoSentThreads"])).videoSentThreads || {};
-        if ((fresh[id] && fresh[id].done) || chatAlreadyHasOurVideo()) {
+        if (videoLocked.has(id) || (fresh[id] && fresh[id].done) || chatAlreadyHasOurVideo()) {
+          videoLocked.add(id);
           if (!(fresh[id] && fresh[id].done)) {
             fresh[id] = { done: true, at: Date.now() };
             await setLocal({ videoSentThreads: fresh });
@@ -740,54 +753,41 @@
         }
       }
       if (!files.length) {
+        // Couldn't load any clip this cycle (e.g. a central download failed). Nothing
+        // was sent, so DON'T mark done — but record an attempt so we back off and
+        // don't refetch every single scan (self-limits via VIDEO_MAX_TRIES).
         await recordVideoFail(id);
         setStatus({ lastError: "video: couldn't load any clip — will retry later", currentThread: name });
         return;
       }
-      console.debug("[SubSell] video: sending " + files.length + " clip(s) to", id);
 
-      // Persist the permanent "sent" flag for THIS chat + clear any pending attempt.
-      // Called the INSTANT the first clip attaches — not after a flaky send-confirm —
-      // so a mid-send reload or an unconfirmed send can never cause a re-send.
-      const markDone = async () => {
+      // *** LOCK THE CHAT BEFORE SENDING — the zero-resend guarantee. ***
+      // Persist {done:true} for this conversation BEFORE uploading a single clip, in
+      // BOTH the in-memory set (synchronous, instant) and storage (survives reloads).
+      // From this instant every other pass/tab/reload that reaches the guards above
+      // sees the chat as done and skips. There is NO retry path and NO fail record for
+      // the send itself: even if the upload, the send, the confirmation, AND the DOM
+      // detection all fail, this chat is recorded and can NEVER receive another video.
+      // (Operator priority: never re-send / never spam. A rare missed clip on a truly
+      // failed upload is the accepted trade.)
+      videoLocked.add(id);
+      {
         const dm = (await getLocal(["videoSentThreads"])).videoSentThreads || {};
         dm[id] = { done: true, at: Date.now() };
         const am = (await getLocal(["videoAttempts"])).videoAttempts || {};
         delete am[id];
         await setLocal({ videoSentThreads: dm, videoAttempts: am });
-        console.debug("[SubSell] video: marked chat done — will never resend", id);
-      };
+      }
+      console.debug("[SubSell] video: LOCKED chat + sending " + files.length + " clip(s) to", id);
 
+      // Best-effort send of the configured clip(s), in order. No retry, no fail record.
       let okCount = 0;
       for (let i = 0; i < files.length; i++) {
         setStatus({ lastAction: `sending video ${i + 1}/${files.length}…`, currentThread: name });
-        const attached = await injectVideo(files[i]);
-        if (attached) {
-          okCount++;
-          if (okCount === 1) await markDone(); // lock the chat the moment a clip attaches
-        }
+        if (await injectVideo(files[i])) okCount++;
         if (i < files.length - 1) await sleep(gapSec * 1000 + rand(0, 1500)); // pause BETWEEN videos
       }
-
-      // (4) If a clip attached, the chat is already marked done above — never resend.
-      // If NOTHING attached, double-check the chat (a clip may have rendered anyway);
-      // otherwise record a genuine failure so it retries later (capped, with backoff).
-      if (okCount > 0) {
-        setStatus({ lastAction: `demo video(s) sent ✓ (${okCount}/${files.length})`, currentThread: name });
-      } else {
-        let landed = false;
-        for (let i = 0; i < 4 && !landed; i++) {
-          await sleep(1500);
-          if (chatAlreadyHasOurVideo()) landed = true;
-        }
-        if (landed) {
-          await markDone();
-          setStatus({ lastAction: "demo video already in chat ✓", currentThread: name });
-        } else {
-          await recordVideoFail(id);
-          setStatus({ lastError: "video didn't attach — will retry later", currentThread: name });
-        }
-      }
+      setStatus({ lastAction: `demo video(s) sent ✓ (${okCount}/${files.length})`, currentThread: name });
     } catch (e) {
       setStatus({ lastError: "video error: " + e.message });
     }
