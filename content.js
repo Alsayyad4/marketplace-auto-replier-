@@ -34,6 +34,11 @@
   const trunc = (s, n) => (s == null ? null : String(s).length > n ? String(s).slice(0, n) : String(s));
 
   let busy = false;
+  // Watchdog: when `busy` was set (0 = idle). If a cycle ever hangs (a DOM wait that
+  // never settles, a dead message port, …) the next tick force-resets after
+  // BUSY_MAX_MS instead of freezing the bot until a manual page reload.
+  let busySince = 0;
+  const BUSY_MAX_MS = 6 * 60 * 1000; // > max legit cycle (delay+jitter+typing+videos)
   let cooldowns = {}; // threadId -> timestamp we may re-check it (persisted, shared across tabs)
   let lastHandled = {}; // threadId -> the buyer message we last replied to (persisted)
   // threadId -> how many TEXT replies the bot has sent in this whole conversation.
@@ -147,6 +152,13 @@
     const href = safe(() => anchor.getAttribute("href"), "") || "";
     const m = href.match(/\/t\/([^/?#]+)/); // /marketplace/t/<id>, /t/<id>, …
     return m ? m[1] : href;
+  }
+  // Is the target conversation STILL the one open on screen? The operator may click
+  // another chat while the bot is in a long wait (response delay, video delay…) —
+  // sending then would post into the WRONG conversation. Every send re-checks this
+  // and aborts silently if the user navigated; the chat is retried next cycle.
+  function stillOnThread(id) {
+    return !!id && location.href.includes(id);
   }
   function anchorName(anchor) {
     const t = safe(() => anchor.innerText || anchor.textContent || "", "");
@@ -716,6 +728,14 @@
         await sleep(firstSec * 1000);
       }
 
+      // ABORT if the operator opened a different chat during the pre-video wait —
+      // uploading now would drop the clip into the WRONG conversation. Not locked
+      // yet, so this chat still gets its video on a later visit.
+      if (!stillOnThread(id)) {
+        console.debug("[SubSell] video: aborted — user switched chats during the wait", id);
+        setStatus({ lastAction: "video postponed — you switched chats (will retry)", currentThread: name });
+        return;
+      }
       // Re-check AFTER the delay: during the wait the chat may have received a video
       // (another pass finished, or one finally rendered). Re-read storage + the DOM so
       // we never pile a second clip onto a chat that already has one.
@@ -783,6 +803,13 @@
       // Best-effort send of the configured clip(s), in order. No retry, no fail record.
       let okCount = 0;
       for (let i = 0; i < files.length; i++) {
+        // The between-videos gap is another window for the operator to navigate away —
+        // never drop a clip into whatever chat is now open. (Chat already locked, so
+        // aborting here can't cause a re-send later.)
+        if (!stillOnThread(id)) {
+          console.debug("[SubSell] video: stopped mid-set — user switched chats", id);
+          break;
+        }
         setStatus({ lastAction: `sending video ${i + 1}/${files.length}…`, currentThread: name });
         if (await injectVideo(files[i])) okCount++;
         if (i < files.length - 1) await sleep(gapSec * 1000 + rand(0, 1500)); // pause BETWEEN videos
@@ -842,6 +869,10 @@
       await setLocal({ followUpState: store });
       if (r.skip || !r.text || !r.text.trim()) {
         setStatus({ lastAction: "follow-up: no room (" + (r.reason || "skip") + ")", currentThread: name });
+        return;
+      }
+      if (!stillOnThread(id)) {
+        setStatus({ lastAction: "follow-up aborted — you switched chats", currentThread: name });
         return;
       }
       const composer = findComposer();
@@ -964,6 +995,21 @@
     setStatus({ lastAction: "waiting " + Math.round(delayMs / 1000) + "s before replying", currentThread: name });
     await sleep(delayMs);
 
+    // ABORT if the operator navigated to a different chat during the wait — typing
+    // now would post this reply into the WRONG conversation. The chat is not marked
+    // handled, so it's retried cleanly on a later cycle.
+    if (!stillOnThread(id)) {
+      setStatus({ lastAction: "aborted — you switched chats during the wait (will retry)", currentThread: name });
+      return;
+    }
+    // Also make sure the chat didn't move on while we waited (buyer sent more) —
+    // better to re-read next cycle with full context than answer a stale message.
+    const recheck = buyerSpokeLast();
+    if (!recheck || recheck.buyerMessage !== turn.buyerMessage) {
+      setStatus({ lastAction: "aborted — conversation changed during the wait (will retry)", currentThread: name });
+      return;
+    }
+
     const sent = await typeAndSend(composer, reply.text);
     if (!sent) {
       setStatus({ lastError: "typed the reply but couldn't send it" });
@@ -1005,8 +1051,19 @@
   async function scan() {
     // Claim the lock SYNCHRONOUSLY before any await, so two scans (interval +
     // heartbeat) can never both get past here (no check/set gap).
-    if (busy) return;
+    if (busy) {
+      // Watchdog: a hung cycle (stuck await) used to freeze the bot until the page
+      // was reloaded. If busy for longer than any legit cycle, force-recover.
+      if (busySince && Date.now() - busySince > BUSY_MAX_MS) {
+        console.warn("[SubSell] watchdog: scan stuck for >6min — force-recovering");
+        setStatus({ lastError: "watchdog: previous cycle hung — recovered automatically" });
+        busy = false;
+        busySince = 0;
+      }
+      return;
+    }
     busy = true;
+    busySince = Date.now();
     try {
       const anchors = conversationAnchors();
       const settings = (await ask({ type: "GET_SETTINGS" })).settings || {};
@@ -1035,6 +1092,7 @@
       setStatus({ lastError: "error: " + e.message });
     } finally {
       busy = false;
+      busySince = 0;
     }
   }
 
@@ -1057,6 +1115,7 @@
         const anchor = conversationAnchors().find((a) => threadId(a) === msg.threadId);
         if (!anchor) return send({ ok: false, error: "thread not found" });
         busy = true;
+        busySince = Date.now();
         if (!(await acquireThreadLock(msg.threadId))) {
           busy = false;
           return send({ ok: false, error: "another tab is handling this chat" });
@@ -1080,6 +1139,10 @@
             setStatus({ lastAction: "follow-up skipped — cap reached", currentThread: anchorName(anchor) });
             return send({ ok: true, skipped: "cap" });
           }
+          if (!stillOnThread(msg.threadId)) {
+            setStatus({ lastAction: "follow-up aborted — you switched chats", currentThread: anchorName(anchor) });
+            return send({ ok: false, error: "user navigated away" });
+          }
           const ok = await typeAndSend(composer, msg.text);
           if (ok) {
             rememberSent(msg.text); // never read our own follow-up back as a buyer message
@@ -1093,6 +1156,7 @@
         } finally {
           await releaseThreadLock(msg.threadId);
           busy = false;
+          busySince = 0;
         }
       })();
       return true;

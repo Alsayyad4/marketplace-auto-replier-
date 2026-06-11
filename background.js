@@ -272,10 +272,29 @@ async function getConfigKey() {
     chrome.storage.local.get(["configKey"], (x) => r((x && x.configKey) || ""))
   );
   if (cached) return cached;
+  // (a) From the Remote config URL's ?key= (machines using the config link).
   let url = "";
   try { url = await getRemoteConfigUrl(); } catch (e) { /* none */ }
   let k = "";
   if (url) { try { k = new URL(url).searchParams.get("key") || ""; } catch (e) { /* not a URL */ } }
+  // (b) Cloud-login fallback: machines using Cloud sync have no config URL, but can
+  // read their own row's config_key via the authenticated REST API (RLS-scoped).
+  if (!k) {
+    try {
+      const auth = await cloudValidAuth();
+      if (auth) {
+        const { url: base, key: anon } = await getCloudCreds();
+        const resp = await fetch(`${base}/rest/v1/subsell_configs?select=config_key`, {
+          headers: { apikey: anon, authorization: "Bearer " + auth.access_token },
+          cache: "no-store",
+        });
+        if (resp.ok) {
+          const rows = await resp.json().catch(() => []);
+          k = (Array.isArray(rows) && rows[0] && rows[0].config_key) || "";
+        }
+      }
+    } catch (e) { /* no cloud login either — nothing to attribute logs to */ }
+  }
   if (k) chrome.storage.local.set({ configKey: k });
   return k;
 }
@@ -296,7 +315,10 @@ function getMachineLabel() {
 async function mirrorToCloud(entry) {
   try {
     const key = await getConfigKey();
-    if (!key) return; // no config URL on this machine → nothing to attribute it to
+    if (!key) {
+      chrome.storage.local.set({ lastMirror: { at: Date.now(), ok: false, error: "no config key — set the Remote config URL or log into Cloud sync" } });
+      return; // nothing to attribute it to
+    }
     const { url, key: anon } = await getCloudCreds();
     if (!url) return;
     const machine = await getMachineLabel();
@@ -309,12 +331,17 @@ async function mirrorToCloud(entry) {
       bot_text: entry.reply != null ? String(entry.reply) : null,
       sent_at: Date.now(),
     };
-    await fetch(url + "/functions/v1/subsell-log", {
+    const resp = await fetch(url + "/functions/v1/subsell-log", {
       method: "POST",
       headers: { "content-type": "application/json", apikey: anon, authorization: "Bearer " + anon },
       body: JSON.stringify({ key, events: [ev] }),
     });
+    // Health breadcrumb (read it via chrome.storage.local.get('lastMirror') when
+    // diagnosing an empty Activity tab). Never throws into the reply path.
+    const out = resp.ok ? { at: Date.now(), ok: true } : { at: Date.now(), ok: false, error: "HTTP " + resp.status + " " + (await resp.text().catch(() => "")).slice(0, 200) };
+    chrome.storage.local.set({ lastMirror: out });
   } catch (e) {
+    chrome.storage.local.set({ lastMirror: { at: Date.now(), ok: false, error: String(e && e.message) } });
     /* fire-and-forget — a logging hiccup must never disturb the bot */
   }
 }
