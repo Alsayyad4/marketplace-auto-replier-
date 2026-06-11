@@ -33,6 +33,14 @@
       $("day").textContent = `${s.dayCount} / ${s.dailyCap}`;
       $("hours").textContent = s.withinHours ? "open ✓" : "closed";
       $("hours").className = s.withinHours ? "ok" : "warn";
+      // Activity-log (central) health — so an empty Activity tab is self-explaining.
+      const cl = $("cloudlog");
+      if (cl) {
+        const m = s.lastMirror;
+        if (!m) { cl.textContent = "no sends yet"; cl.className = "muted"; }
+        else if (m.ok) { cl.textContent = "✓ reporting"; cl.className = "ok"; }
+        else { cl.textContent = "✗ " + (m.error || "failed"); cl.className = "bad"; }
+      }
     });
   }
 

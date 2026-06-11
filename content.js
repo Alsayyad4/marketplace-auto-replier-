@@ -17,6 +17,13 @@
 (() => {
   "use strict";
 
+  // Each injected instance stamps a unique generation on the shared isolated-world
+  // window. When the background re-injects after an extension update, the newest
+  // instance wins and any older/orphaned one self-terminates (see scan()).
+  const MY_GEN = Date.now() + ":" + Math.random();
+  try { window.__subsellGen = MY_GEN; } catch (e) { /* ignore */ }
+  let scanTimer = null;
+
   const THREAD_SELECTOR = 'a[href*="/t/"]'; // messenger.com & facebook.com thread links
   const SCAN_MS = 8000; // how often we look for the next chat to handle
   const COOLDOWN_MS = 90 * 1000; // wait before re-checking a chat we just acted on
@@ -1078,6 +1085,14 @@
     return /messenger\.com/.test(location.host) || /facebook\.com\/(messages|marketplace)/.test(location.href);
   }
   async function scan() {
+    // Stop instantly if (a) a newer injection took over this tab, or (b) the
+    // extension was reloaded and this context is orphaned (chrome.* is dead). Either
+    // way, terminate this stale loop so it can't double-scan or spam dead-context
+    // errors — the fresh instance (re-injected by the background on update) runs on.
+    if ((safe(() => window.__subsellGen, MY_GEN) !== MY_GEN) || !safe(() => chrome.runtime && chrome.runtime.id, null)) {
+      if (scanTimer) { clearInterval(scanTimer); scanTimer = null; }
+      return;
+    }
     // Claim the lock SYNCHRONOUSLY before any await, so two scans (interval +
     // heartbeat) can never both get past here (no check/set gap).
     if (busy) {
@@ -1238,5 +1253,5 @@
   log("loaded (simple mode) on", location.href);
   setStatus({ lastAction: "loaded" });
   setTimeout(scan, 2500);
-  setInterval(scan, SCAN_MS);
+  scanTimer = setInterval(scan, SCAN_MS);
 })();
