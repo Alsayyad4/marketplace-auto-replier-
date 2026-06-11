@@ -11,7 +11,8 @@
  *
  * One reading method: the message column is bounded by the composer box;
  * your messages sit on the right, the buyer's on the left. No vision, no
- * "unread" detection, no cadence, no learned rules — on purpose.
+ * learned rules — on purpose. Scheduling IS unread-aware: chats showing as
+ * unread (waiting buyer) jump every cooldown; idle chats rotate fairly.
  * ===================================================================== */
 (() => {
   "use strict";
@@ -40,6 +41,7 @@
   let busySince = 0;
   const BUSY_MAX_MS = 6 * 60 * 1000; // > max legit cycle (delay+jitter+typing+videos)
   let cooldowns = {}; // threadId -> timestamp we may re-check it (persisted, shared across tabs)
+  let lastOpened = {}; // threadId -> when THIS instance last opened it (unread re-open floor)
   let lastHandled = {}; // threadId -> the buyer message we last replied to (persisted)
   // threadId -> how many TEXT replies the bot has sent in this whole conversation.
   // This is the hard per-conversation reply cap (maxRepliesPerConvo). Counted ONLY on a
@@ -174,6 +176,33 @@
   }
   function conversationAnchors() {
     return safe(() => Array.from(document.querySelectorAll(THREAD_SELECTOR)).filter(isConversation), []);
+  }
+
+  // Does this sidebar row show as UNREAD (buyer waiting)? Two independent signals:
+  // (1) Messenger's blue unread dot — a tiny, perfectly round, blue-painted element;
+  // (2) bold preview text — unread rows render the name AND snippet at weight >= 600.
+  // Used only to PRIORITIZE (a false positive costs one harmless visit, never a
+  // duplicate reply — lastHandled/caps still gate everything downstream).
+  function isUnreadAnchor(a) {
+    const els = safe(() => a.querySelectorAll("span,div"), []);
+    for (const el of els) {
+      const r = safe(() => el.getBoundingClientRect(), null);
+      if (!r || r.width < 6 || r.width > 16 || Math.abs(r.width - r.height) > 3) continue;
+      const cs = safe(() => getComputedStyle(el), null);
+      if (!cs) continue;
+      const radius = parseFloat(cs.borderRadius) || 0;
+      const m = (cs.backgroundColor || "").match(/rgba?\(\s*(\d+)\s*,\s*(\d+)\s*,\s*(\d+)/);
+      if (radius >= r.width / 2 - 1 && m && +m[3] > 150 && +m[3] > +m[1] + 40) return true; // blue dot
+    }
+    let bold = 0;
+    for (const el of safe(() => a.querySelectorAll("span"), [])) {
+      if (el.children.length) continue;
+      const t = safe(() => (el.textContent || "").trim(), "");
+      if (!t) continue;
+      const w = parseInt(safe(() => getComputedStyle(el).fontWeight, "400"), 10) || 400;
+      if (w >= 600 && ++bold >= 2) return true;
+    }
+    return false;
   }
 
   /* ---------------- read the OPEN conversation ---------------- */
@@ -1067,15 +1096,37 @@
     try {
       const anchors = conversationAnchors();
       const settings = (await ask({ type: "GET_SETTINGS" })).settings || {};
-      setStatus({ marketplaceAnchorCount: anchors.length, lastAction: settings.enabled ? "scanning" : "off" });
+
+      // PRIORITY 1 — a buyer is WAITING: unread chats override every cooldown (even
+      // the 10-min idle one) and are answered before anything else. This is what a
+      // human seller does, and it's why no conversation gets "missed" anymore.
+      // A 45s per-chat re-open floor stops a mis-styled row from being hammered.
+      const now = Date.now();
+      let target = null;
+      let unread = 0;
+      for (const a of anchors) {
+        if (!safe(() => isUnreadAnchor(a), false)) continue;
+        unread++;
+        const id = threadId(a);
+        if (!target && now - (lastOpened[id] || 0) > 45000) target = a;
+      }
+      setStatus({ marketplaceAnchorCount: anchors.length, unreadCount: unread, lastAction: settings.enabled ? "scanning" : "off" });
       if (!settings.enabled || !onMarketplace()) return;
 
-      // the next conversation whose cooldown has passed (rotates through all of them)
-      const target = anchors.find((a) => {
-        const id = threadId(a);
-        return !cooldowns[id] || Date.now() > cooldowns[id];
-      });
+      // PRIORITY 2 — fair rotation: among chats whose cooldown passed, visit the one
+      // we've seen LONGEST ago (never-visited first) instead of always the topmost.
+      // Stops lower conversations from starving behind busy ones.
+      if (!target) {
+        let bestT = Infinity;
+        for (const a of anchors) {
+          const id = threadId(a);
+          const cd = cooldowns[id] || 0;
+          if (now <= cd) continue; // still cooling down
+          if (cd < bestT) { bestT = cd; target = a; }
+        }
+      }
       if (!target) return;
+      lastOpened[threadId(target)] = now;
       // Cross-tab lease so a second Messenger tab in this profile can't process the
       // same chat at the same time (double-reply / double-video).
       const tid = threadId(target);
