@@ -366,6 +366,36 @@
     }
   }
   if ($("refreshActivity")) $("refreshActivity").addEventListener("click", loadActivity);
+  // One-click pipeline test — inserts a fake row through the same subsell-log
+  // endpoint the extensions use, then reloads the feed. If this works, the whole
+  // chain (function deployed, JWT off, table created, key valid) is proven.
+  if ($("testActivity")) $("testActivity").addEventListener("click", async () => {
+    const totalsEl = $("activityTotals");
+    totalsEl.className = "hint";
+    if (!configKey) { totalsEl.className = "err"; totalsEl.textContent = "No config key loaded — reload the page and log in first."; return; }
+    totalsEl.textContent = "Sending test event…";
+    try {
+      const resp = await fetch(window.SUBSELL_SUPABASE_URL + "/functions/v1/subsell-log", {
+        method: "POST",
+        headers: { "content-type": "application/json" },
+        body: JSON.stringify({
+          key: configKey,
+          events: [{ machine: "DASHBOARD TEST", kind: "text", thread_name: "Pipeline test",
+                     buyer_text: "(test) hello", bot_text: "(test) it works!", sent_at: Date.now() }],
+        }),
+      });
+      const out = await resp.json().catch(() => ({}));
+      if (resp.ok && out.ok) { await loadActivity(); }
+      else {
+        totalsEl.className = "err";
+        totalsEl.textContent = "Test failed: " + (out.error || "HTTP " + resp.status) +
+          (resp.status === 401 ? " — turn Verify JWT OFF on the subsell-log function." : "");
+      }
+    } catch (e) {
+      totalsEl.className = "err";
+      totalsEl.textContent = "Test failed: " + e.message;
+    }
+  });
   {
     const at = document.querySelector('.tab[data-tab="activity"]');
     if (at) at.addEventListener("click", loadActivity);

@@ -250,7 +250,10 @@
         <section id="activity" class="pane">
           <div class="row" style="justify-content:space-between;align-items:center;">
             <h3 style="margin:6px 0;">Activity — every message your bots send, across all computers</h3>
-            <button id="refreshActivity" type="button">⟳ Refresh</button>
+            <div>
+              <button id="testActivity" type="button">Send test event</button>
+              <button id="refreshActivity" type="button">⟳ Refresh</button>
+            </div>
           </div>
           <div id="activityTotals" class="hint">Open this tab to load.</div>
           <div id="activityByMachine" class="hint" style="margin:6px 0;"></div>
@@ -269,8 +272,8 @@
       </div>
     </div>
 
-    <script src="config.js?v=20260610"></script>
+    <script src="config.js?v=20260611"></script>
     <script src="https://cdn.jsdelivr.net/npm/@supabase/supabase-js@2"></script>
-    <script src="app.js?v=20260610"></script>
+    <script src="app.js?v=20260611"></script>
   </body>
 </html>
