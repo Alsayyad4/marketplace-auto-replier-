@@ -665,7 +665,7 @@ function buildSystemPrompt(settings) {
   lines.push("");
   lines.push("SPECIAL REPLY TOKENS (use at most one, alone on the first line):");
   lines.push("- [HUMAN] <reason> — when you should NOT auto-reply: scams, payment/shipping requests, off-platform contact pressure, or anything weird/risky. The human is notified.");
-  lines.push("- [VIDEO:<url>] <optional caption> — to send a demo video. Use a videoUrl from the inventory when the buyer asks to see the phone working/condition. The app UPLOADS the actual mp4 file as a native video attachment — the URL is never shown to the buyer, so this is safe. Keep the caption short and ALWAYS vary the wording.");
+  lines.push("- A short demo video is sent to each buyer AUTOMATICALLY (once per chat) — you do NOT send videos and you have no link/URL to share. So ALWAYS reply in real words that answer the buyer; NEVER reply with only a link, a token, or an empty message. If they ask to see the phone, tell them a quick video is on the way AND still answer their actual question (e.g. the price).");
   lines.push("- [VISIT:yes|no|maybe] <your normal reply text> — put this at the very start of your message ONLY when the buyer's latest message reveals whether they intend to come to the shop. yes = they confirm coming / are on their way / agreed to come; no = they decline, bought elsewhere, or back out; maybe = unsure/hesitant. The token is recorded silently and STRIPPED before sending — the buyer only sees your reply text after it. Use it in addition to replying normally; do not let it replace a real, persuasive reply.");
 
   if (settings.offPlatformGuard) {
