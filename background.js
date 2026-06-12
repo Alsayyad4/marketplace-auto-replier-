@@ -1056,6 +1056,14 @@ chrome.runtime.onMessage.addListener((msg, _sender, sendResponse) => {
         case "SET_ENABLED": {
           // Per-machine on/off toggle — local only, no sync writes (cheap).
           await new Promise((r) => chrome.storage.local.set({ enabledLocal: !!msg.enabled }, r));
+          if (msg.enabled) reinjectAllTabs(); // turning ON also revives any stale tab
+          sendResponse({ ok: true });
+          break;
+        }
+        case "WAKE_TABS": {
+          // Popup "Wake scanner" — re-inject a fresh content script into every open
+          // Messenger tab, so the operator never has to reload pages by hand.
+          await reinjectAllTabs();
           sendResponse({ ok: true });
           break;
         }

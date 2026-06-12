@@ -633,6 +633,16 @@
     const main = getMain();
     const composer = findComposer();
     if (!main || !composer) return false;
+
+    // (0) STRONGEST signal — geometry/side-independent. After WE send a video to a
+    // Marketplace listing, Facebook drops an "Add video to listing / Allow other
+    // buyers to see this video … / Update listing" card into the chat. A BUYER can
+    // never add to our listing, so its presence means we already sent a video here.
+    // This is what catches OLD chats that got their video before the persistent flag
+    // existed (and where the badge/geometry checks miss) — the resends still seen.
+    const allText = safe(() => main.innerText || "", "");
+    if (/add video to listing|allow other buyers to see this video|ajouter (une|la|cette) ?vid[eé]o|voir cette vid[eé]o/i.test(allText)) return true;
+
     const c = safe(() => composer.getBoundingClientRect(), null);
     if (!c) return false;
     const top = c.top;

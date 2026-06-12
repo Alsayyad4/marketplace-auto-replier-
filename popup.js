@@ -184,6 +184,18 @@
     await saveSettings(settings);
   }
 
+  /* ----- Wake scanner: re-inject the bot into every open Messenger tab, so the
+   * operator never has to reload pages by hand if a tab ever looks stalled. ----- */
+  if ($("wake")) {
+    $("wake").addEventListener("click", () => {
+      $("wakeStatus").textContent = "Waking…";
+      chrome.runtime.sendMessage({ type: "WAKE_TABS" }, (r) => {
+        $("wakeStatus").textContent = chrome.runtime.lastError ? "error" : "Scanner re-armed ✓";
+        setTimeout(() => ($("wakeStatus").textContent = ""), 2500);
+      });
+    });
+  }
+
   /* ----- Open Marketplace: force-open the Messenger Marketplace inbox -----
    * Whatever Chrome profile is signed in handles the login automatically.
    * If a Messenger/messages tab is already open we reuse + focus it (and
