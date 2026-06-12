@@ -185,6 +185,21 @@
     return safe(() => Array.from(document.querySelectorAll(THREAD_SELECTOR)).filter(isConversation), []);
   }
 
+  // Sidebar snippet heuristic: does the row's PREVIEW look like the BUYER spoke last?
+  // Catches chats the operator already opened (which clears the unread style) — like
+  // "Pedro sent you a message · 1h" sitting unanswered. Only affects VISIT ORDER;
+  // every reply/send guard stays in charge of what actually happens.
+  function snippetSuggestsBuyerLast(a) {
+    const t = safe(() => a.innerText || "", "");
+    if (!t) return false;
+    const lines = t.split("\n").map((s) => s.trim()).filter(Boolean);
+    if (lines.length < 2) return false;
+    const prev = lines.slice(1).join(" ").toLowerCase();
+    // OUR last message / system & UI lines → not a waiting buyer.
+    if (/^you[:\s]|^vous\s?:|you sent|vous avez envoyé|automated suggestion|suggestion automatis|to help identify|pour (mieux )?identifier|you can now rate|rate each other|vous pouvez (désormais|maintenant) (vous )?évaluer|started this chat|a démarré|marketplace ·/i.test(prev)) return false;
+    return true;
+  }
+
   // Does this sidebar row show as UNREAD (buyer waiting)? Two independent signals:
   // (1) Messenger's blue unread dot — a tiny, perfectly round, blue-painted element;
   // (2) bold preview text — unread rows render the name AND snippet at weight >= 600.
@@ -640,8 +655,10 @@
     // never add to our listing, so its presence means we already sent a video here.
     // This is what catches OLD chats that got their video before the persistent flag
     // existed (and where the badge/geometry checks miss) — the resends still seen.
+    // NOTE: match ONLY Facebook's card wording — never phrases a buyer could type
+    // ("je veux voir cette vidéo" must NOT mark the chat as served).
     const allText = safe(() => main.innerText || "", "");
-    if (/add video to listing|allow other buyers to see this video|ajouter (une|la|cette) ?vid[eé]o|voir cette vid[eé]o/i.test(allText)) return true;
+    if (/add video to listing|allow other buyers to see this video|update listing|ajouter (une |la )?vid[eé]o à (l['’]annonce|votre annonce)|autoriser les autres acheteurs|mettre à jour l['’]annonce/i.test(allText)) return true;
 
     const c = safe(() => composer.getBoundingClientRect(), null);
     if (!c) return false;
@@ -750,10 +767,17 @@
         delete done[id];
         await setLocal({ videoSentThreads: done });
       }
-      // (2) Backoff / give-up so a chat whose upload keeps failing isn't retried forever.
+      // (2) Backoff so a chat whose clip keeps failing to LOAD isn't retried every
+      // scan. NOT permanent anymore: after 24h the fail count resets — a transient
+      // download problem used to ban a chat from ever getting its video.
       const att0 = (cfg.videoAttempts || {})[id] || null;
       if (att0) {
-        if ((att0.fails || 0) >= VIDEO_MAX_TRIES) return; // gave up
+        if ((att0.fails || 0) >= VIDEO_MAX_TRIES) {
+          if (now - (att0.failAt || 0) < 24 * 3600 * 1000) return; // paused (24h), not banned
+          const am = (await getLocal(["videoAttempts"])).videoAttempts || {};
+          delete am[id];
+          await setLocal({ videoAttempts: am }); // expired → give the chat a fresh chance
+        }
         if (att0.claimAt && now - att0.claimAt < VIDEO_CLAIM_TTL && att0.claimTab !== TAB_UID) return; // in flight elsewhere
         if (att0.failAt && now - att0.failAt < VIDEO_RETRY_BACKOFF) return; // backing off
       }
@@ -1172,17 +1196,21 @@
       }
       zeroAnchorStreak = 0;
 
-      // PRIORITY 2 — fair rotation: among chats whose cooldown passed, visit the one
-      // we've seen LONGEST ago (never-visited first) instead of always the topmost.
-      // Stops lower conversations from starving behind busy ones.
+      // PRIORITY 2 — buyer-likely-waiting (snippet heuristic): chats whose sidebar
+      // preview reads like the buyer's message (e.g. the operator opened it, clearing
+      // the unread style) come before idle rotation. Cooldowns still respected.
+      // PRIORITY 3 — fair rotation: among the rest, visit the one seen LONGEST ago.
       if (!target) {
-        let bestT = Infinity;
+        let bestT = Infinity, bestIdleT = Infinity, idleTarget = null;
         for (const a of anchors) {
           const id = threadId(a);
           const cd = cooldowns[id] || 0;
           if (now <= cd) continue; // still cooling down
-          if (cd < bestT) { bestT = cd; target = a; }
+          if (safe(() => snippetSuggestsBuyerLast(a), false)) {
+            if (cd < bestT) { bestT = cd; target = a; }
+          } else if (cd < bestIdleT) { bestIdleT = cd; idleTarget = a; }
         }
+        if (!target) target = idleTarget;
       }
       if (!target) return;
       lastOpened[threadId(target)] = now;

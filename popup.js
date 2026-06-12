@@ -30,7 +30,9 @@
       $("apiKey").textContent = s.apiKeySet ? "set ✓" : "NOT set";
       $("apiKey").className = s.apiKeySet ? "ok" : "bad";
       $("hour").textContent = `${s.hourCount} / ${s.hourlyCap}`;
-      $("day").textContent = `${s.dayCount} / ${s.dailyCap}`;
+      // Show the cap that is actually ENFORCED (s.fullDailyCap). s.dailyCap is the
+      // warm-up display target, which confused ("34 / 10") — warm-up isn't enforced.
+      $("day").textContent = `${s.dayCount} / ${s.fullDailyCap != null ? s.fullDailyCap : s.dailyCap}`;
       $("hours").textContent = s.withinHours ? "open ✓" : "closed";
       $("hours").className = s.withinHours ? "ok" : "warn";
       // Activity-log (central) health — so an empty Activity tab is self-explaining.

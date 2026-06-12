@@ -873,11 +873,23 @@ function abToBase64(buffer) {
 
 async function fetchVideo(url) {
   try {
+    // Cache by URL in storage.local (we have unlimitedStorage): the demo clip used to
+    // be re-downloaded for EVERY chat — slow, wasteful, and a flaky download could
+    // permanently mark a chat "failed". Now each machine downloads it ONCE.
+    const cached = await new Promise((r) => chrome.storage.local.get(["videoCache"], (x) => r((x && x.videoCache) || {})));
+    if (cached[url] && cached[url].base64) return { ok: true, base64: cached[url].base64, mime: cached[url].mime || "video/mp4" };
+
     const resp = await fetch(url);
     if (!resp.ok) return { error: `Video ${resp.status}` };
     const buf = await resp.arrayBuffer();
     const mime = resp.headers.get("content-type") || "video/mp4";
-    return { ok: true, base64: abToBase64(buf), mime };
+    const base64 = abToBase64(buf);
+    // keep the cache small: only the CURRENT url(s) — replace wholesale on change
+    const next = {};
+    next[url] = { base64, mime, at: Date.now() };
+    for (const k of Object.keys(cached).slice(0, 4)) if (k !== url) next[k] = cached[k];
+    chrome.storage.local.set({ videoCache: next }, () => void chrome.runtime.lastError);
+    return { ok: true, base64, mime };
   } catch (e) {
     return { error: "Video fetch failed: " + e.message };
   }
