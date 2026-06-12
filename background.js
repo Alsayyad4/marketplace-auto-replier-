@@ -1303,6 +1303,7 @@ async function heartbeat() {
     );
   });
   for (const tab of tabs) {
+    keepTabAlive(tab.id); // stop Chrome from discarding the tab (the "reload page" prompt)
     chrome.tabs.sendMessage(tab.id, { type: "TICK_NOW" }, () => void chrome.runtime.lastError);
   }
 }
@@ -1323,10 +1324,22 @@ const SUBSELL_TAB_GLOBS = [
   "https://www.facebook.com/messages/*",
   "https://www.facebook.com/marketplace/*",
 ];
+// Tell Chrome NOT to auto-discard a Messenger tab. Chrome's Memory Saver unloads
+// idle background tabs after a while — that's the "reload page" prompt the operator
+// sees the next day. Marking the tab non-discardable keeps the bot's page loaded and
+// running. Harmless + idempotent; re-applied every heartbeat in case Chrome resets it
+// or a new tab opened. (A real renderer crash still needs a reload — this only stops
+// the proactive memory-saver discard, which is the common case.)
+function keepTabAlive(tabId) {
+  try {
+    chrome.tabs.update(tabId, { autoDiscardable: false }, () => void chrome.runtime.lastError);
+  } catch (e) { /* older Chrome without the flag — ignore */ }
+}
 async function reinjectAllTabs() {
   if (!chrome.scripting || !chrome.scripting.executeScript) return;
   const tabs = await new Promise((r) => chrome.tabs.query({ url: SUBSELL_TAB_GLOBS }, (t) => r(t || [])));
   for (const tab of tabs) {
+    keepTabAlive(tab.id);
     try {
       chrome.scripting.executeScript(
         { target: { tabId: tab.id }, files: ["content.js"] },
