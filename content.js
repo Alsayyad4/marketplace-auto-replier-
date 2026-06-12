@@ -1132,6 +1132,29 @@
     if (!t || t.length > 3000) return false; // a real Messenger is huge; the error page is tiny
     return /isn'?t available right now|this page isn'?t available|try reloading this page|reload page|n'?est pas disponible|recharger la page/i.test(t);
   }
+  // Pick the next chat to handle, by priority, skipping any already handled this wake.
+  // P1 unread (buyer waiting) overrides cooldowns (45s re-open floor); P2 the sidebar
+  // preview looks like the buyer spoke last; P3 fair idle rotation (oldest-seen first).
+  function pickTarget(anchors, now, exclude) {
+    for (const a of anchors) {
+      const id = threadId(a);
+      if (exclude.has(id)) continue;
+      if (!safe(() => isUnreadAnchor(a), false)) continue;
+      if (now - (lastOpened[id] || 0) <= 45000) continue;
+      return a; // first eligible unread (topmost = most recent)
+    }
+    let target = null, bestT = Infinity, bestIdleT = Infinity, idleTarget = null;
+    for (const a of anchors) {
+      const id = threadId(a);
+      if (exclude.has(id)) continue;
+      const cd = cooldowns[id] || 0;
+      if (now <= cd) continue;
+      if (safe(() => snippetSuggestsBuyerLast(a), false)) {
+        if (cd < bestT) { bestT = cd; target = a; }
+      } else if (cd < bestIdleT) { bestIdleT = cd; idleTarget = a; }
+    }
+    return target || idleTarget;
+  }
   async function scan() {
     // Stop instantly if (a) a newer injection took over this tab, or (b) the
     // extension was reloaded and this context is orphaned (chrome.* is dead). Either
@@ -1160,19 +1183,10 @@
       const anchors = conversationAnchors();
       const settings = (await ask({ type: "GET_SETTINGS" })).settings || {};
 
-      // PRIORITY 1 — a buyer is WAITING: unread chats override every cooldown (even
-      // the 10-min idle one) and are answered before anything else. This is what a
-      // human seller does, and it's why no conversation gets "missed" anymore.
-      // A 45s per-chat re-open floor stops a mis-styled row from being hammered.
-      const now = Date.now();
-      let target = null;
+      // PRIORITY 1 — a buyer is WAITING: unread chats override every cooldown and are
+      // answered first (see pickTarget). Here we only COUNT them for the popup status.
       let unread = 0;
-      for (const a of anchors) {
-        if (!safe(() => isUnreadAnchor(a), false)) continue;
-        unread++;
-        const id = threadId(a);
-        if (!target && now - (lastOpened[id] || 0) > 45000) target = a;
-      }
+      for (const a of anchors) if (safe(() => isUnreadAnchor(a), false)) unread++;
       setStatus({ marketplaceAnchorCount: anchors.length, unreadCount: unread, lastAction: settings.enabled ? "scanning" : "off" });
       if (!settings.enabled || !onMarketplace()) return;
 
@@ -1196,35 +1210,30 @@
       }
       zeroAnchorStreak = 0;
 
-      // PRIORITY 2 — buyer-likely-waiting (snippet heuristic): chats whose sidebar
-      // preview reads like the buyer's message (e.g. the operator opened it, clearing
-      // the unread style) come before idle rotation. Cooldowns still respected.
-      // PRIORITY 3 — fair rotation: among the rest, visit the one seen LONGEST ago.
-      if (!target) {
-        let bestT = Infinity, bestIdleT = Infinity, idleTarget = null;
-        for (const a of anchors) {
-          const id = threadId(a);
-          const cd = cooldowns[id] || 0;
-          if (now <= cd) continue; // still cooling down
-          if (safe(() => snippetSuggestsBuyerLast(a), false)) {
-            if (cd < bestT) { bestT = cd; target = a; }
-          } else if (cd < bestIdleT) { bestIdleT = cd; idleTarget = a; }
+      // Handle the next chat — and when the tab is HIDDEN (all Chromes minimized, where
+      // Chrome throttles our scan timer to ~1/min) clear a few WAITING chats in this one
+      // wake, so a burst of buyers isn't starved one-per-minute. Each chat still passes
+      // EVERY per-chat guard (cross-tab lock, dedup, caps, wrong-chat, video lock) — this
+      // only does sequentially what would otherwise wait minutes between scans. Bounded:
+      // at most a few chats, and we stop well before the 6-min watchdog so a slow,
+      // throttled cycle can never overlap the next scan.
+      const hidden = safe(() => document.visibilityState === "hidden", false);
+      const burst = hidden ? 4 : 1;
+      const handledThisScan = new Set();
+      for (let i = 0; i < burst; i++) {
+        if (i > 0 && Date.now() - busySince > 3 * 60 * 1000) break; // never approach the watchdog
+        const list = i === 0 ? anchors : conversationAnchors(); // re-query: the DOM moved after a handle
+        const target = pickTarget(list, Date.now(), handledThisScan);
+        if (!target) break;
+        const tid = threadId(target);
+        handledThisScan.add(tid);
+        lastOpened[tid] = Date.now();
+        if (!(await acquireThreadLock(tid))) continue; // another tab/window is on this chat
+        try {
+          await handleThread(target);
+        } finally {
+          await releaseThreadLock(tid);
         }
-        if (!target) target = idleTarget;
-      }
-      if (!target) return;
-      lastOpened[threadId(target)] = now;
-      // Cross-tab lease so a second Messenger tab in this profile can't process the
-      // same chat at the same time (double-reply / double-video).
-      const tid = threadId(target);
-      if (!(await acquireThreadLock(tid))) {
-        setStatus({ lastAction: "skip — another tab/window is handling this chat", currentThread: anchorName(target) });
-        return;
-      }
-      try {
-        await handleThread(target);
-      } finally {
-        await releaseThreadLock(tid);
       }
     } catch (e) {
       setStatus({ lastError: "error: " + e.message });

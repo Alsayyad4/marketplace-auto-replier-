@@ -55,10 +55,11 @@ const DEFAULTS = {
   // per-conversation reply cap
   maxRepliesPerConvo: 5, // total bot replies allowed in one conversation (0 = unlimited)
   convoCapBehavior: "stop", // "stop" = go quiet, "notify" = fire a [HUMAN] notification once
-  // human cadence (content.js reads these)
+  // human cadence (reserved — currently NOT enforced anywhere; left as a no-op so the
+  // bot never skips a waiting buyer. Response delay + caps already pace it humanly.)
   humanCadence: true,
-  skipChance: 0.12, // chance to skip a cycle even when something is unread (looks human)
-  breakChance: 0.05, // chance per cycle to start a "break"
+  skipChance: 0.12,
+  breakChance: 0.05,
   breakMinMin: 3, // break length min (minutes)
   breakMaxMin: 18, // break length max (minutes)
   // warm-up (new accounts ramp volume over days)
