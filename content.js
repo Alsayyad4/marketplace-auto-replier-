@@ -1094,6 +1094,20 @@
   function onMarketplace() {
     return /messenger\.com/.test(location.host) || /facebook\.com\/(messages|marketplace)/.test(location.href);
   }
+  // Facebook sometimes serves its OWN error page ("This page isn't available right
+  // now" / "Reload Page") — the conversation list is gone, so the bot is stuck with
+  // nothing to scan, and the operator finds that screen the next day. We detect ONLY
+  // that explicit error page (this wording never appears on a working Messenger), so
+  // self-healing can never fire on a page that's working fine.
+  const MP_INBOX = "https://www.messenger.com/marketplace/";
+  const RECOVER_COOLDOWN_MS = 4 * 60 * 1000; // never auto-reload more than this often
+  let zeroAnchorStreak = 0;
+  let lastRecoverAt = 0;
+  function onFacebookErrorPage() {
+    const t = safe(() => (document.body && document.body.innerText) || "", "");
+    if (!t || t.length > 3000) return false; // a real Messenger is huge; the error page is tiny
+    return /isn'?t available right now|this page isn'?t available|try reloading this page|reload page|n'?est pas disponible|recharger la page/i.test(t);
+  }
   async function scan() {
     // Stop instantly if (a) a newer injection took over this tab, or (b) the
     // extension was reloaded and this context is orphaned (chrome.* is dead). Either
@@ -1137,6 +1151,26 @@
       }
       setStatus({ marketplaceAnchorCount: anchors.length, unreadCount: unread, lastAction: settings.enabled ? "scanning" : "off" });
       if (!settings.enabled || !onMarketplace()) return;
+
+      // AUTO-RECOVER from Facebook's error page ONLY. Guarded so it can never touch a
+      // working page: requires 0 conversations AND Facebook's literal error wording AND
+      // two scans in a row AND a 4-min cooldown. On that error screen the bot is already
+      // stuck doing nothing, so navigating back to the Marketplace inbox is pure upside.
+      if (anchors.length === 0) {
+        if (onFacebookErrorPage()) {
+          zeroAnchorStreak++;
+          if (zeroAnchorStreak >= 2 && Date.now() - lastRecoverAt > RECOVER_COOLDOWN_MS) {
+            lastRecoverAt = Date.now();
+            zeroAnchorStreak = 0;
+            setStatus({ lastAction: "Facebook error page — reloading Marketplace to recover", lastError: null });
+            safe(() => { location.href = MP_INBOX; });
+          }
+        } else {
+          zeroAnchorStreak = 0;
+        }
+        return;
+      }
+      zeroAnchorStreak = 0;
 
       // PRIORITY 2 — fair rotation: among chats whose cooldown passed, visit the one
       // we've seen LONGEST ago (never-visited first) instead of always the topmost.
