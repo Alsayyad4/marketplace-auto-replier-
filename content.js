@@ -1210,30 +1210,24 @@
       }
       zeroAnchorStreak = 0;
 
-      // Handle the next chat — and when the tab is HIDDEN (all Chromes minimized, where
-      // Chrome throttles our scan timer to ~1/min) clear a few WAITING chats in this one
-      // wake, so a burst of buyers isn't starved one-per-minute. Each chat still passes
-      // EVERY per-chat guard (cross-tab lock, dedup, caps, wrong-chat, video lock) — this
-      // only does sequentially what would otherwise wait minutes between scans. Bounded:
-      // at most a few chats, and we stop well before the 6-min watchdog so a slow,
-      // throttled cycle can never overlap the next scan.
-      const hidden = safe(() => document.visibilityState === "hidden", false);
-      const burst = hidden ? 4 : 1;
-      const handledThisScan = new Set();
-      for (let i = 0; i < burst; i++) {
-        if (i > 0 && Date.now() - busySince > 3 * 60 * 1000) break; // never approach the watchdog
-        const list = i === 0 ? anchors : conversationAnchors(); // re-query: the DOM moved after a handle
-        const target = pickTarget(list, Date.now(), handledThisScan);
-        if (!target) break;
-        const tid = threadId(target);
-        handledThisScan.add(tid);
-        lastOpened[tid] = Date.now();
-        if (!(await acquireThreadLock(tid))) continue; // another tab/window is on this chat
-        try {
-          await handleThread(target);
-        } finally {
-          await releaseThreadLock(tid);
-        }
+      // Handle ONE chat per scan (the proven, reliable model from v0.16.0). The v0.16.1
+      // "burst" — handling several chats per wake when the tab was hidden — caused the
+      // bot to go dead while the operator was away (long busy periods on a throttled,
+      // minimized tab collided with the watchdog), so it was reverted. Throughput when
+      // minimized is best solved by keeping a window un-minimized (scans every 8s).
+      const target = pickTarget(anchors, Date.now(), new Set());
+      if (!target) return;
+      const tid = threadId(target);
+      lastOpened[tid] = Date.now();
+      // Cross-tab lease so a second window in this profile can't process the same chat.
+      if (!(await acquireThreadLock(tid))) {
+        setStatus({ lastAction: "skip — another tab/window is handling this chat", currentThread: anchorName(target) });
+        return;
+      }
+      try {
+        await handleThread(target);
+      } finally {
+        await releaseThreadLock(tid);
       }
     } catch (e) {
       setStatus({ lastError: "error: " + e.message });
