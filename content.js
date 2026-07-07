@@ -1133,14 +1133,21 @@
     return /isn'?t available right now|this page isn'?t available|try reloading this page|reload page|n'?est pas disponible|recharger la page/i.test(t);
   }
   // Pick the next chat to handle, by priority, skipping any already handled this wake.
-  // P1 unread (buyer waiting) overrides cooldowns (45s re-open floor); P2 the sidebar
-  // preview looks like the buyer spoke last; P3 fair idle rotation (oldest-seen first).
+  // P1 unread (buyer waiting) overrides cooldowns; P2 the sidebar preview looks like
+  // the buyer spoke last; P3 fair idle rotation (oldest-seen first).
+  // The unread re-open floor is 4 MINUTES: Messenger sometimes leaves a chat's blue
+  // dot lit even after we visited (reactions, glitches — see the operator's sidebar,
+  // many dots that never clear). With a short floor the bot cycled those same
+  // "sticky-dot" chats forever and STARVED everything below — the real "missing
+  // conversations". A brand-new unread chat (never opened) still fires instantly;
+  // floored dot-chats simply fall through to P2/P3 so rotation always progresses.
+  const UNREAD_REOPEN_MS = 4 * 60 * 1000;
   function pickTarget(anchors, now, exclude) {
     for (const a of anchors) {
       const id = threadId(a);
       if (exclude.has(id)) continue;
       if (!safe(() => isUnreadAnchor(a), false)) continue;
-      if (now - (lastOpened[id] || 0) <= 45000) continue;
+      if (now - (lastOpened[id] || 0) <= UNREAD_REOPEN_MS) continue;
       return a; // first eligible unread (topmost = most recent)
     }
     let target = null, bestT = Infinity, bestIdleT = Infinity, idleTarget = null;
@@ -1245,7 +1252,9 @@
       return true;
     }
     if (msg && msg.type === "PING") {
-      send({ ok: true, url: location.href, anchorCount: conversationAnchors().length });
+      // Health-check from the background. `busy` lets it avoid reloading this tab
+      // mid-send; a missing response at all means the script is dead → auto-reload.
+      send({ ok: true, url: location.href, anchorCount: conversationAnchors().length, busy });
       return true;
     }
     if (msg && msg.type === "SEND_FOLLOWUP") {

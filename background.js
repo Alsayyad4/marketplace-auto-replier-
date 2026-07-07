@@ -1303,6 +1303,34 @@ chrome.alarms.onAlarm.addListener((alarm) => {
 });
 cloudPull(false);
 
+/* SELF-RESTART: the fix the operator applies by hand ("reload the page and the bot
+ * comes back") — automated, from the background, which stays alive when a page dies.
+ * Two layers, both driven by the 1-minute heartbeat:
+ *   1. DEAD-TAB WATCHDOG — PING each Messenger tab. No answer means the content
+ *      script is gone (crashed page, killed renderer, broken SPA state). After 3
+ *      consecutive misses (~3 min; 6 if it's the tab the operator has focused, to
+ *      never yank a page mid-use) → chrome.tabs.reload(tab) — exactly the manual fix.
+ *      Misses are persisted (tabHealth) so the MV3 worker restarting doesn't reset
+ *      the count. A tab that's still loading is never counted as a miss.
+ *   2. FRESHNESS RELOAD — Messenger left open for many hours goes stale (list stops
+ *      updating even though the script answers). Every ~6h per tab, when the bot is
+ *      NOT mid-task (PING says busy=false) and the tab isn't focused, reload it —
+ *      like a human starting fresh. At most one tab per cycle, staggered. */
+const PING_MISSES_TO_RELOAD = 3; // ~3 min unresponsive (heartbeat = 1/min)
+const PING_MISSES_ACTIVE = 6; // focused tab gets a longer grace
+const FRESH_RELOAD_MS = 6 * 3600 * 1000; // proactive reload interval per tab
+function pingTab(tabId) {
+  return new Promise((resolve) => {
+    try {
+      chrome.tabs.sendMessage(tabId, { type: "PING" }, (r) => {
+        if (chrome.runtime.lastError || !r) resolve(null);
+        else resolve(r);
+      });
+    } catch (e) {
+      resolve(null);
+    }
+  });
+}
 async function heartbeat() {
   const settings = await getSettings();
   if (!settings.enabled) return;
@@ -1315,10 +1343,44 @@ async function heartbeat() {
       (t) => resolve(t || [])
     );
   });
+  const health = await new Promise((r) => chrome.storage.local.get(["tabHealth"], (x) => r((x && x.tabHealth) || {})));
+  let refreshedOne = false;
   for (const tab of tabs) {
     keepTabAlive(tab.id); // stop Chrome from discarding the tab (the "reload page" prompt)
-    chrome.tabs.sendMessage(tab.id, { type: "TICK_NOW" }, () => void chrome.runtime.lastError);
+    const key = String(tab.id);
+    const h = health[key] || (health[key] = { misses: 0, reloadAt: Date.now() });
+    const resp = await pingTab(tab.id);
+    if (!resp) {
+      // Don't count a tab that's mid-load — it's already restarting.
+      if (tab.status !== "loading") {
+        h.misses = (h.misses || 0) + 1;
+        const needed = tab.active ? PING_MISSES_ACTIVE : PING_MISSES_TO_RELOAD;
+        if (h.misses >= needed) {
+          h.misses = 0;
+          h.reloadAt = Date.now();
+          LOG("tab", tab.id, "unresponsive", needed, "min — auto-reloading (self-restart)");
+          try { chrome.tabs.reload(tab.id); } catch (e) { /* tab may have closed */ }
+          continue;
+        }
+      }
+    } else {
+      h.misses = 0;
+      // Freshness reload: stale-but-alive Messenger. Only when idle + unfocused,
+      // and at most one tab per heartbeat so windows never all reload together.
+      if (!refreshedOne && !tab.active && resp.busy !== true && Date.now() - (h.reloadAt || 0) > FRESH_RELOAD_MS) {
+        refreshedOne = true;
+        h.reloadAt = Date.now();
+        LOG("freshness reload of tab", tab.id, "(open >6h)");
+        try { chrome.tabs.reload(tab.id); } catch (e) { /* tab may have closed */ }
+        continue;
+      }
+      chrome.tabs.sendMessage(tab.id, { type: "TICK_NOW" }, () => void chrome.runtime.lastError);
+    }
   }
+  // Persist health (survives worker restarts) and prune entries for closed tabs.
+  const open = new Set(tabs.map((t) => String(t.id)));
+  for (const k of Object.keys(health)) if (!open.has(k)) delete health[k];
+  chrome.storage.local.set({ tabHealth: health }, () => void chrome.runtime.lastError);
 }
 
 // Fold the heartbeat into the existing alarm listener path.
