@@ -969,7 +969,8 @@
 
   /* ---------------- handle ONE conversation ---------------- */
   async function handleThread(anchor) {
-    const id = threadId(anchor);
+    let id = threadId(anchor); // may be ADOPTED below if FB redirects to a canonical id
+    const sidebarId = id;
     const name = anchorName(anchor);
     // Snapshot the sidebar's opinion BEFORE opening: opening marks the chat READ on
     // Facebook (the blue dot dies), so if this visit fails to reply for any reason
@@ -981,8 +982,25 @@
     safe(() => anchor.click());
     await sleep(2000);
     if (id && !location.href.includes(id)) {
-      setStatus({ lastError: "couldn't open thread " + id });
-      return;
+      // Facebook sometimes opens the chat under a DIFFERENT canonical /t/<id> than
+      // the sidebar row's href (group-style threads etc.). The old code declared
+      // "couldn't open thread" and abandoned — but the chat WAS open on screen, its
+      // unread dot already killed → the "opened but never replied" middle convo.
+      // ADOPT the redirected id when the open chat's header matches the row we
+      // clicked; abandon only if it's genuinely a different/failed chat.
+      const m = safe(() => location.href.match(/\/t\/([^/?#]+)/), null);
+      const urlId = m ? m[1] : "";
+      const label = ((name || "").split("·")[0] || "").trim();
+      const headerHasName =
+        !!label && safe(() => (((getMain() && getMain().innerText) || "").indexOf(label) !== -1), false);
+      if (urlId && urlId !== id && headerHasName) {
+        console.debug("[SubSell] thread id redirected", id, "->", urlId, "— adopting");
+        id = urlId; // all state (dedup, caps, videos) now keys on the REAL id
+        cooldowns[id] = Date.now() + COOLDOWN_MS; // mirror the entry cooldown
+      } else {
+        setStatus({ lastError: "couldn't open thread " + sidebarId });
+        return;
+      }
     }
     const composer = await waitForComposer();
     if (!composer) {
