@@ -135,6 +135,16 @@
     const after = (await getLocal(["threadLocks"])).threadLocks || {};
     return !!(after[id] && after[id].tab === TAB_UID); // confirm we actually won the race
   }
+  // Re-stamp a lease WE hold so it can't go stale mid-task. A legit handle (response
+  // delay + typing + videos) routinely outlives LOCK_MS; without refreshing, a second
+  // window could steal the lease mid-reply and double-message the buyer.
+  async function refreshThreadLock(id) {
+    const locks = (await getLocal(["threadLocks"])).threadLocks || {};
+    if (locks[id] && locks[id].tab === TAB_UID) {
+      locks[id].at = Date.now();
+      await setLocal({ threadLocks: locks });
+    }
+  }
   async function releaseThreadLock(id) {
     const locks = (await getLocal(["threadLocks"])).threadLocks || {};
     if (locks[id] && locks[id].tab === TAB_UID) {
@@ -1033,6 +1043,7 @@
       }
     }
     delete openFails[sidebarId]; // opened fine (directly or adopted) — clear the strike count
+    refreshThreadLock(sidebarId); // keep our lease alive through the long parts
     const composer = await waitForComposer();
     if (!composer) {
       setStatus({ lastError: "thread didn't load" });
@@ -1140,6 +1151,7 @@
     const delayMs = (settings.responseDelaySec || 15) * 1000 + rand(0, (settings.jitterSec || 15) * 1000);
     setStatus({ lastAction: "waiting " + Math.round(delayMs / 1000) + "s before replying", currentThread: name });
     await sleep(delayMs);
+    refreshThreadLock(sidebarId); // the delay is the longest window — re-stamp the lease
 
     // ABORT if the operator navigated to a different chat during the wait — typing
     // now would post this reply into the WRONG conversation. The chat is not marked
@@ -1188,6 +1200,7 @@
     }
 
     // After the text reply, send the demo video once per chat (optional, isolated).
+    refreshThreadLock(sidebarId); // video delay + uploads can outlive the lease too
     await maybeSendVideo(id, name);
   }
 
@@ -1391,12 +1404,16 @@
         return;
       }
       const tid = threadId(target);
-      lastOpened[tid] = Date.now();
       // Cross-tab lease so a second window in this profile can't process the same chat.
+      // NOTE: lastOpened is stamped only AFTER winning the lease — stamping before it
+      // meant a lock collision ALSO burned the 4-min unread floor, deferring a hot
+      // buyer ~5 minutes. Now a blocked chat is simply retried on the next 8s scan
+      // (the lease goes stale in ≤2 min if its holder died in a reload/update).
       if (!(await acquireThreadLock(tid))) {
-        setStatus({ lastAction: "skip — another tab/window is handling this chat", currentThread: anchorName(target) });
+        setStatus({ lastAction: "waiting — another tab/window holds this chat (auto-retries)", currentThread: anchorName(target) });
         return;
       }
+      lastOpened[tid] = Date.now(); // lease won — NOW it counts as an open
       try {
         await handleThread(target);
       } finally {
