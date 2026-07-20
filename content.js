@@ -777,14 +777,21 @@
       const now = Date.now();
       const done = cfg.videoSentThreads || {};
 
+      // RESUME-TAIL: a set interrupted by operator navigation records resumeFrom = the
+      // first clip index NEVER ATTEMPTED (we break BEFORE attempting). Only that
+      // strictly-untouched tail may be sent later — zero duplicate risk, and the chat
+      // finally gets all 3 configured clips instead of 2.
+      const resumeFrom = done[id] && done[id].done && typeof done[id].resumeFrom === "number" ? done[id].resumeFrom : null;
+
       // (1) CONFIRMED sent → never resend. Only the NEW {done:true} is authoritative.
-      if (done[id] && done[id].done) {
+      if (done[id] && done[id].done && resumeFrom == null) {
         videoLocked.add(id);
         console.debug("[SubSell] video: skip — chat already marked sent", id);
         return;
       }
       // A video is visibly in the chat (real message row) → it's sent; mark + stop.
-      if (chatAlreadyHasOurVideo()) {
+      // (Skipped in resume mode — of course there are already videos there.)
+      if (resumeFrom == null && chatAlreadyHasOurVideo()) {
         videoLocked.add(id);
         done[id] = { done: true, at: now };
         await setLocal({ videoSentThreads: done });
@@ -824,7 +831,7 @@
       // Delays (configurable): pause before the FIRST video + pause BETWEEN videos.
       const firstSec = centralDelay != null ? centralDelay : cfg.videoDelaySec != null ? cfg.videoDelaySec : 10;
       const gapSec = betweenSec != null && betweenSec >= 0 ? betweenSec : 8;
-      if (!immediate) {
+      if (!immediate && resumeFrom == null) {
         setStatus({ lastAction: `video in ${Math.round(firstSec)}s…`, currentThread: name });
         await sleep(firstSec * 1000);
       }
@@ -839,8 +846,9 @@
       }
       // Re-check AFTER the delay: during the wait the chat may have received a video
       // (another pass finished, or one finally rendered). Re-read storage + the DOM so
-      // we never pile a second clip onto a chat that already has one.
-      {
+      // we never pile a second clip onto a chat that already has one. (Not in resume
+      // mode — there the done-flag and existing videos are expected.)
+      if (resumeFrom == null) {
         const fresh = (await getLocal(["videoSentThreads"])).videoSentThreads || {};
         if (videoLocked.has(id) || (fresh[id] && fresh[id].done) || chatAlreadyHasOurVideo()) {
           videoLocked.add(id);
@@ -873,12 +881,14 @@
           /* skip a video that failed to download */
         }
       }
-      if (!files.length) {
-        // Couldn't load any clip this cycle (e.g. a central download failed). Nothing
-        // was sent, so DON'T mark done — but record an attempt so we back off and
-        // don't refetch every single scan (self-limits via VIDEO_MAX_TRIES).
+      // The set must be COMPLETE before we send anything: sending a partial set and
+      // then locking the chat was exactly how "3 configured, buyer got 2" happened
+      // (one download hiccups → 2 files → locked forever). Nothing sent yet, so a
+      // retry later (with backoff) is safe and eventually delivers all clips.
+      const expected = local.length + central.length;
+      if (!files.length || files.length < expected) {
         await recordVideoFail(id);
-        setStatus({ lastError: "video: couldn't load any clip — will retry later", currentThread: name });
+        setStatus({ lastError: "video: loaded " + files.length + "/" + expected + " clip(s) — will retry later", currentThread: name });
         return;
       }
 
@@ -894,28 +904,35 @@
       videoLocked.add(id);
       {
         const dm = (await getLocal(["videoSentThreads"])).videoSentThreads || {};
-        dm[id] = { done: true, at: Date.now() };
+        dm[id] = { done: true, at: Date.now() }; // resume marker (if any) cleared here, BEFORE sending
         const am = (await getLocal(["videoAttempts"])).videoAttempts || {};
         delete am[id];
         await setLocal({ videoSentThreads: dm, videoAttempts: am });
       }
-      console.debug("[SubSell] video: LOCKED chat + sending " + files.length + " clip(s) to", id);
+      const startAt = resumeFrom != null ? Math.min(resumeFrom, files.length) : 0;
+      console.debug("[SubSell] video: LOCKED chat + sending clips " + (startAt + 1) + "–" + files.length + " to", id);
 
       // Best-effort send of the configured clip(s), in order. No retry, no fail record.
       let okCount = 0;
-      for (let i = 0; i < files.length; i++) {
+      for (let i = startAt; i < files.length; i++) {
         // The between-videos gap is another window for the operator to navigate away —
-        // never drop a clip into whatever chat is now open. (Chat already locked, so
-        // aborting here can't cause a re-send later.)
+        // never drop a clip into whatever chat is now open. Record the first
+        // UNATTEMPTED index so a later visit can deliver the missing tail (and only
+        // the tail — clips before this point were attempted and must never repeat).
         if (!stillOnThread(id)) {
-          console.debug("[SubSell] video: stopped mid-set — user switched chats", id);
-          break;
+          console.debug("[SubSell] video: stopped mid-set at clip", i + 1, "— will finish on a later visit", id);
+          const dm2 = (await getLocal(["videoSentThreads"])).videoSentThreads || {};
+          dm2[id] = { done: true, at: Date.now(), resumeFrom: i };
+          await setLocal({ videoSentThreads: dm2 });
+          videoLocked.delete(id); // allow the resume visit through the in-memory guard
+          setStatus({ lastAction: `video set paused at ${i}/${files.length} — finishing later`, currentThread: name });
+          return;
         }
         setStatus({ lastAction: `sending video ${i + 1}/${files.length}…`, currentThread: name });
         if (await injectVideo(files[i])) okCount++;
         if (i < files.length - 1) await sleep(gapSec * 1000 + rand(0, 1500)); // pause BETWEEN videos
       }
-      setStatus({ lastAction: `demo video(s) sent ✓ (${okCount}/${files.length})`, currentThread: name });
+      setStatus({ lastAction: `demo video(s) sent ✓ (${okCount + startAt}/${files.length})`, currentThread: name });
       // Mirror to the local + cloud activity log (fire-and-forget; no effect on sending).
       ask({ type: "LOG_EVENT", entry: { thread: name, threadId: id, buyer: "(demo video)", action: "video", reply: okCount + " demo video(s) sent" } });
     } catch (e) {
@@ -926,7 +943,23 @@
   // Smart follow-up on a quiet chat (WE spoke last). Gated by configurable quiet
   // period + a per-chat count cap so it can never spam. Claude decides whether
   // there's room (or returns [SKIP]). State per thread: { lastAt, count }.
-  async function maybeFollowUp(id, name) {
+  // How long ago was this row's last activity, per the SIDEBAR time tag ("· 22m",
+  // "· 2h", "· 3j")? Lets an already-long-quiet chat qualify for a follow-up on its
+  // FIRST visit instead of restarting the whole quiet clock from zero.
+  function sidebarQuietMs(anchor) {
+    const t = safe(() => anchor.innerText || "", "");
+    let last = null;
+    const re = /(?:^|[\s·•])(\d{1,3})\s?(min|m|h|hr|j|d)\b/gi;
+    let m;
+    while ((m = re.exec(t)) !== null) last = m;
+    if (!last) return null;
+    const n = parseInt(last[1], 10);
+    const u = last[2].toLowerCase();
+    if (u === "m" || u === "min") return n * 60 * 1000;
+    if (u === "h" || u === "hr") return n * 3600 * 1000;
+    return n * 24 * 3600 * 1000; // j / d
+  }
+  async function maybeFollowUp(id, name, anchor) {
     try {
       const settings = (await ask({ type: "GET_SETTINGS" })).settings || {};
       if (!settings.smartFollowupEnabled) return;
@@ -947,14 +980,21 @@
       // ---- TIME GATE ----
       const store = (await getLocal(["followUpState"])).followUpState || {};
       const now = Date.now();
+      const thresholdMs = (followupsDone === 0 ? quietH : gapH) * 3600 * 1000;
       let st = store[id];
       if (!st) {
-        // First time we notice this quiet chat — start the clock; don't message yet.
-        store[id] = { lastAt: now };
-        await setLocal({ followUpState: store });
-        return;
+        // First time we notice this quiet chat. If the SIDEBAR already shows it's
+        // been quiet longer than the threshold, it qualifies NOW — restarting the
+        // whole clock here was a big reason follow-ups "never happened".
+        const quietMs = anchor ? sidebarQuietMs(anchor) : null;
+        if (quietMs != null && quietMs >= thresholdMs) {
+          st = { lastAt: now - thresholdMs - 60000 }; // eligible immediately
+        } else {
+          store[id] = { lastAt: now };
+          await setLocal({ followUpState: store });
+          return;
+        }
       }
-      const thresholdMs = (followupsDone === 0 ? quietH : gapH) * 3600 * 1000;
       if (now - (st.lastAt || 0) < thresholdMs) return; // not quiet long enough yet
 
       const transcript = fullTranscript();
@@ -964,8 +1004,9 @@
         setStatus({ lastError: "follow-up: " + (r && r.error), currentThread: name });
         return;
       }
-      // Push the clock forward whether we send or skip, so we don't re-ask every cycle.
-      st.lastAt = now;
+      // Advance the clock: a SENT follow-up restarts it fully; a Claude [SKIP] only
+      // pushes it HALF a period (a full reset meant a few skips = never following up).
+      st.lastAt = r.skip || !r.text || !r.text.trim() ? now - Math.floor(thresholdMs / 2) : now;
       store[id] = st;
       await setLocal({ followUpState: store });
       if (r.skip || !r.text || !r.text.trim()) {
@@ -1084,7 +1125,7 @@
       // this chat never got one, and (2) consider a smart, capped follow-up if the
       // chat has been quiet long enough. Both are once/limited per chat — no spam.
       await maybeSendVideo(id, name, true);
-      await maybeFollowUp(id, name);
+      await maybeFollowUp(id, name, anchor);
       setStatus({ lastAction: "skip — you spoke last (checked video + follow-up)", currentThread: name });
       return;
     }
