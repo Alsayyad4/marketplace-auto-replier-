@@ -1415,6 +1415,46 @@ chrome.alarms.onAlarm.addListener((alarm) => {
   if (alarm && alarm.name === HEARTBEAT_ALARM) heartbeat();
 });
 
+/* ---------------- self-update from disk (no Web Store needed) ----------------
+ * Chrome forbids running code fetched from the internet, so "cloud updates" must
+ * land as FILES on disk. The deploy/update-subsell.bat task downloads the latest
+ * zip from GitHub into the fixed unpacked folder; for UNPACKED extensions,
+ * chrome-extension:// resources are served from disk — so when the ON-DISK
+ * manifest version differs from the LOADED one, new files have arrived and
+ * chrome.runtime.reload() relaunches the extension from them. Zero clicks.
+ * Guards: never reloads unless the on-disk version actually differs; never while
+ * any Messenger tab reports busy (mid-send); silent on any error. */
+const UPDATE_ALARM = "subsell-selfupdate";
+chrome.alarms.create(UPDATE_ALARM, { periodInMinutes: 10 });
+chrome.alarms.onAlarm.addListener((alarm) => {
+  if (alarm && alarm.name === UPDATE_ALARM) selfUpdateCheck();
+});
+async function selfUpdateCheck() {
+  try {
+    const resp = await fetch(chrome.runtime.getURL("manifest.json"), { cache: "no-store" });
+    const disk = await resp.json();
+    const loaded = chrome.runtime.getManifest().version;
+    if (!disk || !disk.version || disk.version === loaded) return; // nothing new on disk
+    const tabs = await new Promise((r) =>
+      chrome.tabs.query(
+        { url: ["https://*.messenger.com/*", "https://www.facebook.com/messages/*", "https://www.facebook.com/marketplace/*"] },
+        (t) => r(t || [])
+      )
+    );
+    for (const tab of tabs) {
+      const p = await pingTab(tab.id);
+      if (p && p.busy === true) {
+        LOG("self-update: v" + disk.version, "on disk — waiting, a tab is mid-task");
+        return; // try again on the next 10-min tick
+      }
+    }
+    LOG("self-update: reloading from disk", loaded, "→", disk.version);
+    chrome.runtime.reload(); // onInstalled re-injects all tabs after the reload
+  } catch (e) {
+    /* an update check must never break anything */
+  }
+}
+
 /* ---------------- auto-recover open tabs after an extension reload ----------------
  * MV3: when the extension is updated/reloaded, every already-open Messenger tab is
  * left with an ORPHANED content script (its chrome.* is dead) — it stops scanning
