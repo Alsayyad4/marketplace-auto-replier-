@@ -49,6 +49,7 @@
   const BUSY_MAX_MS = 6 * 60 * 1000; // > max legit cycle (delay+jitter+typing+videos)
   let cooldowns = {}; // threadId -> timestamp we may re-check it (persisted, shared across tabs)
   let lastOpened = {}; // threadId -> when THIS instance last opened it (unread re-open floor)
+  let openFails = {}; // sidebar threadId -> consecutive failed opens (quarantine at 3)
   let lastHandled = {}; // threadId -> the buyer message we last replied to (persisted)
   // threadId -> how many TEXT replies the bot has sent in this whole conversation.
   // This is the hard per-conversation reply cap (maxRepliesPerConvo). Counted ONLY on a
@@ -990,18 +991,33 @@
       // clicked; abandon only if it's genuinely a different/failed chat.
       const m = safe(() => location.href.match(/\/t\/([^/?#]+)/), null);
       const urlId = m ? m[1] : "";
-      const label = ((name || "").split("·")[0] || "").trim();
+      // Compare on the FIRST participant's name only. Sidebar rows like
+      // "Skylie +1 other · Iphone 13 pro" never appear verbatim in the open chat's
+      // header (it renders "Skylie and 1 other" or the member list), which made the
+      // strict match fail forever on group threads.
+      const label = ((name || "").split("·")[0] || "").split(/\s*(?:\+|&|,| et | and )\s*/i)[0].trim();
       const headerHasName =
-        !!label && safe(() => (((getMain() && getMain().innerText) || "").indexOf(label) !== -1), false);
+        label.length >= 2 &&
+        safe(() => (((getMain() && getMain().innerText) || "").toLowerCase().indexOf(label.toLowerCase()) !== -1), false);
       if (urlId && urlId !== id && headerHasName) {
         console.debug("[SubSell] thread id redirected", id, "->", urlId, "— adopting");
+        delete openFails[sidebarId];
         id = urlId; // all state (dedup, caps, videos) now keys on the REAL id
         cooldowns[id] = Date.now() + COOLDOWN_MS; // mirror the entry cooldown
       } else {
-        setStatus({ lastError: "couldn't open thread " + sidebarId });
+        // QUARANTINE repeat offenders: a thread that keeps failing to open must not
+        // eat scan cycles while real buyers (the next chats down) sit waiting.
+        openFails[sidebarId] = (openFails[sidebarId] || 0) + 1;
+        if (openFails[sidebarId] >= 3) {
+          cooldowns[sidebarId] = Date.now() + 30 * 60 * 1000;
+          setStatus({ lastError: "thread won't open (" + openFails[sidebarId] + "×) — parked for 30 min: " + sidebarId });
+        } else {
+          setStatus({ lastError: "couldn't open thread " + sidebarId });
+        }
         return;
       }
     }
+    delete openFails[sidebarId]; // opened fine (directly or adopted) — clear the strike count
     const composer = await waitForComposer();
     if (!composer) {
       setStatus({ lastError: "thread didn't load" });
