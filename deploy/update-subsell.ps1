@@ -52,4 +52,12 @@ foreach ($t in $targets) {
   robocopy $src $t /MIR /NJH /NJS | Out-Null
   Write-Host "Updated $curV -> $newV : $t"
 }
+
+# --- 4. Keep THIS updater itself fresh for the next run (self-updating pipeline) ---
+try {
+  $self = $MyInvocation.MyCommand.Path
+  $tmpSelf = "$self.new"
+  Invoke-WebRequest -Uri "https://github.com/alsayyad4/marketplace-auto-replier-/raw/claude/wizardly-noether-Oi6vP/deploy/update-subsell.ps1" -OutFile $tmpSelf -UseBasicParsing -ErrorAction Stop
+  if ((Get-Item $tmpSelf).Length -gt 500) { Move-Item -Force $tmpSelf $self } else { Remove-Item $tmpSelf -Force }
+} catch {}
 Write-Host "Done."

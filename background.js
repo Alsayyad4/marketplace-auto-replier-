@@ -323,8 +323,12 @@ async function mirrorToCloud(entry) {
     const { url, key: anon } = await getCloudCreds();
     if (!url) return;
     const machine = await getMachineLabel();
+    // Append the running version so the dashboard's Activity tab doubles as a fleet
+    // monitor — one glance shows which computers picked up the latest update.
+    let ver = "";
+    try { ver = chrome.runtime.getManifest().version; } catch (e) { /* keep plain label */ }
     const ev = {
-      machine,
+      machine: ver ? machine + " · v" + ver : machine,
       kind: entry.action || "text",
       thread_name: entry.thread != null ? String(entry.thread) : null,
       thread_id: entry.threadId != null ? String(entry.threadId) : null,

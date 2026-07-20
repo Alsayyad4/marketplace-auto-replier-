@@ -16,6 +16,8 @@
     return new Promise((r) => chrome.runtime.sendMessage({ type: "SAVE_SETTINGS", settings: s }, r));
   }
 
+  try { if ($("ver")) $("ver").textContent = "v" + chrome.runtime.getManifest().version; } catch (e) { /* cosmetic */ }
+
   function renderStatePill(on) {
     const pill = $("statePill");
     pill.textContent = on ? "ON" : "OFF";
