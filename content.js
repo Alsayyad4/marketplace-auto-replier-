@@ -50,6 +50,13 @@
   let cooldowns = {}; // threadId -> timestamp we may re-check it (persisted, shared across tabs)
   let lastOpened = {}; // threadId -> when THIS instance last opened it (unread re-open floor)
   let openFails = {}; // sidebar threadId -> consecutive failed opens (quarantine at 3)
+  // NEVER-MISS LEDGER: threadId -> when we FIRST saw this chat waiting for a reply.
+  // Re-verified every scan; an entry is cleared ONLY when the chat is actually
+  // resolved (replied / handed to human / cap-stop / turned out not waiting).
+  // Persisted so reloads can't forget anyone. Chats waiting past OVERDUE_MS jump
+  // to the FRONT of the queue (oldest first) — the "make sure everyone is replied".
+  let waitingSince = {};
+  let suspiciousReads = {}; // threadId -> consecutive sidebar-says-buyer/chat-says-idle reads
   let lastHandled = {}; // threadId -> the buyer message we last replied to (persisted)
   // threadId -> how many TEXT replies the bot has sent in this whole conversation.
   // This is the hard per-conversation reply cap (maxRepliesPerConvo). Counted ONLY on a
@@ -66,11 +73,12 @@
   const normMsg = (s) => (s || "").toLowerCase().replace(/\s+/g, " ").trim();
   // Hydrate persisted state at boot.
   safe(() =>
-    chrome.storage.local.get(["recentSent", "cooldowns", "lastHandled", "replyCounts"], (r) => {
+    chrome.storage.local.get(["recentSent", "cooldowns", "lastHandled", "replyCounts", "waitingSince"], (r) => {
       if (r && Array.isArray(r.recentSent)) recentSent = r.recentSent;
       if (r && r.cooldowns && typeof r.cooldowns === "object") cooldowns = r.cooldowns;
       if (r && r.lastHandled && typeof r.lastHandled === "object") lastHandled = r.lastHandled;
       if (r && r.replyCounts && typeof r.replyCounts === "object") replyCounts = r.replyCounts;
+      if (r && r.waitingSince && typeof r.waitingSince === "object") waitingSince = r.waitingSince;
     })
   );
   function rememberSent(t) {
@@ -82,11 +90,18 @@
   }
   function persistDedup() {
     // keep the persisted maps from growing unbounded (cap ~400 threads)
-    for (const map of [cooldowns, lastHandled, replyCounts]) {
+    for (const map of [cooldowns, lastHandled, replyCounts, waitingSince]) {
       const keys = Object.keys(map);
       if (keys.length > 400) for (const k of keys.slice(0, keys.length - 400)) delete map[k];
     }
-    safe(() => chrome.storage.local.set({ cooldowns, lastHandled, replyCounts }));
+    safe(() => chrome.storage.local.set({ cooldowns, lastHandled, replyCounts, waitingSince }));
+  }
+  // A chat is RESOLVED for its current message — take it off the never-miss ledger.
+  function clearWaiting(id, sid) {
+    if (id && waitingSince[id] != null) delete waitingSince[id];
+    if (sid && waitingSince[sid] != null) delete waitingSince[sid];
+    if (id) delete suspiciousReads[id];
+    if (sid) delete suspiciousReads[sid];
   }
   function isOwnEcho(msg) {
     const m = normMsg(msg);
@@ -1044,13 +1059,15 @@
       // chat reads as "you spoke last". On slow loads (Remote Desktop) the buyer's
       // last bubbles sometimes haven't rendered yet — and since opening already
       // KILLED the unread dot, shelving this chat for 10 minutes = the "opened,
-      // then forgotten" bug. Re-check in 2 minutes instead; if it still reads
-      // you-last then, the normal idle path takes over.
-      if (sidebarSaysBuyer) {
+      // then forgotten" bug. Re-check in 2 minutes instead; after 3 straight
+      // suspicious reads accept the chat really is idle (stops a permanently
+      // buyer-looking snippet — e.g. some group rows — from looping forever).
+      if (sidebarSaysBuyer && (suspiciousReads[id] = (suspiciousReads[id] || 0) + 1) < 3) {
         cooldowns[id] = Date.now() + 2 * 60 * 1000;
         setStatus({ lastAction: "sidebar showed a buyer message but chat reads you-last — re-checking in 2 min", currentThread: name });
         return;
       }
+      clearWaiting(id, sidebarId); // genuinely idle — resolved, off the never-miss ledger
       cooldowns[id] = Date.now() + IDLE_COOLDOWN_MS;
       // You spoke last — nothing to reply to. But still: (1) send the demo video if
       // this chat never got one, and (2) consider a smart, capped follow-up if the
@@ -1060,14 +1077,17 @@
       setStatus({ lastAction: "skip — you spoke last (checked video + follow-up)", currentThread: name });
       return;
     }
+    delete suspiciousReads[id]; // got a real buyer turn — reset the misread counter
     if (isOwnEcho(turn.buyerMessage)) {
       // The "last message" is actually OUR OWN (alignment mis-read) — never reply to
       // ourselves. Hard stop against self-reply spam.
+      clearWaiting(id, sidebarId);
       cooldowns[id] = Date.now() + IDLE_COOLDOWN_MS;
       setStatus({ lastAction: "skip — that last message was ours, not the buyer", currentThread: name });
       return;
     }
     if (lastHandled[id] === turn.buyerMessage) {
+      clearWaiting(id, sidebarId); // already answered this exact message
       setStatus({ lastAction: "skip — already replied to this message", currentThread: name });
       return;
     }
@@ -1081,6 +1101,7 @@
     const replyCap = Math.max(0, Number(settings.maxRepliesPerConvo) || 0);
     const repliesSoFar = replyCounts[id] || 0;
     if (replyCap > 0 && repliesSoFar >= replyCap) {
+      clearWaiting(id, sidebarId); // cap says stay silent — resolved by policy
       cooldowns[id] = Date.now() + IDLE_COOLDOWN_MS;
       // No more text replies — but the demo video is separate ("2 + videos"), so still
       // make sure this chat got its one-time video (idempotent: no-op if already sent).
@@ -1106,6 +1127,7 @@
     }
     if (reply.human) {
       lastHandled[id] = turn.buyerMessage;
+      clearWaiting(id, sidebarId); // handed to the human — resolved for the bot
       setStatus({ lastAction: "needs you: " + reply.reason, currentThread: name });
       return;
     }
@@ -1142,6 +1164,7 @@
     rememberSent(reply.text); // so we never mistake this for a buyer message later
     lastHandled[id] = turn.buyerMessage;
     replyCounts[id] = repliesSoFar + 1; // count this text reply toward the per-convo cap
+    clearWaiting(id, sidebarId); // ANSWERED — off the never-miss ledger
     cooldowns[id] = Date.now() + COOLDOWN_MS;
     persistDedup(); // survive a content-script reload — don't re-reply the same message (and keep the cap count)
     setStatus({
@@ -1196,25 +1219,39 @@
   // conversations". A brand-new unread chat (never opened) still fires instantly;
   // floored dot-chats simply fall through to P2/P3 so rotation always progresses.
   const UNREAD_REOPEN_MS = 4 * 60 * 1000;
+  // Anyone waiting longer than this jumps to the FRONT of the queue (oldest first).
+  // Fresh buyers get instant service; this lane is the "nobody is ever missed" law.
+  const OVERDUE_MS = 5 * 60 * 1000;
   function pickTarget(anchors, now, exclude) {
-    // P1 — a buyer is genuinely waiting. TWO conditions now, not just the dot:
-    //  (a) the row shows unread AND (b) its preview reads like the BUYER's message.
-    //  A dot with OUR preview ("You: …") is a STALE dot — on minimized windows FB
-    //  often never clears dots after we reply, and those ghosts were re-opened every
-    //  few minutes (P1 overrides cooldowns!), eating the queue while real buyers sat.
-    // FIFO — serve the OLDEST waiting buyer first (the LAST matching row: the
-    //  sidebar is sorted newest-first), so a 20-minute-old question can never be
-    //  starved by a stream of brand-new ones.
-    let oldestWaiting = null;
+    // LANE 0 — OVERDUE (the never-miss guarantee): any chat on the waiting ledger
+    // longer than OVERDUE_MS is served BEFORE everything else, oldest first. So the
+    // newest buyer gets instant service (lane 1), but a busy stream can only delay
+    // an older buyer by ~OVERDUE_MS — never bury them.
+    let overdue = null, overdueT = Infinity;
+    for (const a of anchors) {
+      const id = threadId(a);
+      if (exclude.has(id)) continue;
+      const ws = waitingSince[id];
+      if (!ws || now - ws < OVERDUE_MS) continue;
+      if (!safe(() => snippetSuggestsBuyerLast(a), false)) continue; // resolved meanwhile
+      if (now - (lastOpened[id] || 0) <= UNREAD_REOPEN_MS) continue;
+      if (ws < overdueT) { overdueT = ws; overdue = a; }
+    }
+    if (overdue) return overdue;
+
+    // LANE 1 — INSTANT: the NEWEST genuinely-waiting buyer (topmost matching row —
+    // the sidebar is recency-sorted). Two conditions, not just the dot: unread AND
+    // the preview reads like the BUYER's message. A dot with OUR preview ("You: …")
+    // is a STALE dot — on minimized windows FB often never clears dots after we
+    // reply, and those ghosts were re-opened forever, eating the queue.
     for (const a of anchors) {
       const id = threadId(a);
       if (exclude.has(id)) continue;
       if (!safe(() => isUnreadAnchor(a), false)) continue;
-      if (!safe(() => snippetSuggestsBuyerLast(a), false)) continue; // stale dot → not P1
+      if (!safe(() => snippetSuggestsBuyerLast(a), false)) continue; // stale dot → not lane 1
       if (now - (lastOpened[id] || 0) <= UNREAD_REOPEN_MS) continue;
-      oldestWaiting = a; // keep the LAST match = lowest row = waited longest
+      return a; // first match = newest buyer → instant reply
     }
-    if (oldestWaiting) return oldestWaiting;
     let target = null, bestT = Infinity, bestIdleT = Infinity, idleTarget = null;
     for (const a of anchors) {
       const id = threadId(a);
@@ -1282,11 +1319,21 @@
       const anchors = conversationAnchors();
       const settings = (await ask({ type: "GET_SETTINGS" })).settings || {};
 
-      // PRIORITY 1 — a buyer is WAITING: unread chats override every cooldown and are
-      // answered first (see pickTarget). Here we only COUNT them for the popup status.
-      let unread = 0;
-      for (const a of anchors) if (safe(() => isUnreadAnchor(a), false)) unread++;
-      setStatus({ marketplaceAnchorCount: anchors.length, unreadCount: unread, lastAction: settings.enabled ? "scanning" : "off" });
+      // CONSTANT VERIFICATION — every scan, every rendered row: any chat whose
+      // preview reads like a waiting buyer goes on the never-miss ledger (first-seen
+      // timestamp). Entries clear ONLY when the chat is actually resolved, so even a
+      // reload, a failed open, or a flood of new buyers can't make one disappear.
+      const nowT = Date.now();
+      let unread = 0, waiting = 0;
+      for (const a of anchors) {
+        if (safe(() => isUnreadAnchor(a), false)) unread++;
+        if (safe(() => snippetSuggestsBuyerLast(a), false)) {
+          waiting++;
+          const wid = threadId(a);
+          if (wid && waitingSince[wid] == null) waitingSince[wid] = nowT;
+        }
+      }
+      setStatus({ marketplaceAnchorCount: anchors.length, unreadCount: unread, waitingCount: waiting, lastAction: settings.enabled ? "scanning" : "off" });
       if (!settings.enabled || !onMarketplace()) return;
 
       // AUTO-RECOVER from Facebook's error page ONLY. Guarded so it can never touch a
