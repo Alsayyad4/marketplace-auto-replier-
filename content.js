@@ -90,7 +90,12 @@
   function isOwnEcho(msg) {
     const m = normMsg(msg);
     if (!m) return false;
-    return recentSent.some((s) => s === m || (m.length > 12 && (s.includes(m) || m.includes(s))));
+    // Length floor on the EXACT match too: recentSent is GLOBAL across chats, so a
+    // buyer's short greeting ("allo", "oui", "ok", "merci") must never be muted just
+    // because WE once sent the same word in some other chat — that made the bot
+    // ignore buyers who opened with one word. Bubble color stays the primary
+    // anti-self-reply; this echo guard is for longer, distinctive texts only.
+    return recentSent.some((s) => (m.length >= 10 && s === m) || (m.length > 12 && (s.includes(m) || m.includes(s))));
   }
 
   // Cross-tab single-flight: if the operator has >1 Messenger tab open in the SAME
@@ -966,6 +971,10 @@
   async function handleThread(anchor) {
     const id = threadId(anchor);
     const name = anchorName(anchor);
+    // Snapshot the sidebar's opinion BEFORE opening: opening marks the chat READ on
+    // Facebook (the blue dot dies), so if this visit fails to reply for any reason
+    // we must not lose the fact that a buyer was probably waiting.
+    const sidebarSaysBuyer = safe(() => isUnreadAnchor(anchor), false) || safe(() => snippetSuggestsBuyerLast(anchor), false);
     cooldowns[id] = Date.now() + COOLDOWN_MS;
     setStatus({ currentThread: name, lastAction: "opening", lastError: null });
 
@@ -997,6 +1006,17 @@
       prevSig = sig;
     }
     if (!turn) {
+      // SUSPICIOUS READ: the sidebar said a buyer message was waiting, but the open
+      // chat reads as "you spoke last". On slow loads (Remote Desktop) the buyer's
+      // last bubbles sometimes haven't rendered yet — and since opening already
+      // KILLED the unread dot, shelving this chat for 10 minutes = the "opened,
+      // then forgotten" bug. Re-check in 2 minutes instead; if it still reads
+      // you-last then, the normal idle path takes over.
+      if (sidebarSaysBuyer) {
+        cooldowns[id] = Date.now() + 2 * 60 * 1000;
+        setStatus({ lastAction: "sidebar showed a buyer message but chat reads you-last — re-checking in 2 min", currentThread: name });
+        return;
+      }
       cooldowns[id] = Date.now() + IDLE_COOLDOWN_MS;
       // You spoke last — nothing to reply to. But still: (1) send the demo video if
       // this chat never got one, and (2) consider a smart, capped follow-up if the
@@ -1216,6 +1236,28 @@
         return;
       }
       zeroAnchorStreak = 0;
+
+      // NEVER open a chat when a reply is impossible (outside business hours, hourly
+      // or daily cap hit). Opening marks the chat READ on Facebook, so the old flow —
+      // open → "skip: outside business hours" — silently destroyed every "buyer
+      // waiting" signal overnight, and those chats were forgotten by morning. Now the
+      // dots survive until the bot is actually allowed to answer.
+      const st = await ask({ type: "GET_STATUS" });
+      if (st && st.ok) {
+        if (st.withinHours === false) {
+          setStatus({ lastAction: "paused — outside business hours (chats stay unread until open)" });
+          return;
+        }
+        if (st.hourlyCap && st.hourCount >= st.hourlyCap) {
+          setStatus({ lastAction: "paused — hourly cap reached (chats stay unread)" });
+          return;
+        }
+        const dCap = st.fullDailyCap != null ? st.fullDailyCap : st.dailyCap;
+        if (dCap && st.dayCount >= dCap) {
+          setStatus({ lastAction: "paused — daily cap reached (chats stay unread)" });
+          return;
+        }
+      }
 
       // Handle ONE chat per scan (the proven, reliable model from v0.16.0). The v0.16.1
       // "burst" — handling several chats per wake when the tab was hidden — caused the
