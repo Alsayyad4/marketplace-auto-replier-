@@ -1316,6 +1316,25 @@ cloudPull(false);
  *      updating even though the script answers). Every ~6h per tab, when the bot is
  *      NOT mid-task (PING says busy=false) and the tab isn't focused, reload it —
  *      like a human starting fresh. At most one tab per cycle, staggered. */
+const AUTO_OPEN_COOLDOWN_MS = 10 * 60 * 1000; // auto-open at most once/10min
+async function ensureMarketplaceTab() {
+  // Broad guard: ANY messenger.com or facebook.com tab (incl. a login page) counts
+  // as open — we only step in when there is truly nothing for the bot to live in.
+  const any = await new Promise((r) =>
+    chrome.tabs.query({ url: ["https://*.messenger.com/*", "https://*.facebook.com/*"] }, (t) => r(t || []))
+  );
+  if (any.length) return;
+  const last = await new Promise((r) => chrome.storage.local.get(["lastAutoOpenAt"], (x) => r((x && x.lastAutoOpenAt) || 0)));
+  if (Date.now() - last < AUTO_OPEN_COOLDOWN_MS) return;
+  chrome.storage.local.set({ lastAutoOpenAt: Date.now() }, () => void chrome.runtime.lastError);
+  LOG("no Messenger tab open — auto-opening Marketplace (keep-forced-open)");
+  try {
+    chrome.tabs.create(
+      { url: "https://www.messenger.com/marketplace/", active: false, pinned: true },
+      () => void chrome.runtime.lastError
+    );
+  } catch (e) { /* window may be closing */ }
+}
 const PING_MISSES_TO_RELOAD = 3; // ~3 min unresponsive (heartbeat = 1/min)
 const PING_MISSES_ACTIVE = 6; // focused tab gets a longer grace
 const FRESH_RELOAD_MS = 6 * 3600 * 1000; // proactive reload interval per tab
@@ -1334,6 +1353,14 @@ function pingTab(tabId) {
 async function heartbeat() {
   const settings = await getSettings();
   if (!settings.enabled) return;
+  // KEEP-FORCED-OPEN: if the Messenger tab was closed (employee closed it, Chrome
+  // restarted without session restore), the bot had nowhere to run and silently did
+  // nothing. Now, when the bot is ON and NO Messenger/Facebook tab exists at all,
+  // the background opens the Marketplace inbox itself — pinned (tiny + hard to close
+  // by accident), in the background (never steals focus). The broad facebook.com
+  // guard means a login page counts as "open" (no tab spam), and a 10-min persisted
+  // cooldown caps it even in weird states.
+  await ensureMarketplaceTab();
   // Ping EVERY open Messenger tab (not just the first) so multiple windows in the
   // same profile all keep scanning while backgrounded. Each separate Chrome
   // profile runs its own independent copy of this worker.

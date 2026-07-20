@@ -1182,6 +1182,33 @@
     }
     return target || idleTarget;
   }
+  // DEEP-SCAN: Facebook's sidebar is virtualized — only ~20 conversation rows exist
+  // in the DOM; anything below the scroll fold is INVISIBLE to the bot. When the tab
+  // is minimized (nobody is watching, so moving the scrollbar disturbs no one) and a
+  // scan found nothing to do, page the sidebar down one step so deeper conversations
+  // get rendered (and picked up by the next scans), then wrap back to the top.
+  function sidebarScroller() {
+    const a = conversationAnchors()[0];
+    if (!a) return null;
+    let el = a.parentElement;
+    for (let i = 0; i < 15 && el; i++) {
+      if (el.scrollHeight > el.clientHeight + 50) return el;
+      el = el.parentElement;
+    }
+    return null;
+  }
+  function deepScanStep() {
+    const sc = sidebarScroller();
+    if (!sc) return;
+    if (sc.scrollTop + sc.clientHeight >= sc.scrollHeight - 60) {
+      sc.scrollTop = 0; // reached the bottom → wrap to top (newest chats stay covered)
+      setStatus({ lastAction: "deep-scan: back to newest conversations" });
+    } else {
+      sc.scrollTop += Math.max(200, Math.floor(sc.clientHeight * 0.8));
+      setStatus({ lastAction: "deep-scan: checking older conversations…" });
+    }
+  }
+
   async function scan() {
     // Stop instantly if (a) a newer injection took over this tab, or (b) the
     // extension was reloaded and this context is orphaned (chrome.* is dead). Either
@@ -1265,7 +1292,12 @@
       // minimized tab collided with the watchdog), so it was reverted. Throughput when
       // minimized is best solved by keeping a window un-minimized (scans every 8s).
       const target = pickTarget(anchors, Date.now(), new Set());
-      if (!target) return;
+      if (!target) {
+        // Nothing eligible among the RENDERED rows. If minimized, use the free cycle
+        // to reveal deeper (virtualized) conversations so none stay invisible forever.
+        if (safe(() => document.visibilityState === "hidden", false)) deepScanStep();
+        return;
+      }
       const tid = threadId(target);
       lastOpened[tid] = Date.now();
       // Cross-tab lease so a second window in this profile can't process the same chat.
