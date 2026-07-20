@@ -200,6 +200,19 @@
     });
   }
 
+  /* ----- Built-in updater: check the cloud and update this extension now ----- */
+  if ($("checkUpdate")) {
+    $("checkUpdate").addEventListener("click", () => {
+      $("updStatus").textContent = "Checking…";
+      chrome.runtime.sendMessage({ type: "CHECK_UPDATE" }, (r) => {
+        if (chrome.runtime.lastError || !r) { $("updStatus").textContent = "error"; return; }
+        if (r.upToDate) $("updStatus").textContent = "Up to date ✓ (v" + r.version + ")";
+        else if (r.updated) $("updStatus").textContent = "v" + r.version + " downloaded — reloading…";
+        else $("updStatus").textContent = r.reason || "failed";
+      });
+    });
+  }
+
   /* ----- Open Marketplace: force-open the Messenger Marketplace inbox -----
    * Whatever Chrome profile is signed in handles the login automatically.
    * If a Messenger/messages tab is already open we reuse + focus it (and

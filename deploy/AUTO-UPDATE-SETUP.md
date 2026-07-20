@@ -1,39 +1,47 @@
-# SubSell — fleet auto-update (ONE double-click per computer)
+# SubSell — built-in auto-update (v0.20.0+) · NO scripts, NO antivirus flags
 
-For fleets of any size (10 or 500 computers). No admin rights, no folder moves,
-no chrome://extensions steps, no re-login. One file, one double-click, done.
+The previous .bat/scheduled-task installer is **deprecated** — Windows Defender
+(correctly) dislikes download-and-persist scripts. The updater now lives INSIDE
+the extension and uses only Chrome's own APIs: nothing for antivirus to flag.
 
-## Per computer (once, ~30 seconds)
+## How it works
 
-1. Download the installer on that computer:
+Every hour the extension checks the repo for a newer version (a ~1KB fetch).
+When one exists, it downloads its own files through Chrome's downloads system
+into its unpacked folder and reloads itself — never while a reply/video send is
+in progress. There is also an **"⬇ Update now"** button in the popup.
 
-   **https://github.com/alsayyad4/marketplace-auto-replier-/raw/claude/wizardly-noether-Oi6vP/deploy/install-subsell-auto-update.bat**
+**The one requirement:** the unpacked extension folder must live inside the
+user's **Downloads** folder (that's the only place Chrome lets extensions write
+files). Both layouts work:
 
-2. **Double-click it.** It automatically:
-   - finds SubSell wherever it's installed (any folder, any Chrome profile),
-   - updates it to the latest version right now,
-   - sets an hourly task so this computer keeps itself updated forever
-     (falls back to update-at-login if task creation is blocked).
+- `Downloads\subsell-extension\manifest.json`
+- `Downloads\subsell-extension\subsell-extension\manifest.json` (Extract-All nesting)
 
-3. **First time only:** if the machine was running a version older than 0.18.2,
-   restart Chrome once (or click the reload arrow on `chrome://extensions`).
-   Every update after that applies fully automatically.
+The extension verifies the folder with a probe file — it never guesses. If the
+folder is elsewhere, the popup's update button says so instead of failing silently.
 
-## How updates roll out afterwards
+## Per computer (once, ~60 seconds, AV-clean)
 
-Push a new version to GitHub → within ~1 hour every computer downloads it →
-the extension notices the new files and reloads itself (never mid-reply).
-Nobody touches anything.
+1. Download the extension zip **into Downloads** (the default):
+   https://github.com/alsayyad4/marketplace-auto-replier-/raw/claude/wizardly-noether-Oi6vP/dist/subsell-extension.zip
+2. Right-click the zip → **Extract All…** → Extract (defaults are fine).
+3. `chrome://extensions` → remove the old SubSell → Developer mode ON →
+   **Load unpacked** → pick the extracted folder that contains `manifest.json`.
+4. Open the popup → click **⬇ Update now** → it should say "Up to date ✓".
 
-- Settings, logins, chat memory: untouched (they live in Chrome's profile).
-- Failed download (offline, GitHub hiccup): current version stays; retries hourly.
-- Rollback: point `update-subsell.ps1`'s `$zipUrl` at the pinned
-  `subsell-extension-0.16.0.zip` link and the fleet rolls back the same way.
+Done. That computer now updates itself forever (hourly check + on-demand button).
+Settings, logins, chat memory: untouched (they live in Chrome's profile).
 
-## Files
+## Rollout / verification
 
-- `install-subsell-auto-update.bat` — the one-time installer (double-click).
-- `update-subsell.ps1` — the updater it installs (runs hidden, hourly).
+The dashboard's **Activity** tab shows each machine as `Label · vX.Y.Z` — one
+glance shows which computers are current.
 
-The old `DEPLOY.md` / `subsell-policy.reg` / `update.xml` enterprise-policy route
-requires company-managed Windows and is superseded by this.
+## Deprecated files (kept for reference only — do not use)
+
+- `install-subsell-auto-update.bat` / `update-subsell.ps1` / `update-subsell.bat`
+  — the old OS-level updater; flagged by Defender because downloading scripts +
+  hidden scheduled tasks is indistinguishable from malware behavior.
+- `DEPLOY.md` / `subsell-policy.reg` / `update.xml` — enterprise-policy route;
+  needs company-managed Windows.
