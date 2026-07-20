@@ -1197,13 +1197,24 @@
   // floored dot-chats simply fall through to P2/P3 so rotation always progresses.
   const UNREAD_REOPEN_MS = 4 * 60 * 1000;
   function pickTarget(anchors, now, exclude) {
+    // P1 — a buyer is genuinely waiting. TWO conditions now, not just the dot:
+    //  (a) the row shows unread AND (b) its preview reads like the BUYER's message.
+    //  A dot with OUR preview ("You: …") is a STALE dot — on minimized windows FB
+    //  often never clears dots after we reply, and those ghosts were re-opened every
+    //  few minutes (P1 overrides cooldowns!), eating the queue while real buyers sat.
+    // FIFO — serve the OLDEST waiting buyer first (the LAST matching row: the
+    //  sidebar is sorted newest-first), so a 20-minute-old question can never be
+    //  starved by a stream of brand-new ones.
+    let oldestWaiting = null;
     for (const a of anchors) {
       const id = threadId(a);
       if (exclude.has(id)) continue;
       if (!safe(() => isUnreadAnchor(a), false)) continue;
+      if (!safe(() => snippetSuggestsBuyerLast(a), false)) continue; // stale dot → not P1
       if (now - (lastOpened[id] || 0) <= UNREAD_REOPEN_MS) continue;
-      return a; // first eligible unread (topmost = most recent)
+      oldestWaiting = a; // keep the LAST match = lowest row = waited longest
     }
+    if (oldestWaiting) return oldestWaiting;
     let target = null, bestT = Infinity, bestIdleT = Infinity, idleTarget = null;
     for (const a of anchors) {
       const id = threadId(a);
