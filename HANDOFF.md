@@ -82,7 +82,7 @@ computer/Facebook account.
 
 ## Build / test / ship
 - No bundler. Validate: `node --check background.js content.js options.js popup.js docs/app.js`.
-- Rebuild the download: zip the extension files into `dist/subsell-extension.zip` (everything except `docs/`, `supabase/`, `.md`, `dist/`).
+- Rebuild the download: zip the extension files into `dist/subsell-extension.zip` (everything except `docs/`, `supabase/`, `.md`, `dist/`) **and copy it to `dist/subsell-installer.zip`** (same artifact, operator-facing name — keep BOTH refreshed every release).
 - Operator installs via **Load unpacked** per Chrome profile; pastes the config URL or logs into Cloud sync.
 - **Always test reply quality in the extension's Settings → Test responses (no Facebook) before going live**, then supervise the first few real chats.
 - Commit + push to `claude/wizardly-noether-Oi6vP`.
