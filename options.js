@@ -27,6 +27,7 @@
     examples: "",
     offPlatformGuard: true,
     closerMode: true,
+    closerIntensity: "medium",
     noExactPrices: true,
     closerGoals:
       "Your #1 goal is to get the buyer to come visit the shop in person. We give better prices in person than online. We also do trade-ins/exchanges, buyback of their old phone, and have liquidation deals — mention these naturally when relevant. Build excitement and urgency without being pushy. Always steer toward 'come by the shop and we'll take care of you'.",
@@ -89,6 +90,7 @@
     ["examples", "value"],
     ["offPlatformGuard", "checked"],
     ["closerMode", "checked"],
+    ["closerIntensity", "value"],
     ["noExactPrices", "checked"],
     ["closerGoals", "value"],
     ["priceList", "value"],

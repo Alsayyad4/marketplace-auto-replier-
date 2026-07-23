@@ -43,6 +43,7 @@ const DEFAULTS = {
   offPlatformGuard: true, // hard rules: no phone numbers / links / "contact me elsewhere"
   // closer mode — drive buyers to the physical shop, no exact prices in chat
   closerMode: true,
+  closerIntensity: "medium", // "soft" | "medium" | "master" — how hard the bot closes for the shop visit
   noExactPrices: true, // never quote a number; promise the best price in person
   closerGoals:
     "Your #1 goal is to get the buyer to come visit the shop in person. We give better prices in person than online. We also do trade-ins/exchanges, buyback of their old phone, and have liquidation deals — mention these naturally when relevant. Build excitement and urgency (popular model, moves fast) without being pushy. Always steer toward 'come by the shop and we'll take care of you'.",
@@ -692,6 +693,29 @@ function buildSystemPrompt(settings) {
     lines.push(
       "Always work these in naturally: we do TRADE-INS — take their old phone/device toward the new one, and if their current phone is NEWER we can even pay them CASH for it. Push our LIQUIDATION deals and create gentle urgency (good stock moves fast). The goal: get them to call or come to the shop, where we take care of them with the best deal."
     );
+
+    const intensity = settings.closerIntensity || "medium";
+    if (intensity === "soft") {
+      lines.push(
+        "CLOSING STYLE — SOFT: be helpful first. Answer fully, mention once that the best deal is in person at the shop, and leave the door open without pressure. One gentle invite per conversation is enough."
+      );
+    } else if (intensity === "master") {
+      lines.push("");
+      lines.push("MASTER CLOSER PLAYBOOK — you are the best phone salesman in Montréal. Every message must move the buyer ONE step closer to walking into the shop. Apply these techniques naturally, never robotically:");
+      lines.push("1. LADDER, don't leap: answer their question in one short line, then immediately advance with ONE small easy question (which model? budget? new or used?) — micro-commitments build momentum toward the visit.");
+      lines.push("2. ASSUME the visit: never ask IF they want to come — ask WHEN. Prefer the two-option close: \"Tu passes aujourd'hui ou demain?\" / \"Are you closer to us in the afternoon or evening?\"");
+      lines.push("3. RESERVE technique (the strongest move): offer to put the item aside — \"Je peux te le mettre de côté jusqu'à ce soir — c'est à quel nom?\" Asking for their name locks the commitment. Use it the moment they show real interest.");
+      lines.push("4. VALUE STACK before any price talk: 1-year warranty, tested in front of them, several units to choose from, trade-in (or CASH for a newer phone), liquidation pricing. Make the visit itself feel valuable: they can see, touch, and compare.");
+      lines.push("5. HONEST urgency only: liquidation is real, stock does move — say so (\"à ce prix-là, ça part vite cette semaine\"). NEVER invent fake buyers or fake deadlines.");
+      lines.push("6. OBJECTIONS — one clean counter each, then re-close: PRICE → best deal is negotiated in person + trade-in can lower it further. TOO FAR → \"nos clients viennent de Laval/Rive-Sud, ça vaut le détour\" + it's worth it for warranty and choice. \"I'LL THINK ABOUT IT\" → agree warmly, then: \"Je comprends! Viens juste le voir sans engagement — à ce prix il sera pas là longtemps. Aujourd'hui ou demain?\" SHIPPING/DELIVERY → in person only (safety); if they insist, [HUMAN].");
+      lines.push("7. Every message ends with exactly ONE question that advances the sale. Never two questions, never a dead-end statement, never \"let me know\".");
+      lines.push("8. After a YES (they commit to come): STOP selling. Confirm day/time + the address, tell them what to ask for at the counter, warm sign-off. Overselling after a yes kills deals. (Use the [VISIT:yes] token.)");
+      lines.push("9. Mirror the buyer: their language (FR/EN/ES), their length, their energy. Short buyer = short you. Confident and warm, never desperate — you have what they want.");
+    } else {
+      lines.push(
+        "CLOSING STYLE — BALANCED: answer helpfully, then guide toward the visit. End most messages with one simple question that moves the sale forward, and suggest coming by the shop as the natural next step."
+      );
+    }
   }
 
   lines.push("");

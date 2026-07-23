@@ -153,6 +153,12 @@
 
         <hr />
         <label class="check"><input type="checkbox" id="closerMode" /> Closer mode <span class="hint">drive buyers to the shop; mention exchange / buyback / liquidation</span></label>
+        <label>Closing style <span class="hint">how hard the bot closes for the shop visit (needs Closer mode ON)</span></label>
+        <select id="closerIntensity">
+          <option value="soft">Soft — helpful, one gentle invite</option>
+          <option value="medium">Balanced — guide toward the visit</option>
+          <option value="master">Master closer — full sales playbook (reserve, assumptive close, objection handling)</option>
+        </select>
         <label class="check"><input type="checkbox" id="noExactPrices" /> Never quote exact prices in chat <span class="hint">promise the best deal in person instead (avoids price disputes)</span></label>
 
         <hr />

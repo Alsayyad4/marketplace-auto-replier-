@@ -166,6 +166,12 @@
           <hr />
           <label class="check"><input type="checkbox" id="offPlatformGuard" /> Off-platform guardrails <span class="hint">forbid phone/email/links; escalate instead</span></label>
           <label class="check"><input type="checkbox" id="closerMode" /> Closer mode <span class="hint">drive buyers to call/visit; trade-ins, buyback, liquidation</span></label>
+          <label>Closing style <span class="hint">how hard the bot closes for the shop visit (needs Closer mode ON)</span></label>
+          <select id="closerIntensity">
+            <option value="soft">Soft — helpful, one gentle invite</option>
+            <option value="medium">Balanced — guide toward the visit</option>
+            <option value="master">Master closer — full sales playbook (reserve, assumptive close, objection handling)</option>
+          </select>
           <label class="check"><input type="checkbox" id="noExactPrices" /> Never quote exact prices <span class="hint">(ignored when a price list is set on the Business tab)</span></label>
 
           <hr />
@@ -272,8 +278,8 @@
       </div>
     </div>
 
-    <script src="config.js?v=20260611"></script>
+    <script src="config.js?v=20260720"></script>
     <script src="https://cdn.jsdelivr.net/npm/@supabase/supabase-js@2"></script>
-    <script src="app.js?v=20260611"></script>
+    <script src="app.js?v=20260720"></script>
   </body>
 </html>

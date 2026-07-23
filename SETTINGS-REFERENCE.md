@@ -37,6 +37,7 @@ endpoint serves that object to the extension.
 | Day-0 daily cap | `warmupStartCap` | number | `10` | Daily cap on day 0. |
 | Off-platform guardrails | `offPlatformGuard` | bool | `true` | Forbid phone/email/links/"contact me elsewhere". |
 | Closer mode | `closerMode` | bool | `true` | Drive buyers to call/visit; trade-in/buyback/liquidation. |
+| Closing style | `closerIntensity` | enum | `medium` | `soft` (one gentle invite) / `medium` (guide toward the visit) / `master` (full sales playbook: micro-commitments, assumptive & two-option closes, reserve technique, honest urgency, objection handling, one advancing question per message, stop-selling-after-yes). Only applies when Closer mode is ON. |
 | Never quote exact prices | `noExactPrices` | bool | `true` | Promise best price in person (ignored if `priceList` set). |
 | Silent visit confirmation | `visitConfirmEnabled` | bool | `true` | After a buyer says they'll come, ask "still coming?" silently. |
 | Ask after (minutes) | `visitConfirmAfterMin` | number | `120` | Delay before the silent visit confirm. |
