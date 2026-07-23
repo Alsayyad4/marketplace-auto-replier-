@@ -1463,7 +1463,17 @@ const SUD_FILES = [
   "popup.js", "managed_schema.json", "icon16.png", "icon48.png", "icon128.png",
   "manifest.json", // MUST be last: the disk-watcher only reloads once this lands
 ];
-const SUD_BASES = ["subsell-extension", "subsell-extension/subsell-extension"]; // Extract-All can nest
+// Every folder layout a normal install can produce inside Downloads. Extract-All
+// names the outer folder after the ZIP — and the zip ships under TWO names
+// (subsell-extension.zip and subsell-installer.zip) — plus re-downloads get " (1)".
+const SUD_BASES = [
+  "subsell-extension",
+  "subsell-extension/subsell-extension",
+  "subsell-installer/subsell-extension",
+  "subsell-installer",
+  "subsell-extension (1)/subsell-extension",
+  "subsell-installer (1)/subsell-extension",
+];
 function sudDownload(url, filename) {
   return new Promise((resolve) => {
     try {
@@ -1476,6 +1486,14 @@ function sudDownload(url, filename) {
             if (it && it.state === "complete") {
               chrome.downloads.erase({ id }, () => void chrome.runtime.lastError); // keep file, clean history
               return resolve(id);
+            }
+            // Chrome can hold a .js download hostage as a "dangerous file type" —
+            // it never completes without a user click. Surface it instead of a
+            // silent 90s timeout so the popup explains what's blocking updates.
+            if (it && it.danger && it.danger !== "safe" && it.danger !== "accepted") {
+              chrome.storage.local.set({ sudStatus: "Chrome blocked a file as dangerous (" + it.danger + ") — updates can't apply on this machine" });
+              chrome.downloads.cancel(id, () => void chrome.runtime.lastError);
+              return resolve(null);
             }
             if (!it || it.state === "interrupted" || Date.now() - started > 90000) return resolve(null);
             setTimeout(poll, 500);
