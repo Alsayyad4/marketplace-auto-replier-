@@ -1241,6 +1241,20 @@
     }
 
     // After the text reply, send the demo video once per chat (optional, isolated).
+    // BACKLOG-FIRST SCHEDULING: a 3-clip video set with pauses costs 1–2 minutes —
+    // during a morning burst (business hours just opened, many unread) that turned a
+    // 15-buyer queue into an hour of waiting. When other buyers are waiting, their
+    // REPLIES outrank this chat's videos: defer the set — the existing quiet-chat
+    // revisit path delivers it (guaranteed, once per chat) as soon as the queue is
+    // clear. Nobody loses their video; everybody gets their answer fast.
+    let waitingNow = 0;
+    for (const a of conversationAnchors()) {
+      if (safe(() => isUnreadAnchor(a), false) && safe(() => snippetSuggestsBuyerLast(a), false)) waitingNow++;
+    }
+    if (waitingNow >= 3) {
+      setStatus({ lastAction: "video deferred — " + waitingNow + " buyers waiting; replying to everyone first", currentThread: name });
+      return;
+    }
     refreshThreadLock(sidebarId); // video delay + uploads can outlive the lease too
     await maybeSendVideo(id, name);
   }
