@@ -57,6 +57,10 @@
   // to the FRONT of the queue (oldest first) — the "make sure everyone is replied".
   let waitingSince = {};
   let suspiciousReads = {}; // threadId -> consecutive sidebar-says-buyer/chat-says-idle reads
+  // VIDEO-PENDING QUEUE: threadId -> when its video set was deferred (busy queue).
+  // Persisted. Serviced by its own picker lane, so a deferred set is GUARANTEED to
+  // be delivered minutes later — deferral is a postponement, never a cancellation.
+  let videoPending = {};
   let lastHandled = {}; // threadId -> the buyer message we last replied to (persisted)
   // threadId -> how many TEXT replies the bot has sent in this whole conversation.
   // This is the hard per-conversation reply cap (maxRepliesPerConvo). Counted ONLY on a
@@ -73,12 +77,13 @@
   const normMsg = (s) => (s || "").toLowerCase().replace(/\s+/g, " ").trim();
   // Hydrate persisted state at boot.
   safe(() =>
-    chrome.storage.local.get(["recentSent", "cooldowns", "lastHandled", "replyCounts", "waitingSince"], (r) => {
+    chrome.storage.local.get(["recentSent", "cooldowns", "lastHandled", "replyCounts", "waitingSince", "videoPending"], (r) => {
       if (r && Array.isArray(r.recentSent)) recentSent = r.recentSent;
       if (r && r.cooldowns && typeof r.cooldowns === "object") cooldowns = r.cooldowns;
       if (r && r.lastHandled && typeof r.lastHandled === "object") lastHandled = r.lastHandled;
       if (r && r.replyCounts && typeof r.replyCounts === "object") replyCounts = r.replyCounts;
       if (r && r.waitingSince && typeof r.waitingSince === "object") waitingSince = r.waitingSince;
+      if (r && r.videoPending && typeof r.videoPending === "object") videoPending = r.videoPending;
     })
   );
   function rememberSent(t) {
@@ -90,11 +95,17 @@
   }
   function persistDedup() {
     // keep the persisted maps from growing unbounded (cap ~400 threads)
-    for (const map of [cooldowns, lastHandled, replyCounts, waitingSince]) {
+    for (const map of [cooldowns, lastHandled, replyCounts, waitingSince, videoPending]) {
       const keys = Object.keys(map);
       if (keys.length > 400) for (const k of keys.slice(0, keys.length - 400)) delete map[k];
     }
-    safe(() => chrome.storage.local.set({ cooldowns, lastHandled, replyCounts, waitingSince }));
+    safe(() => chrome.storage.local.set({ cooldowns, lastHandled, replyCounts, waitingSince, videoPending }));
+  }
+  function clearVideoPending(id) {
+    if (id && videoPending[id] != null) {
+      delete videoPending[id];
+      persistDedup();
+    }
   }
   // A chat is RESOLVED for its current message — take it off the never-miss ledger.
   function clearWaiting(id, sid) {
@@ -746,6 +757,7 @@
       // SYNCHRONOUS guard first (no awaits): if this instance already committed a video
       // to this chat, never touch it again — closes the rapid-re-entry "non-stop" loop.
       if (id && videoLocked.has(id)) {
+        clearVideoPending(id);
         console.debug("[SubSell] video: skip — already locked this session", id);
         return;
       }
@@ -771,8 +783,13 @@
         /* background unavailable — just skip central videos this cycle */
       }
 
-      if (!cfg.videoEnabled && !central.length) return;
-      if (!local.length && !central.length) return;
+      // CENTRAL videos (the dashboard set) are the single source of truth when they
+      // exist — legacy per-machine local clips are ignored then. This stops (a) a
+      // corrupt old local file from blocking the whole set via the complete-set
+      // guard, and (b) buyers receiving local+central duplicates.
+      if (central.length) local = [];
+      if (!cfg.videoEnabled && !central.length) { clearVideoPending(id); return; }
+      if (!local.length && !central.length) { clearVideoPending(id); return; }
 
       const now = Date.now();
       const done = cfg.videoSentThreads || {};
@@ -786,6 +803,7 @@
       // (1) CONFIRMED sent → never resend. Only the NEW {done:true} is authoritative.
       if (done[id] && done[id].done && resumeFrom == null) {
         videoLocked.add(id);
+        clearVideoPending(id);
         console.debug("[SubSell] video: skip — chat already marked sent", id);
         return;
       }
@@ -793,6 +811,7 @@
       // (Skipped in resume mode — of course there are already videos there.)
       if (resumeFrom == null && chatAlreadyHasOurVideo()) {
         videoLocked.add(id);
+        clearVideoPending(id);
         done[id] = { done: true, at: now };
         await setLocal({ videoSentThreads: done });
         console.debug("[SubSell] video: skip — video already visible in chat", id);
@@ -881,11 +900,10 @@
           /* skip a video that failed to download */
         }
       }
-      // The set must be COMPLETE before we send anything: sending a partial set and
-      // then locking the chat was exactly how "3 configured, buyer got 2" happened
-      // (one download hiccups → 2 files → locked forever). Nothing sent yet, so a
-      // retry later (with backoff) is safe and eventually delivers all clips.
-      const expected = local.length + central.length;
+      // The CENTRAL set must be COMPLETE before we send anything (a partial set +
+      // lock was how "3 configured, buyer got 2" happened). Only the central count
+      // is enforced — a corrupt legacy local file must never block delivery.
+      const expected = central.length ? central.length : files.length;
       if (!files.length || files.length < expected) {
         await recordVideoFail(id);
         setStatus({ lastError: "video: loaded " + files.length + "/" + expected + " clip(s) — will retry later", currentThread: name });
@@ -902,6 +920,7 @@
       // (Operator priority: never re-send / never spam. A rare missed clip on a truly
       // failed upload is the accepted trade.)
       videoLocked.add(id);
+      clearVideoPending(id); // committed to sending — off the pending queue
       {
         const dm = (await getLocal(["videoSentThreads"])).videoSentThreads || {};
         dm[id] = { done: true, at: Date.now() }; // resume marker (if any) cleared here, BEFORE sending
@@ -1252,7 +1271,11 @@
       if (safe(() => isUnreadAnchor(a), false) && safe(() => snippetSuggestsBuyerLast(a), false)) waitingNow++;
     }
     if (waitingNow >= 3) {
-      setStatus({ lastAction: "video deferred — " + waitingNow + " buyers waiting; replying to everyone first", currentThread: name });
+      // Postpone, never cancel: the pending queue has its own picker lane, so this
+      // chat's video set is guaranteed to go out minutes later.
+      videoPending[id] = Date.now();
+      persistDedup();
+      setStatus({ lastAction: "video queued — " + waitingNow + " buyers waiting; replying to everyone first", currentThread: name });
       return;
     }
     refreshThreadLock(sidebarId); // video delay + uploads can outlive the lease too
@@ -1319,6 +1342,23 @@
       if (!safe(() => snippetSuggestsBuyerLast(a), false)) continue; // stale dot → not lane 1
       if (now - (lastOpened[id] || 0) <= UNREAD_REOPEN_MS) continue;
       return a; // first match = newest buyer → instant reply
+    }
+
+    // LANE 1.5 — PENDING VIDEOS (guaranteed delivery): sets deferred during a busy
+    // queue are serviced the moment no fresh buyer needs a reply — BEFORE idle
+    // rotation, oldest first. This is what makes deferral a postponement, not a
+    // cancellation ("latest version not sending videos at all" = this lane missing).
+    {
+      let pv = null, pvT = Infinity;
+      for (const a of anchors) {
+        const id = threadId(a);
+        if (exclude.has(id)) continue;
+        const t = videoPending[id];
+        if (t == null) continue;
+        if (now <= (cooldowns[id] || 0) && now - t < 15 * 60 * 1000) continue; // fresh cooldown; wait unless pending >15 min
+        if (t < pvT) { pvT = t; pv = a; }
+      }
+      if (pv) return pv;
     }
     let target = null, bestT = Infinity, bestIdleT = Infinity, idleTarget = null;
     for (const a of anchors) {
@@ -1401,7 +1441,7 @@
           if (wid && waitingSince[wid] == null) waitingSince[wid] = nowT;
         }
       }
-      setStatus({ marketplaceAnchorCount: anchors.length, unreadCount: unread, waitingCount: waiting, lastAction: settings.enabled ? "scanning" : "off" });
+      setStatus({ marketplaceAnchorCount: anchors.length, unreadCount: unread, waitingCount: waiting, videoQueueCount: Object.keys(videoPending).length, lastAction: settings.enabled ? "scanning" : "off" });
       if (!settings.enabled || !onMarketplace()) return;
 
       // AUTO-RECOVER from Facebook's error page ONLY. Guarded so it can never touch a
