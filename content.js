@@ -1026,13 +1026,23 @@
         if (await injectVideo(files[i])) okCount++;
         if (i < files.length - 1) await sleep(gapSec * 1000 + rand(0, 1500)); // pause BETWEEN videos
       }
-      if (okCount === 0) {
-        // Attach failed on EVERY clip — the chat is locked (no-spam guarantee), but
-        // this must be loud: it usually means Facebook changed its upload UI.
-        vstat("⚠ 0/" + files.length + " attached in " + (name || id) + " — FB upload UI may have changed, tell the developer");
-      } else {
-        vstat("sent ✓ " + (okCount + startAt) + "/" + files.length + " to " + (name || id));
+      if (okCount === 0 && startAt === 0) {
+        // NOTHING attached in this whole run. Attach detection is preview-based —
+        // no preview ever appeared, so nothing can possibly have been sent. It is
+        // therefore SAFE to undo the lock and let the chat retry later (with the
+        // normal 3-try/24h backoff) instead of burning it forever at 0 videos.
+        videoLocked.delete(id);
+        const undo = (await getLocal(["videoSentThreads"])).videoSentThreads || {};
+        if (undo[id] && undo[id].done && !undo[id].resumeFrom) {
+          delete undo[id];
+          await setLocal({ videoSentThreads: undo });
+        }
+        await recordVideoFail(id);
+        vstat("⚠ 0/" + files.length + " attached in " + (name || id) + " — unlocked for retry (FB upload UI may have changed)");
+        setStatus({ lastError: "video: nothing attached — will retry later", currentThread: name });
+        return;
       }
+      vstat("sent ✓ " + (okCount + startAt) + "/" + files.length + " to " + (name || id));
       setStatus({ lastAction: `demo video(s) sent ✓ (${okCount + startAt}/${files.length})`, currentThread: name });
       // Mirror to the local + cloud activity log (fire-and-forget; no effect on sending).
       ask({ type: "LOG_EVENT", entry: { thread: name, threadId: id, buyer: "(demo video)", action: "video", reply: okCount + " demo video(s) sent" } });
@@ -1242,7 +1252,10 @@
     }
     if (lastHandled[id] === turn.buyerMessage) {
       clearWaiting(id, sidebarId); // already answered this exact message
-      setStatus({ lastAction: "skip — already replied to this message", currentThread: name });
+      // Audit fix: chats that keep landing here (our reply mis-read as not-last)
+      // previously NEVER reached a video pass — give them one (idempotent).
+      await maybeSendVideo(id, name, true);
+      setStatus({ lastAction: "skip — already replied to this message (video checked)", currentThread: name });
       return;
     }
 
@@ -1282,6 +1295,7 @@
     if (reply.human) {
       lastHandled[id] = turn.buyerMessage;
       clearWaiting(id, sidebarId); // handed to the human — resolved for the bot
+      await maybeSendVideo(id, name, true); // demo video still helps the human close
       setStatus({ lastAction: "needs you: " + reply.reason, currentThread: name });
       return;
     }

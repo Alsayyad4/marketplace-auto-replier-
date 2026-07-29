@@ -911,6 +911,11 @@ async function fetchVideo(url) {
     const resp = await fetch(url);
     if (!resp.ok) return { error: `Video ${resp.status}` };
     const buf = await resp.arrayBuffer();
+    // Chrome hard-caps extension messages (~64MB); base64 adds ~33%. A clip over
+    // ~45MB can never be delivered — say so explicitly instead of failing forever.
+    if (buf.byteLength > 45 * 1024 * 1024) {
+      return { error: "video too large (" + Math.round(buf.byteLength / 1048576) + "MB) — re-upload it under ~40MB in the dashboard" };
+    }
     const mime = resp.headers.get("content-type") || "video/mp4";
     const base64 = abToBase64(buf);
     // keep the cache small: only the CURRENT url(s) — replace wholesale on change
