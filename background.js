@@ -1111,6 +1111,15 @@ chrome.runtime.onMessage.addListener((msg, _sender, sendResponse) => {
           sendResponse(await cloudSelfUpdate(true));
           break;
         }
+        case "SUD_DIRNAME": {
+          // The popup read the unpacked folder's real on-disk name (only
+          // foreground pages can) — remember it so the updater finds the folder
+          // even when it was renamed or extracted under an unexpected name.
+          const n = String(msg.name || "").trim();
+          if (n && !/[\\/]/.test(n)) chrome.storage.local.set({ sudDirName: n });
+          sendResponse({ ok: true });
+          break;
+        }
         case "WAKE_TABS": {
           // Popup "Wake scanner" — re-inject a fresh content script into every open
           // Messenger tab, so the operator never has to reload pages by hand.
@@ -1458,8 +1467,8 @@ chrome.alarms.onAlarm.addListener((alarm) => {
  * malware pattern), so the updater now lives INSIDE the extension: every hour it
  * checks the repo's manifest version (1KB fetch); when newer, it downloads its own
  * files through chrome.downloads into its unpacked folder and lets the disk-watcher
- * below reload it. Requirement: the unpacked folder must live in the user's
- * Downloads folder as "subsell-extension" (chrome.downloads can only write there) —
+ * below reload it. Requirement: the unpacked folder must live somewhere inside the
+ * folder Chrome saves downloads to (chrome.downloads can only write there) —
  * verified with a data-URL probe file, never guessed. Everything is plain Chrome
  * API: nothing for Defender to object to. */
 const SUD_RAW = "https://raw.githubusercontent.com/alsayyad4/marketplace-auto-replier-/claude/wizardly-noether-Oi6vP/";
@@ -1479,17 +1488,25 @@ const SUD_BASES = [
   "subsell-extension (1)/subsell-extension",
   "subsell-installer (1)/subsell-extension",
 ];
-function sudDownload(url, filename) {
+let sudLastDlErr = "";   // why the most recent probe/file download failed
+let sudProbeWrites = 0;  // probes whose test file actually reached disk
+function sudDownload(url, filename, opts) {
+  opts = opts || {};
   return new Promise((resolve) => {
     try {
       chrome.downloads.download({ url, filename, conflictAction: "overwrite", saveAs: false }, (id) => {
-        if (chrome.runtime.lastError || id == null) return resolve(null);
+        if (chrome.runtime.lastError || id == null) {
+          sudLastDlErr = (chrome.runtime.lastError && chrome.runtime.lastError.message) || "download rejected";
+          return resolve(null);
+        }
         const started = Date.now();
         const poll = () => {
           chrome.downloads.search({ id }, (items) => {
             const it = items && items[0];
             if (it && it.state === "complete") {
-              chrome.downloads.erase({ id }, () => void chrome.runtime.lastError); // keep file, clean history
+              // keep the file, clean history — unless the caller still needs the
+              // history entry (the probe deletes its file through it afterwards)
+              if (!opts.keepHistory) chrome.downloads.erase({ id }, () => void chrome.runtime.lastError);
               return resolve(id);
             }
             // Chrome can hold a .js download hostage as a "dangerous file type" —
@@ -1498,15 +1515,20 @@ function sudDownload(url, filename) {
             if (it && it.danger && it.danger !== "safe" && it.danger !== "accepted") {
               chrome.storage.local.set({ sudStatus: "Chrome blocked a file as dangerous (" + it.danger + ") — updates can't apply on this machine" });
               chrome.downloads.cancel(id, () => void chrome.runtime.lastError);
+              sudLastDlErr = "blocked as dangerous (" + it.danger + ")";
               return resolve(null);
             }
-            if (!it || it.state === "interrupted" || Date.now() - started > 90000) return resolve(null);
+            if (!it || it.state === "interrupted" || Date.now() - started > 90000) {
+              sudLastDlErr = (it && it.error) ? String(it.error) : "download did not finish";
+              return resolve(null);
+            }
             setTimeout(poll, 500);
           });
         };
         poll();
       });
     } catch (e) {
+      sudLastDlErr = String(e && e.message);
       resolve(null);
     }
   });
@@ -1514,18 +1536,73 @@ function sudDownload(url, filename) {
 async function sudProbeBase(base) {
   // Write a token file into Downloads/<base>/ and see if it appears inside OUR
   // extension root — proves that folder IS this extension's folder.
+  // The test file's name must NOT start with a dot: chrome.downloads rejects
+  // leading-dot names as "Invalid filename", which made every probe fail and the
+  // updater blame the folder location on machines where it was perfectly fine.
   const token = "sud-" + Date.now() + "-" + Math.random().toString(36).slice(2);
-  const id = await sudDownload("data:text/plain," + token, base + "/.sud-probe");
+  const id = await sudDownload("data:text/plain," + token, base + "/sud-probe.txt", { keepHistory: true });
   if (id == null) return false;
+  sudProbeWrites++;
   let hit = false;
-  try {
-    const r = await fetch(chrome.runtime.getURL(".sud-probe"), { cache: "no-store" });
-    hit = r.ok && (await r.text()).indexOf(token) !== -1;
-  } catch (e) { hit = false; }
-  chrome.downloads.search({ filenameRegex: "\\.sud-probe$" }, (items) => {
-    for (const it of items || []) chrome.downloads.removeFile(it.id, () => void chrome.runtime.lastError);
+  for (let attempt = 0; attempt < 3 && !hit; attempt++) {
+    try {
+      const r = await fetch(chrome.runtime.getURL("sud-probe.txt"), { cache: "no-store" });
+      hit = r.ok && (await r.text()).indexOf(token) !== -1;
+    } catch (e) { hit = false; }
+    if (!hit) await new Promise((r) => setTimeout(r, 250)); // disk write can lag the "complete" state
+  }
+  chrome.downloads.removeFile(id, () => {
+    void chrome.runtime.lastError;
+    chrome.downloads.erase({ id }, () => void chrome.runtime.lastError);
   });
   return hit;
+}
+function sudSearch(q) {
+  return new Promise((r) => {
+    try { chrome.downloads.search(q, (items) => { void chrome.runtime.lastError; r(items || []); }); }
+    catch (e) { r([]); }
+  });
+}
+// Where does Chrome actually save downloads on THIS machine? OneDrive often
+// redirects the visible "Downloads" elsewhere — naming the real path in the
+// error message is the only way the operator can tell the two apart.
+async function sudDownloadDir() {
+  const recs = await sudSearch({ orderBy: ["-startTime"], limit: 5 });
+  for (const it of recs) {
+    const fn = String((it && it.filename) || "");
+    const cut = Math.max(fn.lastIndexOf("\\"), fn.lastIndexOf("/"));
+    if (cut > 0) return fn.slice(0, cut);
+  }
+  return "";
+}
+// Build the folder names worth probing, best-evidence first: the extension's
+// real on-disk folder name (reported by the popup), the standard layouts, then
+// every folder an actual subsell*.zip in download history could have extracted
+// to — that covers renamed folders and " (2)" re-download variants without
+// blind-guessing dozens of names (each miss leaves an empty folder behind).
+async function sudCandidates() {
+  const st = await new Promise((r) => chrome.storage.local.get(["sudDirName"], (x) => r(x || {})));
+  const dn = String(st.sudDirName || "").trim().replace(/[\\/]+/g, "");
+  const parents = new Set(["subsell-extension", "subsell-installer"]);
+  const names = [];
+  if (dn) names.push(dn);
+  names.push(...SUD_BASES);
+  const recs = await sudSearch({ query: ["subsell"], limit: 100 });
+  for (const it of recs) {
+    const fn = String((it && it.filename) || "").replace(/\\/g, "/");
+    const bn = fn.slice(fn.lastIndexOf("/") + 1);
+    const m = /^(.+)\.zip$/i.exec(bn);
+    if (m && m[1]) { names.push(m[1], m[1] + "/subsell-extension"); parents.add(m[1]); }
+  }
+  if (dn) for (const p of parents) names.push(p + "/" + dn);
+  const seen = new Set(), out = [];
+  for (const n of names) {
+    const k = n.toLowerCase();
+    if (!n || seen.has(k) || out.length >= 15) continue;
+    seen.add(k);
+    out.push(n);
+  }
+  return out;
 }
 let sudBusy = false;
 async function cloudSelfUpdate(force) {
@@ -1550,10 +1627,27 @@ async function cloudSelfUpdate(force) {
     let base = st.sudBase || "";
     if (!base || !(await sudProbeBase(base))) {
       base = "";
-      for (const b of SUD_BASES) if (await sudProbeBase(b)) { base = b; break; }
+      sudLastDlErr = "";
+      sudProbeWrites = 0;
+      const tried = await sudCandidates();
+      for (const b of tried) if (await sudProbeBase(b)) { base = b; break; }
       if (!base) {
-        chrome.storage.local.set({ sudStatus: "auto-update OFF — folder is not Downloads\\subsell-extension" });
-        return { ok: false, reason: "extension folder is not inside Downloads (see setup)" };
+        // Two very different failures used to share one misleading message.
+        // Zero test files reaching disk = Chrome refused the writes (settings/
+        // policy); files landing but never appearing in the extension = the
+        // loaded folder isn't under Chrome's download folder. Say which, and
+        // name the real download path — OneDrive moves it without telling anyone.
+        const dir = await sudDownloadDir();
+        let why;
+        if (sudProbeWrites === 0) {
+          why = "Chrome refused to write the update test file" + (sudLastDlErr ? " (" + sudLastDlErr + ")" : "") +
+                " — in Chrome Settings > Downloads turn OFF \"Ask where to save each file\"";
+        } else {
+          why = "extension folder not found inside Chrome's download folder" + (dir ? " (" + dir + ")" : "") +
+                " — move the loaded folder there. Folder names tried: " + tried.slice(0, 5).join(", ");
+        }
+        chrome.storage.local.set({ sudStatus: "auto-update OFF — " + why });
+        return { ok: false, reason: why };
       }
       chrome.storage.local.set({ sudBase: base });
     }

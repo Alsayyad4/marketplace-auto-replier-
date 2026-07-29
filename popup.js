@@ -200,6 +200,20 @@
     });
   }
 
+  /* The updater has to know the unpacked folder's real name to write into it,
+   * and only a foreground page can read it — so the popup reports it to the
+   * background every time it opens. Renamed folders then auto-update fine. */
+  try {
+    if (chrome.runtime.getPackageDirectoryEntry) {
+      chrome.runtime.getPackageDirectoryEntry((dir) => {
+        void chrome.runtime.lastError;
+        if (dir && dir.name) {
+          chrome.runtime.sendMessage({ type: "SUD_DIRNAME", name: dir.name }, () => void chrome.runtime.lastError);
+        }
+      });
+    }
+  } catch (e) { /* optional signal — the updater falls back to known names */ }
+
   /* ----- Built-in updater: check the cloud and update this extension now ----- */
   if ($("checkUpdate")) {
     $("checkUpdate").addEventListener("click", () => {

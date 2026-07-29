@@ -12,26 +12,43 @@ into its unpacked folder and reloads itself — never while a reply/video send i
 in progress. There is also an **"⬇ Update now"** button in the popup.
 
 **The one requirement:** the unpacked extension folder must live inside the
-user's **Downloads** folder (that's the only place Chrome lets extensions write
-files). Both layouts work:
+folder **Chrome saves downloads to** (that's the only place Chrome lets
+extensions write files — usually `Downloads`, but OneDrive can move it). The
+folder name is flexible: the standard names (`subsell-extension`,
+`subsell-installer`, Extract-All nesting, ` (1)`/` (2)` re-download variants)
+work out of the box, and opening the popup once teaches the updater the real
+folder name even if it was renamed.
 
-- `Downloads\subsell-extension\manifest.json`
-- `Downloads\subsell-extension\subsell-extension\manifest.json` (Extract-All nesting)
+The extension verifies the folder with a probe file (`sud-probe.txt` — the name
+must never start with a dot; Chrome rejects dot-file downloads as "Invalid
+filename", which is what silently killed the updater before v0.21.6). If the
+folder can't be verified, the update button now names the exact download folder
+Chrome uses and the folder names it tried.
 
-The extension verifies the folder with a probe file — it never guesses. If the
-folder is elsewhere, the popup's update button says so instead of failing silently.
+## Per computer
 
-## Per computer (once, ~60 seconds, AV-clean)
+**Machine that already has SubSell loaded** (~60 seconds — do NOT remove the
+extension; removing it erases its saved settings/API key):
 
-1. Download the extension zip **into Downloads** (the default):
+1. Download the zip:
    https://github.com/alsayyad4/marketplace-auto-replier-/raw/claude/wizardly-noether-Oi6vP/dist/subsell-extension.zip
-2. Right-click the zip → **Extract All…** → Extract (defaults are fine).
-3. `chrome://extensions` → remove the old SubSell → Developer mode ON →
-   **Load unpacked** → pick the extracted folder that contains `manifest.json`.
+2. Right-click the zip → **Extract All…** → open the extracted folders until
+   you see `manifest.json`.
+3. Select **all** files there → Copy → Paste into the folder that is loaded in
+   `chrome://extensions` (shown under "Loaded from" on the SubSell card) →
+   **Replace the files**. The bot notices the new files and restarts itself
+   within ~10 minutes (or click ⟳ on the SubSell card to make it instant).
 4. Open the popup → click **⬇ Update now** → it should say "Up to date ✓".
 
+**Brand-new machine:**
+
+1. Download the same zip **into Downloads** and Extract All.
+2. `chrome://extensions` → Developer mode ON → **Load unpacked** → pick the
+   extracted folder that contains `manifest.json`.
+3. Paste the config link + API key in Options, open the popup → **⬇ Update now**.
+
 Done. That computer now updates itself forever (hourly check + on-demand button).
-Settings, logins, chat memory: untouched (they live in Chrome's profile).
+Facebook logins and chat memory live in the Chrome profile and are never touched.
 
 ## Rollout / verification
 
