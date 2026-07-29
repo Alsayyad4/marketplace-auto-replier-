@@ -84,6 +84,26 @@
       if (r && r.replyCounts && typeof r.replyCounts === "object") replyCounts = r.replyCounts;
       if (r && r.waitingSince && typeof r.waitingSince === "object") waitingSince = r.waitingSince;
       if (r && r.videoPending && typeof r.videoPending === "object") videoPending = r.videoPending;
+      // ONE-TIME MIGRATION (v0.21.4): the "Add video to listing" card false-positive
+      // marked chats {done:true} WITHOUT sending since the fleet reinstall. Un-mark
+      // every done-flag younger than 7 days so those chats finally get their videos.
+      // Chats that truly received one are still protected by the strong DOM signals
+      // (their video bubbles are visible in the chat).
+      chrome.storage.local.get(["migVideoMarks0214", "videoSentThreads"], (m) => {
+        if (m && m.migVideoMarks0214) return;
+        const vt = (m && m.videoSentThreads) || {};
+        const cutoff = Date.now() - 7 * 24 * 3600 * 1000;
+        let cleared = 0;
+        for (const k of Object.keys(vt)) {
+          const e = vt[k];
+          if (e && e.done && typeof e.at === "number" && e.at > cutoff) {
+            delete vt[k];
+            cleared++;
+          }
+        }
+        chrome.storage.local.set({ videoSentThreads: vt, migVideoMarks0214: true }, () => void chrome.runtime.lastError);
+        if (cleared) console.debug("[SubSell] migration: cleared", cleared, "false 'video sent' marks");
+      });
     })
   );
   function rememberSent(t) {
@@ -238,7 +258,7 @@
     if (lines.length < 2) return false;
     const prev = lines.slice(1).join(" ").toLowerCase();
     // OUR last message / system & UI lines → not a waiting buyer.
-    if (/^you[:\s]|^vous\s?:|you sent|vous avez envoyé|automated suggestion|suggestion automatis|to help identify|pour (mieux )?identifier|you can now rate|rate each other|vous pouvez (désormais|maintenant) (vous )?évaluer|started this chat|a démarré|marketplace ·/i.test(prev)) return false;
+    if (/^you[:\s]|^vous\s?:|you sent|vous avez envoyé|automated suggestion|suggestion automatis|to help identify|pour (mieux )?identifier|you can now rate|rate each other|vous pouvez (désormais|maintenant) (vous )?évaluer|started this chat|a démarré|marketplace ·|reacted .{0,4}to your|a réagi|liked your|a aimé/i.test(prev)) return false;
     return true;
   }
 
@@ -601,62 +621,72 @@
     for (let i = 0; i < bin.length; i++) bytes[i] = bin.charCodeAt(i);
     return new File([bytes], name || "demo.mp4", { type: type || "video/mp4" });
   }
-  // Best-effort: drop the file into Messenger's attach uploader, wait for the
-  // preview to actually appear, then send. Tries the hidden file input, then a
-  // paste, then drag-drop. This is the one fragile part — depends on Messenger's
-  // current uploader — but it's fully isolated from the (working) text reply.
+  // Best-effort: hand the file to Messenger's COMPOSER, wait for the preview to
+  // actually appear, then send. AUDIT FIX (2026-07-29): the old order tried the
+  // first document-global input[type=file] FIRST — which can be the LISTING CARD's
+  // own "Add video to listing" uploader, silently feeding clips to the listing
+  // instead of the buyer. New order: PASTE into the focused composer (unambiguous
+  // target) → DRAG-DROP on the composer → file input only as a last resort, and
+  // never one that lives inside the "Add video to listing" card.
   async function injectVideo(file) {
     const main = getMain() || document;
     const previewSel = 'img[src^="blob:"], [role="progressbar"], video';
-    const before = safe(() => main.querySelectorAll(previewSel).length, 0);
     const composer = findComposer();
     if (composer) composer.focus();
-
-    let injected = false;
-    const input = safe(() => document.querySelector('input[type="file"]'), null);
-    if (input) {
-      injected = safe(() => {
-        const dt = new DataTransfer();
-        dt.items.add(file);
-        input.files = dt.files;
-        input.dispatchEvent(new Event("change", { bubbles: true }));
-        return true;
-      }, false);
-    }
-    if (!injected && composer) {
-      injected = safe(() => {
-        const dt = new DataTransfer();
-        dt.items.add(file);
+    const dtFor = () => {
+      const dt = new DataTransfer();
+      dt.items.add(file);
+      return dt;
+    };
+    const attempts = [];
+    if (composer) {
+      attempts.push(() => {
         const ev = new ClipboardEvent("paste", { bubbles: true, cancelable: true });
-        Object.defineProperty(ev, "clipboardData", { value: dt });
+        Object.defineProperty(ev, "clipboardData", { value: dtFor() });
         composer.dispatchEvent(ev);
         return true;
-      }, false);
-    }
-    if (!injected && composer) {
-      injected = safe(() => {
-        const dt = new DataTransfer();
-        dt.items.add(file);
+      });
+      attempts.push(() => {
+        const dt = dtFor();
         for (const t of ["dragenter", "dragover", "drop"]) {
           const ev = new DragEvent(t, { bubbles: true, cancelable: true });
           Object.defineProperty(ev, "dataTransfer", { value: dt });
           composer.dispatchEvent(ev);
         }
         return true;
-      }, false);
+      });
     }
-    if (!injected) return false;
+    attempts.push(() => {
+      // Last resort: a file input — but ONLY one that is not part of the listing
+      // card's own uploader (the input whose surrounding text says "add video to
+      // listing"/"update listing" belongs to the LISTING, not the chat).
+      const inputs = Array.from(document.querySelectorAll('input[type="file"]')).filter((inp) => {
+        const wrap = safe(() => inp.closest("div,form,section"), null);
+        const t = safe(() => ((wrap && wrap.innerText) || "").toLowerCase(), "");
+        return !/add video to listing|update listing|mettre à jour l|ajouter (une |la )?vid/.test(t);
+      });
+      const input = inputs[inputs.length - 1]; // composer attachments render late in the DOM
+      if (!input) return false;
+      input.files = dtFor().files;
+      input.dispatchEvent(new Event("change", { bubbles: true }));
+      return true;
+    });
 
-    // Wait for the upload preview to actually attach (poll up to ~25s for a NEW one).
-    const start = Date.now();
+    // Try each strategy IN ORDER, and require the preview to actually attach before
+    // trusting it — a dispatched event that lands nowhere no longer counts.
     let attached = false;
-    while (Date.now() - start < 25000) {
-      await sleep(1000);
-      const now = safe(() => main.querySelectorAll(previewSel).length, before);
-      if (now > before) {
-        attached = true;
-        break;
+    for (const attempt of attempts) {
+      const before = safe(() => main.querySelectorAll(previewSel).length, 0);
+      if (!safe(attempt, false)) continue;
+      const start = Date.now();
+      while (Date.now() - start < 12000) {
+        await sleep(1000);
+        if (safe(() => main.querySelectorAll(previewSel).length, before) > before) {
+          attached = true;
+          break;
+        }
       }
+      if (attached) break; // this strategy worked — stop trying others
     }
     if (!attached) return false; // nothing attached → NEVER blind-press Enter (caused stray sends)
     await sleep(1500);
@@ -668,7 +698,7 @@
     // videos. Attach + Enter is a reliable "it's on its way"; the caller marks the chat
     // done so it can never re-send.
     if (composer2) {
-      const previews = safe(() => main.querySelectorAll(previewSel).length, before);
+      const previews = safe(() => main.querySelectorAll(previewSel).length, 1);
       pressEnter(composer2);
       const s2 = Date.now();
       while (Date.now() - s2 < 6000) {
@@ -691,17 +721,12 @@
     const composer = findComposer();
     if (!main || !composer) return false;
 
-    // (0) STRONGEST signal — geometry/side-independent. After WE send a video to a
-    // Marketplace listing, Facebook drops an "Add video to listing / Allow other
-    // buyers to see this video … / Update listing" card into the chat. A BUYER can
-    // never add to our listing, so its presence means we already sent a video here.
-    // This is what catches OLD chats that got their video before the persistent flag
-    // existed (and where the badge/geometry checks miss) — the resends still seen.
-    // NOTE: match ONLY Facebook's card wording — never phrases a buyer could type
-    // ("je veux voir cette vidéo" must NOT mark the chat as served).
-    const allText = safe(() => main.innerText || "", "");
-    if (/add video to listing|allow other buyers to see this video|update listing|ajouter (une |la )?vid[eé]o à (l['’]annonce|votre annonce)|autoriser les autres acheteurs|mettre à jour l['’]annonce/i.test(allText)) return true;
-
+    // NOTE (audit 2026-07-29): the old check (0) — matching Facebook's "Add video to
+    // listing / Update listing" card TEXT anywhere in [role=main] — was a confirmed
+    // FALSE-POSITIVE: FB shows that card/nudge in conversations where we never sent
+    // a video, so every fresh chat was marked done-without-sending ("videos not
+    // sending at all", fleet-wide after the storage-wiping reinstall). REMOVED.
+    // Only the strong, row-scoped signals below may declare a chat served.
     const c = safe(() => composer.getBoundingClientRect(), null);
     if (!c) return false;
     const top = c.top;
@@ -752,13 +777,18 @@
     am[id] = { fails: (a.fails || 0) + 1, failAt: Date.now() };
     await setLocal({ videoAttempts: am });
   }
+  // Live "why" line for the popup: every exit of the video engine reports itself, so
+  // "videos not sending" is diagnosable from a screenshot instead of guesswork.
+  function vstat(reason) {
+    setStatus({ videoLast: reason });
+  }
   async function maybeSendVideo(id, name, immediate) {
     try {
       // SYNCHRONOUS guard first (no awaits): if this instance already committed a video
       // to this chat, never touch it again — closes the rapid-re-entry "non-stop" loop.
       if (id && videoLocked.has(id)) {
         clearVideoPending(id);
-        console.debug("[SubSell] video: skip — already locked this session", id);
+        vstat("skip — already sent this session (" + (name || id) + ")");
         return;
       }
       const cfg = await getLocal([
@@ -774,13 +804,16 @@
       let central = [];
       let centralDelay = null;
       let betweenSec = null;
+      let settingsOk = true;
       try {
-        const s = (await ask({ type: "GET_SETTINGS" })).settings || {};
+        const resp = await ask({ type: "GET_SETTINGS" });
+        const s = (resp && resp.settings) || {};
+        if (!resp || !resp.settings) settingsOk = false;
         if (Array.isArray(s.demoVideoUrls)) central = s.demoVideoUrls.filter((v) => v && v.url);
         if (s.demoVideoDelaySec != null) centralDelay = Number(s.demoVideoDelaySec);
         if (s.demoVideoBetweenSec != null) betweenSec = Number(s.demoVideoBetweenSec);
       } catch (e) {
-        /* background unavailable — just skip central videos this cycle */
+        settingsOk = false;
       }
 
       // CENTRAL videos (the dashboard set) are the single source of truth when they
@@ -788,8 +821,20 @@
       // corrupt old local file from blocking the whole set via the complete-set
       // guard, and (b) buyers receiving local+central duplicates.
       if (central.length) local = [];
-      if (!cfg.videoEnabled && !central.length) { clearVideoPending(id); return; }
-      if (!local.length && !central.length) { clearVideoPending(id); return; }
+      if (!settingsOk && !central.length && !local.length) {
+        vstat("couldn't read settings this cycle — will retry");
+        return;
+      }
+      if (!cfg.videoEnabled && !central.length) {
+        clearVideoPending(id);
+        vstat("videos OFF — no central videos in dashboard and per-machine toggle unchecked");
+        return;
+      }
+      if (!local.length && !central.length) {
+        clearVideoPending(id);
+        vstat("no videos configured");
+        return;
+      }
 
       const now = Date.now();
       const done = cfg.videoSentThreads || {};
@@ -804,7 +849,7 @@
       if (done[id] && done[id].done && resumeFrom == null) {
         videoLocked.add(id);
         clearVideoPending(id);
-        console.debug("[SubSell] video: skip — chat already marked sent", id);
+        vstat("skip — chat already marked sent (" + (name || id) + ")");
         return;
       }
       // A video is visibly in the chat (real message row) → it's sent; mark + stop.
@@ -814,7 +859,7 @@
         clearVideoPending(id);
         done[id] = { done: true, at: now };
         await setLocal({ videoSentThreads: done });
-        console.debug("[SubSell] video: skip — video already visible in chat", id);
+        vstat("skip — detected an existing video in chat (" + (name || id) + ")");
         return;
       }
       // A leftover OLD boolean `true` mark with NO actual video in the chat was a
@@ -830,13 +875,22 @@
       const att0 = (cfg.videoAttempts || {})[id] || null;
       if (att0) {
         if ((att0.fails || 0) >= VIDEO_MAX_TRIES) {
-          if (now - (att0.failAt || 0) < 24 * 3600 * 1000) return; // paused (24h), not banned
+          if (now - (att0.failAt || 0) < 24 * 3600 * 1000) {
+            vstat("paused 24h — clips failed to load 3× for " + (name || id));
+            return;
+          }
           const am = (await getLocal(["videoAttempts"])).videoAttempts || {};
           delete am[id];
           await setLocal({ videoAttempts: am }); // expired → give the chat a fresh chance
         }
-        if (att0.claimAt && now - att0.claimAt < VIDEO_CLAIM_TTL && att0.claimTab !== TAB_UID) return; // in flight elsewhere
-        if (att0.failAt && now - att0.failAt < VIDEO_RETRY_BACKOFF) return; // backing off
+        if (att0.claimAt && now - att0.claimAt < VIDEO_CLAIM_TTL && att0.claimTab !== TAB_UID) {
+          vstat("another tab is sending to " + (name || id));
+          return;
+        }
+        if (att0.failAt && now - att0.failAt < VIDEO_RETRY_BACKOFF) {
+          vstat("backing off after a failed load — retry soon (" + (name || id) + ")");
+          return;
+        }
       }
       // (3) Short-lived claim (TTL) so two passes/tabs don't both send right now.
       const attempts = (await getLocal(["videoAttempts"])).videoAttempts || {};
@@ -880,6 +934,15 @@
         }
       }
 
+      // A clip that fails to LOAD 3 times GLOBALLY (any chat) is excluded from the
+      // set instead of blocking it: one oversized/broken upload in the dashboard used
+      // to fail the complete-set rule on EVERY chat = "no videos at all". The
+      // remaining clips still ship, and the popup names the bad one.
+      const urlFails = (await getLocal(["videoUrlFails"])).videoUrlFails || {};
+      const activeCentral = central.filter((v) => (urlFails[v.url] || 0) < 3);
+      const excluded = central.length - activeCentral.length;
+      if (excluded > 0) vstat("⚠ " + excluded + " dashboard clip(s) can't load (too big/broken?) — sending the rest");
+
       // Build the ordered File list (local first, then central downloaded via background).
       const files = [];
       for (const v of local) {
@@ -889,23 +952,35 @@
           /* skip a bad local video */
         }
       }
-      for (const v of central) {
+      let urlFailsChanged = false;
+      for (const v of activeCentral) {
+        let ok = false;
         try {
           const r = await ask({ type: "FETCH_VIDEO", url: v.url });
           if (r && r.ok && r.base64) {
             const mime = r.mime || "video/mp4";
             files.push(dataUrlToFile(`data:${mime};base64,${r.base64}`, v.name || "video.mp4", mime));
+            ok = true;
           }
         } catch (e) {
-          /* skip a video that failed to download */
+          /* fall through to failure accounting */
+        }
+        if (ok) {
+          if (urlFails[v.url]) { delete urlFails[v.url]; urlFailsChanged = true; }
+        } else {
+          urlFails[v.url] = (urlFails[v.url] || 0) + 1;
+          urlFailsChanged = true;
         }
       }
-      // The CENTRAL set must be COMPLETE before we send anything (a partial set +
-      // lock was how "3 configured, buyer got 2" happened). Only the central count
-      // is enforced — a corrupt legacy local file must never block delivery.
-      const expected = central.length ? central.length : files.length;
+      if (urlFailsChanged) await setLocal({ videoUrlFails: urlFails });
+
+      // The set must be COMPLETE before we send anything (a partial set + lock was
+      // how "3 configured, buyer got 2" happened) — but "complete" now means the
+      // clips that CAN load: globally-dead clips are excluded above, never blocking.
+      const expected = activeCentral.length ? activeCentral.length : files.length;
       if (!files.length || files.length < expected) {
         await recordVideoFail(id);
+        vstat("loaded " + files.length + "/" + expected + " clip(s) — will retry (" + (name || id) + ")");
         setStatus({ lastError: "video: loaded " + files.length + "/" + expected + " clip(s) — will retry later", currentThread: name });
         return;
       }
@@ -951,10 +1026,18 @@
         if (await injectVideo(files[i])) okCount++;
         if (i < files.length - 1) await sleep(gapSec * 1000 + rand(0, 1500)); // pause BETWEEN videos
       }
+      if (okCount === 0) {
+        // Attach failed on EVERY clip — the chat is locked (no-spam guarantee), but
+        // this must be loud: it usually means Facebook changed its upload UI.
+        vstat("⚠ 0/" + files.length + " attached in " + (name || id) + " — FB upload UI may have changed, tell the developer");
+      } else {
+        vstat("sent ✓ " + (okCount + startAt) + "/" + files.length + " to " + (name || id));
+      }
       setStatus({ lastAction: `demo video(s) sent ✓ (${okCount + startAt}/${files.length})`, currentThread: name });
       // Mirror to the local + cloud activity log (fire-and-forget; no effect on sending).
       ask({ type: "LOG_EVENT", entry: { thread: name, threadId: id, buyer: "(demo video)", action: "video", reply: okCount + " demo video(s) sent" } });
     } catch (e) {
+      vstat("error: " + e.message);
       setStatus({ lastError: "video error: " + e.message });
     }
   }
