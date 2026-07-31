@@ -47,6 +47,7 @@
   // BUSY_MAX_MS instead of freezing the bot until a manual page reload.
   let busySince = 0;
   const BUSY_MAX_MS = 6 * 60 * 1000; // > max legit cycle (delay+jitter+typing+videos)
+  let pausedForUpdate = 0; // set by PAUSE_SCANS: an update is on disk, stop starting new chats
   let cooldowns = {}; // threadId -> timestamp we may re-check it (persisted, shared across tabs)
   let lastOpened = {}; // threadId -> when THIS instance last opened it (unread re-open floor)
   let openFails = {}; // sidebar threadId -> consecutive failed opens (quarantine at 3)
@@ -1533,6 +1534,17 @@
       }
       return;
     }
+    // An update is sitting on disk: stop STARTING new chats so the background
+    // can restart onto the new version the moment we go idle. The in-flight
+    // send (busy above) always finishes untouched. 10-min failsafe: if no
+    // restart arrives (files turned out identical), resume normally.
+    if (pausedForUpdate) {
+      if (Date.now() - pausedForUpdate < 10 * 60 * 1000) {
+        setStatus({ lastAction: "paused — installing update…" });
+        return;
+      }
+      pausedForUpdate = 0;
+    }
     busy = true;
     busySince = Date.now();
     try {
@@ -1645,6 +1657,18 @@
       // Health-check from the background. `busy` lets it avoid reloading this tab
       // mid-send; a missing response at all means the script is dead → auto-reload.
       send({ ok: true, url: location.href, anchorCount: conversationAnchors().length, busy });
+      return true;
+    }
+    if (msg && msg.type === "PAUSE_SCANS") {
+      // Background has an update on disk — hold off on NEW chats so the restart
+      // isn't blocked by nonstop activity. Current send finishes untouched.
+      pausedForUpdate = Date.now();
+      send({ ok: true, busy });
+      return true;
+    }
+    if (msg && msg.type === "RESUME_SCANS") {
+      pausedForUpdate = 0;
+      send({ ok: true });
       return true;
     }
     if (msg && msg.type === "SEND_FOLLOWUP") {

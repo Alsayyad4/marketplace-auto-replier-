@@ -1668,8 +1668,9 @@ async function cloudSelfUpdate(force) {
         return { ok: false, reason: "download failed: " + f }; // manifest not yet replaced → no partial reload
       }
     }
-    chrome.storage.local.set({ sudStatus: "v" + remote.version + " downloaded — reloading when idle" });
-    selfUpdateCheck(); // reload now if no tab is mid-send (otherwise the 10-min watcher gets it)
+    chrome.storage.local.set({ sudStatus: "v" + remote.version + " downloaded — restarting as soon as the current send finishes" });
+    armUpdateRestart(); // pause new chats + retry the reload every 30s until a quiet moment
+    selfUpdateCheck(); // immediate attempt (succeeds right away on an idle machine)
     return { ok: true, updated: true, version: remote.version };
   } catch (e) {
     return { ok: false, reason: String(e && e.message) };
@@ -1688,30 +1689,63 @@ async function cloudSelfUpdate(force) {
  * Guards: never reloads unless the on-disk version actually differs; never while
  * any Messenger tab reports busy (mid-send); silent on any error. */
 const UPDATE_ALARM = "subsell-selfupdate";
+/* Restart escalation. On busy accounts a tab is mid-conversation most of the
+ * workday, and the old 10-min tick rarely sampled a quiet instant — the new
+ * version sat fully downloaded on disk while the LOADED version never changed
+ * ("update now does downloads but not upgrading"). Now, the moment an update
+ * is on disk: every bot tab is told to stop STARTING new chats (the in-flight
+ * send always finishes untouched), and the reload retries every 30s — so the
+ * restart lands seconds after the current chat wraps up, bounded by the
+ * content script's own 6-min stuck-cycle watchdog. Covers the manual
+ * copy-replace path too (any on-disk version difference arms it). */
+const UPDATE_RETRY_ALARM = "subsell-update-retry";
+const BOT_TAB_URLS = ["https://*.messenger.com/*", "https://www.facebook.com/messages/*", "https://www.facebook.com/marketplace/*"];
+function broadcastToBotTabs(type) {
+  try {
+    chrome.tabs.query({ url: BOT_TAB_URLS }, (tabs) => {
+      void chrome.runtime.lastError;
+      for (const t of tabs || []) {
+        try { chrome.tabs.sendMessage(t.id, { type }, () => void chrome.runtime.lastError); } catch (e) { /* tab without script */ }
+      }
+    });
+  } catch (e) { /* never let the updater break anything */ }
+}
+function armUpdateRestart() {
+  try { chrome.alarms.create(UPDATE_RETRY_ALARM, { periodInMinutes: 0.5 }); } catch (e) { /* alarm exists */ }
+  broadcastToBotTabs("PAUSE_SCANS");
+}
 chrome.alarms.create(UPDATE_ALARM, { periodInMinutes: 10 });
 chrome.alarms.onAlarm.addListener((alarm) => {
   if (alarm && alarm.name === UPDATE_ALARM) {
     selfUpdateCheck(); // reload if new files already on disk
     cloudSelfUpdate(false); // hourly (self-throttled) cloud check + download
   }
+  if (alarm && alarm.name === UPDATE_RETRY_ALARM) selfUpdateCheck();
 });
 async function selfUpdateCheck() {
   try {
     const resp = await fetch(chrome.runtime.getURL("manifest.json"), { cache: "no-store" });
     const disk = await resp.json();
     const loaded = chrome.runtime.getManifest().version;
-    if (!disk || !disk.version || disk.version === loaded) return; // nothing new on disk
+    if (!disk || !disk.version || disk.version === loaded) {
+      // Nothing new on disk — stand down the fast retry if one was armed, and
+      // un-pause any tabs that were held (files turned out identical).
+      chrome.alarms.clear(UPDATE_RETRY_ALARM, (was) => {
+        void chrome.runtime.lastError;
+        if (was) broadcastToBotTabs("RESUME_SCANS");
+      });
+      return;
+    }
+    armUpdateRestart(); // also catches updates that landed via manual copy-replace
     const tabs = await new Promise((r) =>
-      chrome.tabs.query(
-        { url: ["https://*.messenger.com/*", "https://www.facebook.com/messages/*", "https://www.facebook.com/marketplace/*"] },
-        (t) => r(t || [])
-      )
+      chrome.tabs.query({ url: BOT_TAB_URLS }, (t) => r(t || []))
     );
     for (const tab of tabs) {
       const p = await pingTab(tab.id);
       if (p && p.busy === true) {
-        LOG("self-update: v" + disk.version, "on disk — waiting, a tab is mid-task");
-        return; // try again on the next 10-min tick
+        chrome.storage.local.set({ sudStatus: "v" + disk.version + " on disk — restarting the moment the current send finishes" });
+        LOG("self-update: v" + disk.version, "on disk — waiting, a tab is mid-task (retrying every 30s)");
+        return; // UPDATE_RETRY_ALARM tries again in 30s
       }
     }
     LOG("self-update: reloading from disk", loaded, "→", disk.version);
