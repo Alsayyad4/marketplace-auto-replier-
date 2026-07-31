@@ -1089,6 +1089,13 @@
       const followupsDone = botTail - 1;
       if (followupsDone >= maxCount) return; // already followed up enough → STOP
 
+      // ---- COST GUARD: dead-lead cutoff ----
+      // Every follow-up evaluation is a full-price API call even when the model
+      // just answers [SKIP]. A chat quiet for over a week is not coming back —
+      // don't pay to keep re-asking about it. Fresh leads are unaffected.
+      const quietNow = anchor ? sidebarQuietMs(anchor) : null;
+      if (quietNow != null && quietNow > 7 * 24 * 3600 * 1000) return;
+
       // ---- TIME GATE ----
       const store = (await getLocal(["followUpState"])).followUpState || {};
       const now = Date.now();
@@ -1109,6 +1116,12 @@
       }
       if (now - (st.lastAt || 0) < thresholdMs) return; // not quiet long enough yet
 
+      // ---- COST GUARD: skip cap ----
+      // Three consecutive [SKIP] verdicts for the same chat won't turn into a
+      // yes on the 10th try — stop billing evaluations for it. A follow-up that
+      // actually SENDS resets the count (the chat proved alive again).
+      if ((st.skips || 0) >= 3) return;
+
       const transcript = fullTranscript();
       if (!transcript) return;
       const r = await ask({ type: "GET_FOLLOWUP", context: transcript, threadName: name });
@@ -1118,10 +1131,12 @@
       }
       // Advance the clock: a SENT follow-up restarts it fully; a Claude [SKIP] only
       // pushes it HALF a period (a full reset meant a few skips = never following up).
-      st.lastAt = r.skip || !r.text || !r.text.trim() ? now - Math.floor(thresholdMs / 2) : now;
+      const skipped = r.skip || !r.text || !r.text.trim();
+      st.lastAt = skipped ? now - Math.floor(thresholdMs / 2) : now;
+      st.skips = skipped ? (st.skips || 0) + 1 : 0; // 3 in a row → skip-cap above stops the spend
       store[id] = st;
       await setLocal({ followUpState: store });
-      if (r.skip || !r.text || !r.text.trim()) {
+      if (skipped) {
         setStatus({ lastAction: "follow-up: no room (" + (r.reason || "skip") + ")", currentThread: name });
         return;
       }

@@ -15,7 +15,7 @@ endpoint serves that object to the extension.
 | Field | id | Type | Default | What it does |
 |---|---|---|---|---|
 | Anthropic API key | `apiKey` | string | `""` | Key (`sk-ant-…`) the extension calls Claude with. |
-| Model | `model` | enum | `claude-sonnet-4-6` | `claude-sonnet-4-6` / `claude-opus-4-8` / `claude-haiku-4-5-20251001`. |
+| Model | `model` | enum | `claude-haiku-4-5` | `claude-haiku-4-5-20251001` (recommended — 3× cheaper) / `claude-sonnet-4-6` / `claude-opus-4-8`. |
 | Response delay (s) | `responseDelaySec` | number | `30` | Wait before replying (human-like). |
 | Jitter (s) | `jitterSec` | number | `60` | Extra random 0–N s added to the delay. |
 | Hourly cap | `hourlyCap` | number | `30` | Max replies/hour. |

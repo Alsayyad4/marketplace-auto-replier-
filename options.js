@@ -7,7 +7,7 @@
   const DEFAULTS = {
     enabled: false,
     apiKey: "",
-    model: "claude-sonnet-4-6",
+    model: "claude-haiku-4-5",
     responseDelaySec: 30,
     jitterSec: 60,
     hourlyCap: 30,

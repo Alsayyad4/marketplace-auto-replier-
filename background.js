@@ -22,7 +22,9 @@
 const DEFAULTS = {
   enabled: false,
   apiKey: "",
-  model: "claude-sonnet-4-6",
+  // Haiku 4.5 is 3× cheaper than Sonnet ($1/$5 vs $3/$15 per MTok) and fully
+  // handles short casual buyer texts. A model saved in the dashboard overrides this.
+  model: "claude-haiku-4-5",
   responseDelaySec: 30,
   jitterSec: 60,
   hourlyCap: 30,
@@ -759,9 +761,13 @@ function buildSystemPrompt(settings) {
 async function callClaude(settings, buyerMessage, extraContext) {
   if (!settings.apiKey) return { error: "No API key set." };
   const body = {
-    model: settings.model || "claude-sonnet-4-6",
+    model: settings.model || "claude-haiku-4-5",
     max_tokens: 1024,
-    system: buildSystemPrompt(settings),
+    // The instruction sheet (business info, listings, playbook, examples) is
+    // byte-identical on every call until settings change — cache_control bills
+    // it at ~10% on repeat calls. Every machine shares one API key + the same
+    // synced settings, so the whole fleet shares a single cache entry.
+    system: [{ type: "text", text: buildSystemPrompt(settings), cache_control: { type: "ephemeral" } }],
     messages: [
       {
         role: "user",
@@ -808,9 +814,11 @@ async function callClaude(settings, buyerMessage, extraContext) {
 async function callClaudeFollowup(settings, context, threadName) {
   if (!settings.apiKey) return { error: "No API key set." };
   const body = {
-    model: settings.model || "claude-sonnet-4-6",
+    model: settings.model || "claude-haiku-4-5",
     max_tokens: 512,
-    system: buildSystemPrompt(settings),
+    // Same cached instruction sheet as callClaude — identical prefix, so both
+    // call types read the one fleet-wide cache entry.
+    system: [{ type: "text", text: buildSystemPrompt(settings), cache_control: { type: "ephemeral" } }],
     messages: [
       {
         role: "user",
