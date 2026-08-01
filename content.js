@@ -48,6 +48,7 @@
   let busySince = 0;
   const BUSY_MAX_MS = 6 * 60 * 1000; // > max legit cycle (delay+jitter+typing+videos)
   let pausedForUpdate = 0; // set by PAUSE_SCANS: an update is on disk, stop starting new chats
+  let pendingReply = {}; // threadId -> {buyerMessage, transcript, text, at} — billed but undelivered replies (abort recovery). In-memory only: a lost memo just falls back to a normal call.
   let cooldowns = {}; // threadId -> timestamp we may re-check it (persisted, shared across tabs)
   let lastOpened = {}; // threadId -> when THIS instance last opened it (unread re-open floor)
   let openFails = {}; // sidebar threadId -> consecutive failed opens (quarantine at 3)
@@ -1123,9 +1124,21 @@
       // actually SENDS resets the count (the chat proved alive again).
       if ((st.skips || 0) >= 3) return;
 
+      // Pre-call guard: reading the transcript and paying for an evaluation is
+      // pointless (and would read the WRONG chat) if the operator has already
+      // navigated away — the post-call guard below only threw the paid result out.
+      if (!stillOnThread(id)) return;
+
       const transcript = fullTranscript();
       if (!transcript) return;
-      const r = await ask({ type: "GET_FOLLOWUP", context: transcript, threadName: name });
+      // Billed-followup memo: a follow-up that was paid for but never delivered
+      // (chat switch, missing composer, send failure) is replayed on the next
+      // pass instead of re-billed — only while the chat transcript and the
+      // settings are byte-identical; anything changed voids the memo.
+      const fp = JSON.stringify(settings);
+      const memoValid = !!(st.pendingText && st.pendingFor === transcript && st.pendingFp === fp);
+      if (!memoValid && st.pendingText) { delete st.pendingText; delete st.pendingFor; delete st.pendingFp; }
+      const r = await ask({ type: "GET_FOLLOWUP", context: transcript, threadName: name, pendingText: memoValid ? st.pendingText : undefined });
       if (!r || !r.ok) {
         setStatus({ lastError: "follow-up: " + (r && r.error), currentThread: name });
         return;
@@ -1135,6 +1148,9 @@
       const skipped = r.skip || !r.text || !r.text.trim();
       st.lastAt = skipped ? now - Math.floor(thresholdMs / 2) : now;
       st.skips = skipped ? (st.skips || 0) + 1 : 0; // 3 in a row → skip-cap above stops the spend
+      // Store the billed text BEFORE the send attempt — any abort below keeps it
+      // for a free replay next pass. (A skip must not clear an existing memo.)
+      if (!skipped) { st.pendingText = r.text; st.pendingFor = transcript; st.pendingFp = fp; }
       store[id] = st;
       await setLocal({ followUpState: store });
       if (skipped) {
@@ -1151,6 +1167,9 @@
       const ok = await typeAndSend(composer, r.text);
       if (ok) {
         rememberSent(r.text); // so we never mistake our follow-up for a buyer message
+        delete st.pendingText; delete st.pendingFor; delete st.pendingFp; // delivered
+        store[id] = st;
+        await setLocal({ followUpState: store });
         cooldowns[id] = Date.now() + COOLDOWN_MS;
         setStatus({ lastAction: `follow-up sent ✓ (${followupsDone + 1}/${maxCount})`, lastReplySent: trunc(r.text, 200), currentThread: name });
         ask({ type: "LOG_EVENT", entry: { thread: name, action: "followup", reply: r.text } });
@@ -1299,7 +1318,22 @@
 
     setStatus({ lastAction: "buyer said: " + trunc(turn.buyerMessage, 80), currentThread: name });
 
-    const reply = await ask({ type: "GET_REPLY_SIMPLE", buyerMessage: turn.buyerMessage, context: turn.transcript, threadName: name });
+    // Pre-call guard: if the operator already clicked into a different chat during
+    // the load/settle window above, the Claude call's result would only be thrown
+    // away by the identical stillOnThread guard after the reply delay — don't pay
+    // for it. No state is touched (not marked handled, still on the waiting
+    // ledger), so the chat is retried on a later cycle exactly like that abort.
+    if (!stillOnThread(id)) {
+      setStatus({ lastAction: "aborted — you switched chats before asking Claude (will retry)", currentThread: name });
+      return;
+    }
+    // Billed-reply memo: if a previous cycle already PAID for a reply to this exact
+    // buyer message + transcript but the send was aborted (chat switch, send
+    // failure), replay that text instead of billing an identical call again.
+    const memo = pendingReply[id];
+    const memoOk = !!(memo && memo.buyerMessage === turn.buyerMessage && memo.transcript === turn.transcript && Date.now() - memo.at < 10 * 60 * 1000);
+    if (memo && !memoOk) delete pendingReply[id];
+    const reply = await ask({ type: "GET_REPLY_SIMPLE", buyerMessage: turn.buyerMessage, context: turn.transcript, threadName: name, cachedText: memoOk ? memo.text : undefined });
     if (!reply || !reply.ok) {
       setStatus({ lastError: "Claude error: " + (reply && reply.error) });
       return;
@@ -1319,6 +1353,9 @@
       setStatus({ lastAction: "skip — empty reply" });
       return;
     }
+    // Remember the billed text until it's actually delivered — an abort during the
+    // delay below used to throw it away and bill a fresh call on the retry.
+    if (!memoOk) pendingReply[id] = { buyerMessage: turn.buyerMessage, transcript: turn.transcript, text: reply.text, at: Date.now() };
 
     // small, human-ish delay before replying (settings already fetched above for the cap)
     const delayMs = (settings.responseDelaySec || 15) * 1000 + rand(0, (settings.jitterSec || 15) * 1000);
@@ -1348,6 +1385,7 @@
     }
     rememberSent(reply.text); // so we never mistake this for a buyer message later
     lastHandled[id] = turn.buyerMessage;
+    delete pendingReply[id]; // delivered — the billed-reply memo is no longer needed
     replyCounts[id] = repliesSoFar + 1; // count this text reply toward the per-convo cap
     clearWaiting(id, sidebarId); // ANSWERED — off the never-miss ledger
     cooldowns[id] = Date.now() + COOLDOWN_MS;

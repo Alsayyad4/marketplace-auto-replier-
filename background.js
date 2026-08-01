@@ -219,7 +219,19 @@ function getRemoteConfigUrl() {
     fromLocal();
   });
 }
-async function fetchRemoteConfig() {
+async function fetchRemoteConfig(auto) {
+  // Automatic refreshes skip the fetch entirely while cloud sync is active: the
+  // settings priority chain (managed → cloud → remote) makes the remote copy
+  // dead data whenever a cloudConfig exists, so polling it was pure Supabase
+  // spend. The manual "Fetch now" button (no `auto`) still always fetches.
+  if (auto) {
+    const shadowed = await new Promise((r) =>
+      chrome.storage.local.get(["cloudConfig"], (x) =>
+        r(!!(x && x.cloudConfig && typeof x.cloudConfig === "object" && Object.keys(x.cloudConfig).length))
+      )
+    );
+    if (shadowed) return { ok: false, skipped: "shadowed by cloud sync" };
+  }
   const url = await getRemoteConfigUrl();
   if (!url) return { ok: false, error: "no remote config URL set" };
   try {
@@ -429,6 +441,23 @@ async function cloudPull(force) {
   if (!auth) return { ok: false, error: "not logged in" };
   const { url, key } = await getCloudCreds();
   try {
+    if (!force) {
+      // Stamp-only probe (~0.1KB) first: the full config row (which can be many
+      // KB × every machine × every minute) is fetched ONLY when updated_at
+      // actually changed. Mirrors the unchanged-check below exactly; any missing
+      // stamp on either side falls through to the full fetch, same as today.
+      const probe = await fetch(`${url}/rest/v1/subsell_configs?select=updated_at`, {
+        headers: { apikey: key, authorization: "Bearer " + auth.access_token },
+        cache: "no-store",
+      });
+      if (!probe.ok) return { ok: false, error: "HTTP " + probe.status };
+      const probeRows = await probe.json().catch(() => []);
+      if (!Array.isArray(probeRows) || !probeRows.length) return { ok: true, empty: true }; // nothing saved yet
+      const probeStamp = probeRows[0].updated_at || "";
+      const prevStamp = await new Promise((r) => chrome.storage.local.get(["cloudUpdatedAt"], (x) => r(x.cloudUpdatedAt)));
+      if (prevStamp && probeStamp && prevStamp === probeStamp) return { ok: true, unchanged: true };
+      // stamp differs or state missing → fall through to the full fetch
+    }
     const resp = await fetch(`${url}/rest/v1/subsell_configs?select=config,updated_at`, {
       headers: { apikey: key, authorization: "Bearer " + auth.access_token },
       cache: "no-store",
@@ -486,6 +515,9 @@ async function cloudPush(config) {
 }
 
 async function cloudLogout() {
+  // Refresh the remote-link fallback BEFORE unshadowing it, so the machine never
+  // runs on a copy staler than it would have been under the old always-poll.
+  try { await fetchRemoteConfig(); } catch (e) { /* offline: fallback is no staler than before */ }
   await new Promise((r) =>
     chrome.storage.local.remove(["cloudAuth", "cloudConfig", "cloudConfigAt", "cloudUpdatedAt"], r)
   );
@@ -666,14 +698,14 @@ function buildSystemPrompt(settings) {
       lines.push("CURRENT INVENTORY (availability + video only — do NOT state any price):");
       for (const l of settings.listings) {
         lines.push(
-          `- ${l.title || l.model || "item"} | ${l.storage || ""} | ${l.condition || ""} | available: ${l.available === false ? "no" : "yes"}${l.videoUrl ? " | video: " + l.videoUrl : ""}`
+          `- ${l.title || l.model || "item"} | ${l.storage || ""} | ${l.condition || ""} | available: ${l.available === false ? "no" : "yes"}`
         );
       }
     } else {
       lines.push("CURRENT LISTINGS (only quote available items):");
       for (const l of settings.listings) {
         lines.push(
-          `- ${l.title || l.model || "item"} | ${l.storage || ""} | ${l.condition || ""} | $${l.price || "?"} CAD | available: ${l.available === false ? "no" : "yes"}${l.videoUrl ? " | video: " + l.videoUrl : ""}`
+          `- ${l.title || l.model || "item"} | ${l.storage || ""} | ${l.condition || ""} | $${l.price || "?"} CAD | available: ${l.available === false ? "no" : "yes"}`
         );
       }
     }
@@ -918,6 +950,15 @@ async function fetchVideo(url) {
 
     const resp = await fetch(url);
     if (!resp.ok) return { error: `Video ${resp.status}` };
+    // Reject oversized clips from the Content-Length header BEFORE reading the
+    // body — same error, same decision point, near-zero egress instead of a full
+    // 50MB+ download × 3 retries × every machine. Header absent/garbage falls
+    // through to the existing post-download check below.
+    const clen = Number(resp.headers.get("content-length") || 0);
+    if (clen > 45 * 1024 * 1024) {
+      try { await resp.body?.cancel(); } catch (_) { /* stream already consumed */ }
+      return { error: "video too large (" + Math.round(clen / 1048576) + "MB) — re-upload it under ~40MB in the dashboard" };
+    }
     const buf = await resp.arrayBuffer();
     // Chrome hard-caps extension messages (~64MB); base64 adds ~33%. A clip over
     // ~45MB can never be delivered — say so explicitly instead of failing forever.
@@ -1202,6 +1243,15 @@ chrome.runtime.onMessage.addListener((msg, _sender, sendResponse) => {
             sendResponse({ ok: true, skip: true, reason: "daily cap reached" });
             break;
           }
+          // Replay of an already-billed reply (send was aborted last cycle): all the
+          // gates above ran again exactly like a retry, but no new API call is paid.
+          // Counters + log advance the same way a re-billed retry advances them today.
+          if (typeof msg.cachedText === "string" && msg.cachedText.trim()) {
+            await incrementCounters();
+            await appendLog({ thread: msg.threadName, buyer: msg.buyerMessage, action: "text", reply: msg.cachedText });
+            sendResponse({ ok: true, text: msg.cachedText });
+            break;
+          }
           const result = await callClaude(
             settings,
             msg.buyerMessage,
@@ -1252,7 +1302,9 @@ chrome.runtime.onMessage.addListener((msg, _sender, sendResponse) => {
             sendResponse({ ok: true, skip: true, reason: "daily cap reached" });
             break;
           }
-          const fr = await callClaudeFollowup(settings, msg.context, msg.threadName);
+          // Replay of an already-billed follow-up whose send was aborted — same
+          // gates above, no new API call; flows through the same token/empty checks.
+          const fr = msg.pendingText ? { text: msg.pendingText } : await callClaudeFollowup(settings, msg.context, msg.threadName);
           if (fr.error) {
             sendResponse({ ok: false, error: fr.error });
             break;
@@ -1343,9 +1395,9 @@ chrome.alarms.create(HEARTBEAT_ALARM, { periodInMinutes: 1 });
 const CONFIG_ALARM = "subsell-config";
 chrome.alarms.create(CONFIG_ALARM, { periodInMinutes: 10 });
 chrome.alarms.onAlarm.addListener((alarm) => {
-  if (alarm && alarm.name === CONFIG_ALARM) fetchRemoteConfig();
+  if (alarm && alarm.name === CONFIG_ALARM) fetchRemoteConfig(true);
 });
-fetchRemoteConfig();
+fetchRemoteConfig(true);
 
 // Cloud sync (Supabase web app): pull the account's config every minute (and
 // once now) so an edit in the dashboard or on another machine lands here within
