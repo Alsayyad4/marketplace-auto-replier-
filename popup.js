@@ -44,6 +44,9 @@
         if (!m) { cl.textContent = "no sends yet"; cl.className = "muted"; }
         else if (m.ok) { cl.textContent = "✓ reporting"; cl.className = "ok"; }
         else { cl.textContent = "✗ " + (m.error || "failed"); cl.className = "bad"; }
+        // Frozen cloud sync outranks everything: settings (incl. dashboard videos)
+        // are no longer updating on this machine — log in again in Options.
+        if (s.cloudStale) { cl.textContent = "⚠ cloud sync frozen — log in again (Options)"; cl.className = "bad"; }
       }
     });
   }
@@ -63,6 +66,7 @@
       ["signal matched", tick.signalMatched || "—"],
       ["last action", tick.lastAction || "—"],
       ["last reply", tick.lastReplySent || "—"],
+      ["video status", tick.videoLast || "—"],
       ["last error", tick.lastError || "—"],
     ];
     for (const [k, v] of pairs) {
@@ -213,6 +217,26 @@
       });
     }
   } catch (e) { /* optional signal — the updater falls back to known names */ }
+
+  /* ----- Maintenance: clear the "video already sent" mark for the OPEN chat -----
+   * For chats wrongly marked served (old bug eras). Operator-verified, one chat at
+   * a time; the content script refuses when a sent video is actually visible. */
+  if ($("clearVideoMark")) {
+    $("clearVideoMark").addEventListener("click", async () => {
+      const sure = confirm(
+        "Only continue if you can SEE this chat contains NO video from us — scroll the conversation up and check first. If a video was delivered but is out of view, clearing will cause a RE-SEND."
+      );
+      if (!sure) return;
+      const tab = await activeTab();
+      if (!tab) { $("clearVideoStatus").textContent = "no active tab"; return; }
+      chrome.tabs.sendMessage(tab.id, { type: "CLEAR_VIDEO_MARK_OPEN_CHAT" }, (resp) => {
+        if (chrome.runtime.lastError || !resp) { $("clearVideoStatus").textContent = "open the chat in Messenger first"; return; }
+        $("clearVideoStatus").textContent = resp.ok
+          ? (resp.cleared ? "cleared — video will send on a later pass ✓" : "no video mark found for this chat")
+          : (resp.error || "failed");
+      });
+    });
+  }
 
   /* ----- Built-in updater: check the cloud and update this extension now ----- */
   if ($("checkUpdate")) {

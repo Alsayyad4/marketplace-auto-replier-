@@ -240,7 +240,17 @@ async function fetchRemoteConfig(auto) {
     const cfg = await resp.json();
     if (!cfg || typeof cfg !== "object" || Array.isArray(cfg)) return { ok: false, error: "config is not a JSON object" };
     delete cfg.enabled; // on/off stays per machine
-    await new Promise((r) => chrome.storage.local.set({ remoteConfig: cfg, remoteConfigAt: Date.now() }, r));
+    // Keep the cached activity-log config_key in lockstep with the URL that is
+    // actually serving config — after a dashboard "regen key" + URL re-paste, a
+    // stale cached key made mirrorToCloud 404 forever and the machine silently
+    // vanished from the Activity tab. Piggybacks the existing write; configKey is
+    // only read by the activity mirror, never by the reply/video paths.
+    const put = { remoteConfig: cfg, remoteConfigAt: Date.now() };
+    try {
+      const k = new URL(url).searchParams.get("key") || "";
+      if (k) put.configKey = k; // URL without ?key= — leave any cloud-derived key alone
+    } catch (e) { /* unparseable URL — keep existing key */ }
+    await new Promise((r) => chrome.storage.local.set(put, r));
     LOG("remote config applied from", url);
     return { ok: true, keys: Object.keys(cfg).length };
   } catch (e) {
@@ -438,7 +448,24 @@ async function cloudValidAuth() {
 // source of truth) only when the server's updated_at changed, so polling is cheap.
 async function cloudPull(force) {
   const auth = await cloudValidAuth();
-  if (!auth) return { ok: false, error: "not logged in" };
+  if (!auth) {
+    // Breadcrumb (state-change only): a cloudConfig exists but auth can no longer
+    // refresh — this machine is running on a FROZEN copy (dashboard edits, incl.
+    // demoVideoUrls, will never arrive). Written once on entering the state;
+    // cleared on the next healthy-auth pull, and removed by cloudLogout.
+    chrome.storage.local.get(["cloudConfig", "cloudStale"], (x) => {
+      if (chrome.runtime.lastError) return;
+      const hasCfg = x && x.cloudConfig && typeof x.cloudConfig === "object" && Object.keys(x.cloudConfig).length;
+      if (hasCfg && !x.cloudStale)
+        chrome.storage.local.set({ cloudStale: { since: Date.now(), error: "auth invalid (refresh failed or logged out)" } }, () => void chrome.runtime.lastError);
+    });
+    return { ok: false, error: "not logged in" };
+  }
+  // Auth is valid again → clear the breadcrumb.
+  chrome.storage.local.get(["cloudStale"], (x) => {
+    if (!chrome.runtime.lastError && x && x.cloudStale)
+      chrome.storage.local.remove(["cloudStale"], () => void chrome.runtime.lastError);
+  });
   const { url, key } = await getCloudCreds();
   try {
     if (!force) {
@@ -519,7 +546,7 @@ async function cloudLogout() {
   // runs on a copy staler than it would have been under the old always-poll.
   try { await fetchRemoteConfig(); } catch (e) { /* offline: fallback is no staler than before */ }
   await new Promise((r) =>
-    chrome.storage.local.remove(["cloudAuth", "cloudConfig", "cloudConfigAt", "cloudUpdatedAt"], r)
+    chrome.storage.local.remove(["cloudAuth", "cloudConfig", "cloudConfigAt", "cloudUpdatedAt", "cloudStale"], r)
   );
   return { ok: true };
 }
@@ -940,14 +967,51 @@ function abToBase64(buffer) {
   return btoa(binary);
 }
 
+/* Video-content validation: a captive portal, proxy error page, or share-link HTML
+ * that answers 200 OK used to be cached AS the "video" forever — every send then
+ * failed while the machine never re-downloaded. Validate on write AND on read. */
+const VIDEO_MIN_BYTES = 50 * 1024; // real demo clips are multi-MB; smaller = error page / stub
+function isNonVideoMime(m) {
+  m = String(m || "").toLowerCase();
+  return m.includes("text/html") || m.includes("application/xhtml") || m.includes("application/json") || m.includes("text/plain");
+}
+// First bytes of markup/JSON: optional UTF-8 BOM + whitespace, then '<' '{' or '['.
+// No real video container (mp4/mov ftyp, webm, avi RIFF, ogg OggS) starts that way.
+function bodyLooksLikeMarkup(bytes) {
+  let i = 0;
+  if (bytes.length >= 3 && bytes[0] === 0xef && bytes[1] === 0xbb && bytes[2] === 0xbf) i = 3;
+  while (i < bytes.length && (bytes[i] === 0x20 || bytes[i] === 0x09 || bytes[i] === 0x0a || bytes[i] === 0x0d)) i++;
+  return i < bytes.length && (bytes[i] === 0x3c || bytes[i] === 0x7b || bytes[i] === 0x5b);
+}
+function cacheEntryLooksValid(e) {
+  if (!e || !e.base64) return false;
+  if (isNonVideoMime(e.mime)) return false;
+  if (e.base64.length < Math.ceil(VIDEO_MIN_BYTES / 3) * 4) return false; // ~68k b64 chars ≈ 50KB
+  try {
+    const head = atob(e.base64.slice(0, 24)); // first 18 decoded bytes
+    const b = new Uint8Array(head.length);
+    for (let i = 0; i < head.length; i++) b[i] = head.charCodeAt(i);
+    if (bodyLooksLikeMarkup(b)) return false;
+  } catch (_) { return false; }
+  return true;
+}
+
 async function fetchVideo(url) {
   try {
     // Cache by URL in storage.local (we have unlimitedStorage): the demo clip used to
     // be re-downloaded for EVERY chat — slow, wasteful, and a flaky download could
     // permanently mark a chat "failed". Now each machine downloads it ONCE.
     const cached = await new Promise((r) => chrome.storage.local.get(["videoCache"], (x) => r((x && x.videoCache) || {})));
-    if (cached[url] && cached[url].base64) return { ok: true, base64: cached[url].base64, mime: cached[url].mime || "video/mp4" };
-
+    const hit = cached[url];
+    if (hit && hit.base64 && cacheEntryLooksValid(hit)) {
+      return { ok: true, base64: hit.base64, mime: hit.mime || "video/mp4" };
+    }
+    if (hit) {
+      // Poisoned entry (portal/proxy HTML or garbage cached as the "video") — purge
+      // once and fall through to a fresh, now-validated download. State-change only.
+      delete cached[url];
+      chrome.storage.local.set({ videoCache: cached }, () => void chrome.runtime.lastError);
+    }
     const resp = await fetch(url);
     if (!resp.ok) return { error: `Video ${resp.status}` };
     // Reject oversized clips from the Content-Length header BEFORE reading the
@@ -966,6 +1030,17 @@ async function fetchVideo(url) {
       return { error: "video too large (" + Math.round(buf.byteLength / 1048576) + "MB) — re-upload it under ~40MB in the dashboard" };
     }
     const mime = resp.headers.get("content-type") || "video/mp4";
+    const enc = (resp.headers.get("content-encoding") || "").toLowerCase();
+    const head = new Uint8Array(buf.slice(0, 18));
+    if (isNonVideoMime(mime) || bodyLooksLikeMarkup(head)) {
+      return { error: "video URL returned a web page, not a video (captive portal / proxy / share-link page?) — not cached" };
+    }
+    if (buf.byteLength < VIDEO_MIN_BYTES) {
+      return { error: "video download too small (" + Math.round(buf.byteLength / 1024) + "KB) — not a real clip, not cached" };
+    }
+    if (clen > 0 && (!enc || enc === "identity") && buf.byteLength !== clen) {
+      return { error: "video download truncated (" + buf.byteLength + " of " + clen + " bytes) — not cached" };
+    }
     const base64 = abToBase64(buf);
     // keep the cache small: only the CURRENT url(s) — replace wholesale on change
     const next = {};
@@ -1210,8 +1285,10 @@ chrome.runtime.onMessage.addListener((msg, _sender, sendResponse) => {
           const counters = rollWindows(await getCounters(), Date.now());
           const dayCap = await effectiveDailyCap(settings);
           const lastMirror = await new Promise((r) => chrome.storage.local.get(["lastMirror"], (x) => r((x && x.lastMirror) || null)));
+          const cloudStale = await new Promise((r) => chrome.storage.local.get(["cloudStale"], (x) => r((x && x.cloudStale) || null)));
           sendResponse({
             ok: true,
+            cloudStale, // non-null = cloud sync frozen (auth dead) — settings/videos no longer updating
             enabled: settings.enabled,
             apiKeySet: !!settings.apiKey,
             hourCount: counters.hourCount,

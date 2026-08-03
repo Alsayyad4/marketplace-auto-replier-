@@ -536,7 +536,7 @@
       if (!al) continue;
       if (/voice|vocal|clip|audio|micro|record|enregistr/.test(al)) continue; // mic / voice clip
       if (/like|j'?aime|sticker|autocollant|gif|emoji|r[ée]action/.test(al)) continue; // like/sticker/gif
-      if (!(/\bsend\b/.test(al) || /press enter to send/.test(al) || /envoyer un message/.test(al) || /^envoyer\b/.test(al))) continue;
+      if (!(/\bsend\b/.test(al) || /press enter to send/.test(al) || /entr[eé]e pour envoyer/.test(al) || /envoyer un message/.test(al) || /^envoyer\b/.test(al))) continue;
       safe(() => b.click());
       return true;
     }
@@ -632,7 +632,7 @@
   // never one that lives inside the "Add video to listing" card.
   async function injectVideo(file) {
     const main = getMain() || document;
-    const previewSel = 'img[src^="blob:"], [role="progressbar"], video';
+    const previewSel = 'img[src^="blob:"], [role="progressbar"], video, [aria-label*="remove" i][aria-label*="attach" i], [aria-label*="supprimer" i][aria-label*="jointe" i]';
     const composer = findComposer();
     if (composer) composer.focus();
     const dtFor = () => {
@@ -665,7 +665,7 @@
       const inputs = Array.from(document.querySelectorAll('input[type="file"]')).filter((inp) => {
         const wrap = safe(() => inp.closest("div,form,section"), null);
         const t = safe(() => ((wrap && wrap.innerText) || "").toLowerCase(), "");
-        return !/add video to listing|update listing|mettre à jour l|ajouter (une |la )?vid/.test(t);
+        return !/add (a |your )?videos? to( your| the)? listing|update( your)? listing|mettre à jour|modifier (l|votre annonce)|ajoute[rz]? (une |la |des )?vid/.test(t);
       });
       const input = inputs[inputs.length - 1]; // composer attachments render late in the DOM
       if (!input) return false;
@@ -737,7 +737,7 @@
     // LISTING CARD's own video/preview at the top (which isn't a message row).
     const ours = (el, r) =>
       !!safe(() => el.closest('[role="row"]'), null) &&
-      (looksLikeOurBubble(el) === true || (r && r.left + r.width / 2 > mid));
+      (looksLikeOurBubble(el) === true || (looksLikeOurBubble(el) !== false && r && r.left + r.width / 2 > mid));
 
     // (a) An actual <video> element on our side (present once the clip renders).
     const vids = safe(() => Array.from(main.querySelectorAll('[role="row"] video')), []);
@@ -751,11 +751,28 @@
     const leaves = safe(() => Array.from(main.querySelectorAll('[role="row"] span, [role="row"] div')), []);
     for (const n of leaves) {
       if (n.childElementCount !== 0) continue; // the badge itself, not a wrapper
+      // mm:ss inside [dir="auto"] is TEXT (our "5:30" reply, 24h-locale time
+      // dividers like "14:32" on FR accounts) — never a duration badge. Those
+      // false matches were marking fresh chats "already has video" on FR machines.
+      if (safe(() => n.closest('[dir="auto"]'), null)) continue;
       const t = safe(() => (n.textContent || "").trim(), "");
       if (!/^\d{1,2}:\d{2}$/.test(t)) continue; // a video duration badge
       const r = safe(() => n.getBoundingClientRect(), null);
       if (!r || r.top >= top || r.width <= 0 || r.width > 90) continue; // small badge, in the msg area
-      if (ours(n, r)) return true;
+      // A real duration badge OVERLAYS a media thumbnail. Find a large media element
+      // in the same row whose rect contains the badge center, and decide the side
+      // from THAT rect — never from the tiny badge rect (spoofable by buyer
+      // voice-note durations and buyer clips in narrow windows/panel-open layouts).
+      const rowEl = safe(() => n.closest('[role="row"]'), null);
+      if (!rowEl) continue;
+      const bcx = r.left + r.width / 2, bcy = r.top + r.height / 2;
+      const medias = safe(() => Array.from(rowEl.querySelectorAll('video, img, [style*="background-image"]')), []);
+      for (const mEl of medias) {
+        const mr = safe(() => mEl.getBoundingClientRect(), null);
+        if (!mr || mr.width < 80 || mr.height < 80) continue; // avatars/emoji/stickers are smaller
+        if (bcx <= mr.left || bcx >= mr.right || bcy <= mr.top || bcy >= mr.bottom) continue; // badge not on this thumbnail
+        if (looksLikeOurBubble(mEl) !== false && mr.left + mr.width / 2 > mid) return true; // thumbnail on OUR side
+      }
     }
     return false;
   }
@@ -773,16 +790,60 @@
   // committed a video to. Checked with ZERO awaits at the very top of maybeSendVideo,
   // so even if chrome.storage writes lag, a chat can't be sent to twice in one session.
   const videoLocked = new Set();
-  async function recordVideoFail(id) {
+  async function recordVideoFail(id, why) {
     const am = (await getLocal(["videoAttempts"])).videoAttempts || {};
     const a = am[id] || {};
-    am[id] = { fails: (a.fails || 0) + 1, failAt: Date.now() };
+    am[id] = { fails: (a.fails || 0) + 1, failAt: Date.now(), why: why || a.why || "" };
     await setLocal({ videoAttempts: am });
   }
   // Live "why" line for the popup: every exit of the video engine reports itself, so
   // "videos not sending" is diagnosable from a screenshot instead of guesswork.
   function vstat(reason) {
     setStatus({ videoLast: reason });
+    reportVideoStatus(reason); // fire-and-forget; must never block the caller
+  }
+  // Central video-status telemetry: mirrors MATERIAL blocked states into the existing
+  // Activity feed, deduped to at most one row per reason per 24h — the dashboard now
+  // NAMES the machines whose videos are blocked and why. Healthy exits never post.
+  const VSTAT_CLASSES = [
+    [/^videos OFF/, "cfg-off"],
+    [/^no videos configured/, "cfg-none"],
+    [/^couldn't read settings/, "settings-unreadable"],
+    [/^loaded \d+\/\d+ clip/, "clips-load-failed"],
+    [/^⚠ 0\//, "attach-failed"],
+    [/^⚠ all /, "clips-all-blocked"],
+    [/can't load/, "clips-excluded"],
+    [/^paused 24h/, "chat-paused-24h"],
+    [/^error:/, "engine-error"],
+  ];
+  // Machine-wide blockers: only these trigger the one-time "OK again" recovery row.
+  const VSTAT_FULL_BLOCK = { "cfg-off": 1, "cfg-none": 1, "settings-unreadable": 1, "attach-failed": 1, "clips-all-blocked": 1, "engine-error": 1 };
+  const VSTAT_TTL = 24 * 3600 * 1000;
+  let vstatMap = null, vstatHydrating = null; // {key: lastPostedAt}, persisted
+  async function reportVideoStatus(reason) {
+    try {
+      if (!vstatMap) {
+        if (!vstatHydrating) vstatHydrating = getLocal(["videoBlockReported"]).then((r) => { vstatMap = (r && r.videoBlockReported) || {}; });
+        await vstatHydrating;
+      }
+      const now = Date.now();
+      if (/^sent ✓/.test(reason)) {
+        const hadBlock = Object.keys(vstatMap).some((k) => VSTAT_FULL_BLOCK[k] && vstatMap[k] > (vstatMap.ok || 0));
+        if (hadBlock && now - (vstatMap.ok || 0) > VSTAT_TTL) {
+          vstatMap.ok = now;
+          await setLocal({ videoBlockReported: vstatMap });
+          ask({ type: "LOG_EVENT", entry: { action: "video-status", thread: null, buyer: null, reply: "videos OK again — " + reason } });
+        }
+        return;
+      }
+      let key = null;
+      for (const [re, k] of VSTAT_CLASSES) if (re.test(reason)) { key = k; break; }
+      if (!key) return; // normal skips/backoffs — never mirrored
+      if (now - (vstatMap[key] || 0) < VSTAT_TTL) return; // deduped: no storage read, no post
+      vstatMap[key] = now; // never deleted — keys re-assert at most daily, immune to flapping
+      await setLocal({ videoBlockReported: vstatMap });
+      ask({ type: "LOG_EVENT", entry: { action: "video-status", thread: null, buyer: null, reply: "videos blocked [" + key + "]: " + reason } });
+    } catch (e) { /* telemetry must never disturb the bot */ }
   }
   async function maybeSendVideo(id, name, immediate) {
     try {
@@ -859,7 +920,7 @@
       if (resumeFrom == null && chatAlreadyHasOurVideo()) {
         videoLocked.add(id);
         clearVideoPending(id);
-        done[id] = { done: true, at: now };
+        done[id] = { done: true, at: now, via: "dom" }; // inert marker: DOM-detected, not a confirmed send
         await setLocal({ videoSentThreads: done });
         vstat("skip — detected an existing video in chat (" + (name || id) + ")");
         return;
@@ -878,7 +939,9 @@
       if (att0) {
         if ((att0.fails || 0) >= VIDEO_MAX_TRIES) {
           if (now - (att0.failAt || 0) < 24 * 3600 * 1000) {
-            vstat("paused 24h — clips failed to load 3× for " + (name || id));
+            vstat(att0.why === "attach"
+              ? "paused 24h — clips attached 0/N 3× (FB upload UI may have changed on this machine) for " + (name || id)
+              : "paused 24h — clips failed to load 3× for " + (name || id));
             return;
           }
           const am = (await getLocal(["videoAttempts"])).videoAttempts || {};
@@ -928,7 +991,7 @@
         if (videoLocked.has(id) || (fresh[id] && fresh[id].done) || chatAlreadyHasOurVideo()) {
           videoLocked.add(id);
           if (!(fresh[id] && fresh[id].done)) {
-            fresh[id] = { done: true, at: Date.now() };
+            fresh[id] = { done: true, at: Date.now(), via: "dom" };
             await setLocal({ videoSentThreads: fresh });
           }
           console.debug("[SubSell] video: skip after delay — chat already has a video", id);
@@ -940,10 +1003,20 @@
       // set instead of blocking it: one oversized/broken upload in the dashboard used
       // to fail the complete-set rule on EVERY chat = "no videos at all". The
       // remaining clips still ship, and the popup names the bad one.
+      const STRIKE_TTL = 6 * 3600 * 1000; // an excluded URL is re-probed after this
       const urlFails = (await getLocal(["videoUrlFails"])).videoUrlFails || {};
-      const activeCentral = central.filter((v) => (urlFails[v.url] || 0) < 3);
+      const strikeN = (e) => (typeof e === "number" ? e : (e && e.n) || 0);   // legacy numeric = {n:value, at:0}
+      const strikeAt = (e) => (typeof e === "number" ? 0 : (e && e.at) || 0);
+      let urlFailsChanged = false;
+      for (const u of Object.keys(urlFails)) {
+        if (strikeN(urlFails[u]) >= 3 && now - strikeAt(urlFails[u]) > STRIKE_TTL) {
+          delete urlFails[u]; // ban expired — the URL re-enters the set and is re-probed this pass
+          urlFailsChanged = true;
+        }
+      }
+      const activeCentral = central.filter((v) => strikeN(urlFails[v.url]) < 3);
       const excluded = central.length - activeCentral.length;
-      if (excluded > 0) vstat("⚠ " + excluded + " dashboard clip(s) can't load (too big/broken?) — sending the rest");
+      if (excluded > 0 && activeCentral.length) vstat("⚠ " + excluded + " dashboard clip(s) can't load (too big/broken?) — sending the rest");
 
       // Build the ordered File list (local first, then central downloaded via background).
       const files = [];
@@ -954,7 +1027,6 @@
           /* skip a bad local video */
         }
       }
-      let urlFailsChanged = false;
       for (const v of activeCentral) {
         let ok = false;
         try {
@@ -970,20 +1042,45 @@
         if (ok) {
           if (urlFails[v.url]) { delete urlFails[v.url]; urlFailsChanged = true; }
         } else {
-          urlFails[v.url] = (urlFails[v.url] || 0) + 1;
+          urlFails[v.url] = { n: strikeN(urlFails[v.url]) + 1, at: Date.now() };
           urlFailsChanged = true;
         }
       }
-      if (urlFailsChanged) await setLocal({ videoUrlFails: urlFails });
+      if (urlFailsChanged) {
+        await setLocal({ videoUrlFails: urlFails });
+        // Fires only on the TRANSITION into full lockout (some clips were active at
+        // the start of this pass, and now every URL is struck out) — one dashboard row.
+        if (activeCentral.length > 0 && central.length > 0 && central.every((v) => strikeN(urlFails[v.url]) >= 3)) {
+          ask({ type: "LOG_EVENT", entry: { thread: "(system)", threadId: "", buyer: "(system)", action: "video-status", reply: "all " + central.length + " dashboard clip(s) failing to DOWNLOAD on this machine (network/proxy?) — re-probing in 6h; replies unaffected" } });
+        }
+      }
 
       // The set must be COMPLETE before we send anything (a partial set + lock was
       // how "3 configured, buyer got 2" happened) — but "complete" now means the
       // clips that CAN load: globally-dead clips are excluded above, never blocking.
       const expected = activeCentral.length ? activeCentral.length : files.length;
       if (!files.length || files.length < expected) {
-        await recordVideoFail(id);
-        vstat("loaded " + files.length + "/" + expected + " clip(s) — will retry (" + (name || id) + ")");
-        setStatus({ lastError: "video: loaded " + files.length + "/" + expected + " clip(s) — will retry later", currentThread: name });
+        await recordVideoFail(id, "load");
+        const allBlocked = central.length > 0 && !activeCentral.length;
+        const msg = allBlocked
+          ? "⚠ all " + central.length + " dashboard clip(s) failing to DOWNLOAD on this machine (network/proxy?) — replies unaffected, re-probing in 6h"
+          : "loaded " + files.length + "/" + expected + " clip(s) — will retry (" + (name || id) + ")";
+        vstat(msg);
+        setStatus({ lastError: "video: " + msg, currentThread: name });
+        return;
+      }
+
+      // Resume-tail is an INDEX into `files`. With strike decay the active set can
+      // GROW between visits (a revived URL slots in earlier), so replaying the index
+      // could REPEAT an already-delivered clip. Resume only against the exact same
+      // set size it was recorded with; otherwise drop the tail (never resend).
+      if (resumeFrom != null && !(done[id] && done[id].resumeTotal === files.length)) {
+        videoLocked.add(id);
+        clearVideoPending(id);
+        const dm0 = (await getLocal(["videoSentThreads"])).videoSentThreads || {};
+        dm0[id] = { done: true, at: Date.now() };
+        await setLocal({ videoSentThreads: dm0 });
+        vstat("resume tail dropped — clip set changed since interruption (" + (name || id) + ")");
         return;
       }
 
@@ -1018,7 +1115,7 @@
         if (!stillOnThread(id)) {
           console.debug("[SubSell] video: stopped mid-set at clip", i + 1, "— will finish on a later visit", id);
           const dm2 = (await getLocal(["videoSentThreads"])).videoSentThreads || {};
-          dm2[id] = { done: true, at: Date.now(), resumeFrom: i };
+          dm2[id] = { done: true, at: Date.now(), resumeFrom: i, resumeTotal: files.length };
           await setLocal({ videoSentThreads: dm2 });
           videoLocked.delete(id); // allow the resume visit through the in-memory guard
           setStatus({ lastAction: `video set paused at ${i}/${files.length} — finishing later`, currentThread: name });
@@ -1039,7 +1136,14 @@
           delete undo[id];
           await setLocal({ videoSentThreads: undo });
         }
-        await recordVideoFail(id);
+        await recordVideoFail(id, "attach");
+        // Fleet-visible breadcrumb, max one per 24h per machine (state-change only):
+        // an attach-stage failure means this account's FB upload UI needs attention.
+        const thrAt = (await getLocal(["videoAttachFailLoggedAt"])).videoAttachFailLoggedAt || 0;
+        if (Date.now() - thrAt > 24 * 3600 * 1000) {
+          await setLocal({ videoAttachFailLoggedAt: Date.now() }); // written BEFORE posting so two tabs can't double-log
+          ask({ type: "LOG_EVENT", entry: { thread: name, threadId: id, buyer: "(video attach failure)", action: "video-status", reply: "0/" + files.length + " attached — all 3 attach strategies failed; FB upload UI may have changed on this machine" } });
+        }
         vstat("⚠ 0/" + files.length + " attached in " + (name || id) + " — unlocked for retry (FB upload UI may have changed)");
         setStatus({ lastError: "video: nothing attached — will retry later", currentThread: name });
         return;
@@ -1424,7 +1528,7 @@
     if (waitingNow >= 3) {
       // Postpone, never cancel: the pending queue has its own picker lane, so this
       // chat's video set is guaranteed to go out minutes later.
-      videoPending[id] = Date.now();
+      if (videoPending[id] == null) videoPending[id] = Date.now(); // keep the ORIGINAL deferral time — resetting it kept the busiest chats forever "too young" for delivery
       persistDedup();
       setStatus({ lastAction: "video queued — " + waitingNow + " buyers waiting; replying to everyone first", currentThread: name });
       return;
@@ -1446,6 +1550,10 @@
   const RECOVER_COOLDOWN_MS = 4 * 60 * 1000; // never auto-reload more than this often
   let zeroAnchorStreak = 0;
   let lastRecoverAt = 0;
+  // Buried-pending rescue pacing: in-memory only; the 6h freshness reload retries muted orphans.
+  let lastOrphanScrollAt = 0;
+  const orphanRescueTries = {};
+  const ORPHAN_RESCUE_MAX = 40; // ~2 full sweeps of a large list, then stop until next page reload
   function onFacebookErrorPage() {
     const t = safe(() => (document.body && document.body.innerText) || "", "");
     if (!t || t.length > 3000) return false; // a real Messenger is huge; the error page is tiny
@@ -1464,7 +1572,24 @@
   // Anyone waiting longer than this jumps to the FRONT of the queue (oldest first).
   // Fresh buyers get instant service; this lane is the "nobody is ever missed" law.
   const OVERDUE_MS = 5 * 60 * 1000;
-  function pickTarget(anchors, now, exclude) {
+  // AGED-VIDEO throttle: at most ONE pending-video visit per interval may preempt
+  // LANE 1, and a chat that just got an aged attempt is skipped for an hour so one
+  // stuck chat (e.g. clips in 24h fail-pause) can't wedge the lane. In-memory only —
+  // a content-script reload restarts the pacing, which fails toward FEWER preemptions.
+  const AGED_VIDEO_EVERY_MS = 10 * 60 * 1000;
+  const AGED_VIDEO_MIN_AGE_MS = 20 * 60 * 1000;
+  const AGED_VIDEO_RETRY_MS = 60 * 60 * 1000;
+  let lastAgedVideoAt = 0;
+  const agedVideoTried = {}; // threadId -> last aged-lane attempt
+  // Is this chat's video engine in a backoff that would refuse a send instantly?
+  const videoAttBlocked = (videoAtt, id, now) => {
+    const att = (videoAtt || {})[id];
+    return !!(att && (
+      (((att.fails || 0) >= VIDEO_MAX_TRIES) && now - (att.failAt || 0) < 24 * 3600 * 1000) ||
+      (att.failAt && now - att.failAt < VIDEO_RETRY_BACKOFF)
+    ));
+  };
+  function pickTarget(anchors, now, exclude, videoAtt) {
     // LANE 0 — OVERDUE (the never-miss guarantee): any chat on the waiting ledger
     // longer than OVERDUE_MS is served BEFORE everything else, oldest first. So the
     // newest buyer gets instant service (lane 1), but a busy stream can only delay
@@ -1480,6 +1605,30 @@
       if (ws < overdueT) { overdueT = ws; overdue = a; }
     }
     if (overdue) return overdue;
+
+    // LANE 0.5 — AGED PENDING VIDEOS (anti-starvation): on busy accounts lanes 0/1
+    // are never both empty during business hours, so LANE 1.5 never ran and deferred
+    // sets waited FOREVER ("replies fine, videos never send" — the busiest accounts).
+    // At most one pending set older than 20 min goes out per 10 min. LANE 0 above
+    // still absolutely outranks this, so an overdue buyer is never displaced; a
+    // fresh buyer waits at most one video visit (~1-2 min), at most once per 10 min.
+    if (now - lastAgedVideoAt > AGED_VIDEO_EVERY_MS) {
+      let av = null, avT = Infinity;
+      for (const a of anchors) {
+        const id = threadId(a);
+        if (exclude.has(id)) continue;
+        const t = videoPending[id];
+        if (t == null || now - t < AGED_VIDEO_MIN_AGE_MS) continue;
+        if (now - (agedVideoTried[id] || 0) < AGED_VIDEO_RETRY_MS) continue; // a stuck chat can't wedge the lane
+        if (videoAttBlocked(videoAtt, id, now)) continue; // engine would refuse instantly — don't waste the slot
+        if (t < avT) { avT = t; av = a; }
+      }
+      if (av) {
+        lastAgedVideoAt = now;
+        agedVideoTried[threadId(av)] = now; // stamped BEFORE the visit — a lock collision or failed open just delays 10 min (safe direction)
+        return av;
+      }
+    }
 
     // LANE 1 — INSTANT: the NEWEST genuinely-waiting buyer (topmost matching row —
     // the sidebar is recency-sorted). Two conditions, not just the dot: unread AND
@@ -1500,15 +1649,23 @@
     // rotation, oldest first. This is what makes deferral a postponement, not a
     // cancellation ("latest version not sending videos at all" = this lane missing).
     {
-      let pv = null, pvT = Infinity;
+      let pv = null, pvT = Infinity, evicted = false;
       for (const a of anchors) {
         const id = threadId(a);
         if (exclude.has(id)) continue;
         const t = videoPending[id];
         if (t == null) continue;
+        // Stuck >24h → evict from the priority lane. NOT a cancellation: every
+        // idle/already-replied/cap visit still runs maybeSendVideo, so the chat
+        // gets its set on normal rotation once sending works again.
+        if (now - t > 24 * 3600 * 1000) { delete videoPending[id]; evicted = true; continue; }
+        // Never churn a chat the video engine would refuse instantly — mirrors the
+        // 3-fail/24h pause and the retry backoff exits exactly.
+        if (videoAttBlocked(videoAtt, id, now)) continue;
         if (now <= (cooldowns[id] || 0) && now - t < 15 * 60 * 1000) continue; // fresh cooldown; wait unless pending >15 min
         if (t < pvT) { pvT = t; pv = a; }
       }
+      if (evicted) persistDedup(); // batched: one write per scan max, only on state change
       if (pv) return pv;
     }
     let target = null, bestT = Infinity, bestIdleT = Infinity, idleTarget = null;
@@ -1653,7 +1810,38 @@
       // bot to go dead while the operator was away (long busy periods on a throttled,
       // minimized tab collided with the watchdog), so it was reverted. Throughput when
       // minimized is best solved by keeping a window un-minimized (scans every 8s).
-      const target = pickTarget(anchors, Date.now(), new Set());
+      // Lane 1.5 needs fail-backoff visibility so it never churns an unsendable chat.
+      // Read videoAttempts ONLY when the pending queue is non-empty (local storage,
+      // no network; queue is empty in the steady state so this is normally free).
+      const vAtt = Object.keys(videoPending).length ? ((await getLocal(["videoAttempts"])).videoAttempts || {}) : {};
+      const target = pickTarget(anchors, Date.now(), new Set(), vAtt);
+      // BURIED-PENDING RESCUE: a chat owed its video can scroll out of the sidebar's
+      // ~20 rendered rows and become unpickable by ANY lane. When minimized and only
+      // idle work (or nothing) is on deck, page the virtualized list toward it so it
+      // re-renders and the normal lanes can serve it. Buyer-facing picks are never
+      // preempted — only discretionary idle rotation gives up its turn.
+      if (safe(() => document.visibilityState === "hidden", false)) {
+        const nowR = Date.now();
+        const idleOnly = !target || (!safe(() => isUnreadAnchor(target), false) && !safe(() => snippetSuggestsBuyerLast(target), false) && videoPending[threadId(target)] == null);
+        if (idleOnly && nowR - lastOrphanScrollAt > 30 * 1000) {
+          const rendered = new Set(anchors.map((a) => threadId(a)));
+          let orphan = null;
+          for (const pid of Object.keys(videoPending)) {
+            if (nowR - videoPending[pid] < 20 * 60 * 1000) continue;
+            if (rendered.has(pid)) continue;
+            if ((orphanRescueTries[pid] || 0) >= ORPHAN_RESCUE_MAX) continue;
+            orphan = pid;
+            break;
+          }
+          if (orphan) {
+            orphanRescueTries[orphan] = (orphanRescueTries[orphan] || 0) + 1;
+            lastOrphanScrollAt = nowR;
+            setStatus({ lastAction: "deep-scan: paging to a buried pending-video chat…" });
+            deepScanStep();
+            return;
+          }
+        }
+      }
       if (!target) {
         // Nothing eligible among the RENDERED rows. If minimized, use the free cycle
         // to reveal deeper (virtualized) conversations so none stay invisible forever.
@@ -1707,6 +1895,27 @@
     if (msg && msg.type === "RESUME_SCANS") {
       pausedForUpdate = 0;
       send({ ok: true });
+      return true;
+    }
+    if (msg && msg.type === "CLEAR_VIDEO_MARK_OPEN_CHAT") {
+      // Popup maintenance button: clear the "video already sent" mark for the chat
+      // the operator has OPEN and verified by eye. Single-chat, manual-only —
+      // refuses when a sent video is actually visible in the conversation.
+      (async () => {
+        const m = location.href.match(/\/t\/([^/?#]+)/);
+        const id = m ? m[1] : null;
+        if (!id) return send({ ok: false, error: "no chat open" });
+        if (chatAlreadyHasOurVideo()) return send({ ok: false, error: "a sent video is visible in this chat — not clearing" });
+        const st = await getLocal(["videoSentThreads", "videoAttempts"]);
+        const vt = st.videoSentThreads || {};
+        const am = st.videoAttempts || {};
+        const had = !!vt[id];
+        delete vt[id];
+        delete am[id];
+        await setLocal({ videoSentThreads: vt, videoAttempts: am });
+        videoLocked.delete(id); // mandatory: the in-memory lock short-circuits before storage
+        send({ ok: true, cleared: had });
+      })();
       return true;
     }
     if (msg && msg.type === "SEND_FOLLOWUP") {
