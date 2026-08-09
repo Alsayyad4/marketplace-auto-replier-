@@ -952,6 +952,11 @@ function parseReply(text) {
   if (video && text.toUpperCase().startsWith("[VIDEO")) {
     return { kind: "video", url: video[1].trim(), caption: (video[2] || "").trim(), visit };
   }
+  // A reply that BEGINS with any OTHER bracketed token is the model talking ABOUT
+  // the conversation ("[No response needed — this is a system message…]"), not a
+  // message for the buyer. Never send meta-commentary into a chat — treat as
+  // deliberate silence. (Operator screenshot: exactly that text reached a buyer.)
+  if (text.startsWith("[")) return { kind: "empty", visit };
   return { kind: "text", text: text.trim(), visit };
 }
 

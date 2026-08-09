@@ -347,6 +347,10 @@
     if (/allow other buyers|part of your marketplace listing/.test(t)) return true;
     if (/^message sent$/.test(t)) return true;
     if (/ sent you a (message|video|photo|gif)/.test(t)) return true; // "X sent you a message"
+    // Group-membership system rows (this fleet's chats are "Group chat: …"):
+    // "A contact left the group.", joins, renames, FR equivalents. NOT buyer
+    // messages — replying to one sent Claude's meta-commentary to a buyer.
+    if (/left the group|a quitté le groupe|joined the group|a rejoint le groupe|added .{1,60} to the group|removed .{1,60} from the group|named the group|nommé le groupe|created the group|a créé le groupe/.test(t)) return true;
     if (/^more options$|^view listing$|^see listing$/.test(t)) return true;
     // Facebook "Send a quick response" card + its preset reply buttons (seller options,
     // NOT buyer messages).
@@ -1443,6 +1447,14 @@
       return;
     }
     if (reply.skip) {
+      if (reply.reason === "empty reply") {
+        // Claude DELIBERATELY chose silence (system/meta message, nothing to answer).
+        // Mark handled so the same unanswerable message isn't re-billed every
+        // cooldown; a NEW buyer message (different text) still gets handled fresh.
+        lastHandled[id] = turn.buyerMessage;
+        clearWaiting(id, sidebarId);
+        persistDedup();
+      }
       setStatus({ lastAction: "skip — " + reply.reason, currentThread: name });
       return;
     }
