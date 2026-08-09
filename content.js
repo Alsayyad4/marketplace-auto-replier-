@@ -93,6 +93,16 @@
       if (r && r.waitingSince && typeof r.waitingSince === "object") waitingSince = r.waitingSince;
       if (r && r.videoPending && typeof r.videoPending === "object") videoPending = r.videoPending;
       if (r && r.videoCatchUp && typeof r.videoCatchUp === "object") videoCatchUp = r.videoCatchUp;
+      // AUTOMATIC one-time backlog catch-up (v0.21.13): the operator wants ZERO
+      // manual work — every machine arms the video catch-up by itself on its first
+      // boot after this update. Same engine as the popup button: only ambiguous
+      // old-era marks are cleared, delivery is paced through the aged-video lane,
+      // every send passes the duplicate guards, and it self-disarms when drained.
+      chrome.storage.local.get(["autoCatchUp01213"], (ac) => {
+        if (chrome.runtime.lastError || (ac && ac.autoCatchUp01213)) return;
+        chrome.storage.local.set({ autoCatchUp01213: true }, () => void chrome.runtime.lastError);
+        armVideoCatchUp().catch(() => { /* next boot retries nothing — button remains as fallback */ });
+      });
       // ONE-TIME MIGRATION (v0.21.4): the "Add video to listing" card false-positive
       // marked chats {done:true} WITHOUT sending since the fleet reinstall. Un-mark
       // every done-flag younger than 7 days so those chats finally get their videos.
@@ -1926,6 +1936,27 @@
     }
   }
 
+  // Arm the backlog catch-up: clear only AMBIGUOUS done-marks (old-bug era),
+  // KEEPING confirmed sends (`sent` count), DOM-seen marks (via:"dom") and
+  // partial-set resume markers (resumeFrom/resumeTotal — clearing those would
+  // re-send the already-delivered head clips). Then the scan-loop enqueuer +
+  // aged-video lane deliver, each send still passing every duplicate guard.
+  async function armVideoCatchUp() {
+    const st = await getLocal(["videoSentThreads", "videoAttempts"]);
+    const vt = st.videoSentThreads || {};
+    const am = st.videoAttempts || {};
+    let cleared = 0;
+    for (const k of Object.keys(vt)) {
+      const e = vt[k];
+      const confirmed = e && e.done && (e.sent || e.via === "dom" || e.resumeFrom != null || e.resumeTotal != null);
+      if (e && (e === true || (e.done && !confirmed))) { delete vt[k]; delete am[k]; videoLocked.delete(k); cleared++; }
+    }
+    videoCatchUp = { armed: true, at: Date.now() };
+    catchUpDry = 0;
+    await setLocal({ videoSentThreads: vt, videoAttempts: am, videoCatchUp });
+    return cleared;
+  }
+
   /* ---------------- popup / heartbeat messages ---------------- */
   chrome.runtime.onMessage.addListener((msg, _sender, send) => {
     if (msg && msg.type === "TICK_NOW") {
@@ -1973,23 +2004,10 @@
       return true;
     }
     if (msg && msg.type === "CATCH_UP_VIDEOS") {
-      // Popup one-click backlog catch-up (THIS computer). Clears only AMBIGUOUS
-      // done-marks (old-bug era — no confirmed `sent` count and not DOM-seen),
-      // keeping genuine sends and DOM-confirmed ones, then arms the scan-loop
-      // enqueuer. Delivery + duplicate-safety are the normal video pipeline's.
+      // Popup catch-up button (kept for re-runs). Same engine as the automatic
+      // boot-time arm — delivery + duplicate-safety are the normal pipeline's.
       (async () => {
-        const st = await getLocal(["videoSentThreads", "videoAttempts"]);
-        const vt = st.videoSentThreads || {};
-        const am = st.videoAttempts || {};
-        let cleared = 0;
-        for (const k of Object.keys(vt)) {
-          const e = vt[k];
-          const confirmed = e && e.done && (e.sent || e.via === "dom"); // real send / DOM-seen → keep
-          if (e && (e === true || (e.done && !confirmed))) { delete vt[k]; delete am[k]; videoLocked.delete(k); cleared++; }
-        }
-        videoCatchUp = { armed: true, at: Date.now() };
-        catchUpDry = 0;
-        await setLocal({ videoSentThreads: vt, videoAttempts: am, videoCatchUp });
+        const cleared = await armVideoCatchUp();
         send({ ok: true, cleared });
       })();
       return true;
