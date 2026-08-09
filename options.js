@@ -128,7 +128,13 @@
       const el = $(id);
       if (!el) continue;
       if (kind === "checked") settings[id] = el.checked;
-      else if (kind === "number") settings[id] = Number(el.value);
+      else if (kind === "number") {
+        // A BLANK box must not silently save 0 (Number("") === 0) — that zeroed the
+        // video delay/gap timings whenever a field was left empty. Blank = keep the
+        // previously saved value (or the default).
+        const n = Number(el.value);
+        if (el.value.trim() !== "" && Number.isFinite(n)) settings[id] = n;
+      }
       else settings[id] = el.value;
     }
   }

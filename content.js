@@ -100,8 +100,9 @@
       // every send passes the duplicate guards, and it self-disarms when drained.
       chrome.storage.local.get(["autoCatchUp01213"], (ac) => {
         if (chrome.runtime.lastError || (ac && ac.autoCatchUp01213)) return;
-        chrome.storage.local.set({ autoCatchUp01213: true }, () => void chrome.runtime.lastError);
-        armVideoCatchUp().catch(() => { /* next boot retries nothing — button remains as fallback */ });
+        // Flag rides in the arm's own transactional write — a failed attempt leaves
+        // it unset, so the NEXT boot retries automatically. Button stays as backup.
+        armVideoCatchUp({ autoCatchUp01213: true }).catch(() => { /* retried next boot */ });
       });
       // ONE-TIME MIGRATION (v0.21.4): the "Add video to listing" card false-positive
       // marked chats {done:true} WITHOUT sending since the fleet reinstall. Un-mark
@@ -277,7 +278,12 @@
     if (lines.length < 2) return false;
     const prev = lines.slice(1).join(" ").toLowerCase();
     // OUR last message / system & UI lines → not a waiting buyer.
-    if (/^you[:\s]|^vous\s?:|you sent|vous avez envoyé|automated suggestion|suggestion automatis|to help identify|pour (mieux )?identifier|you can now rate|rate each other|vous pouvez (désormais|maintenant) (vous )?évaluer|started this chat|a démarré|marketplace ·|reacted .{0,4}to your|a réagi|liked your|a aimé/i.test(prev)) return false;
+    // NOTE (audit 2026-08-09): terms must survive SIDEBAR TRUNCATION — "This is an
+    // automated su…" evaded the full-phrase `automated suggestion` term and made 4
+    // system rows count as waiting buyers (⇒ every video deferred, phantom lane-0
+    // churn). Do NOT add "waiting for your response" here — that nudge is a GENUINE
+    // buyer-waiting signal; rejecting it would starve real buyers off the ledger.
+    if (/^you[:\s]|^vous\s?:|you sent|vous avez envoyé|automated suggestion|this is an automated|ceci est une suggestion|suggestion automati|to help identify|pour (mieux )?identifier|you can now rate|rate each other|vous pouvez (désormais|maintenant) (vous )?évaluer|started this chat|a démarré|marketplace ·|reacted .{0,4}to your|a réagi|liked your|a aimé|left the group|a quitté le groupe|joined the group|a rejoint le groupe/i.test(prev)) return false;
     return true;
   }
 
@@ -754,17 +760,30 @@
     if (!c) return false;
     const top = c.top;
     const mid = c.left + c.width / 2; // column midpoint (NOT window center — panel-proof)
-    // On our (seller) side AND a real message — `[role="row"]` excludes the pinned
-    // LISTING CARD's own video/preview at the top (which isn't a message row).
-    const ours = (el, r) =>
-      !!safe(() => el.closest('[role="row"]'), null) &&
-      (looksLikeOurBubble(el) === true || (looksLikeOurBubble(el) !== false && r && r.left + r.width / 2 > mid));
-
     // (a) An actual <video> element on our side (present once the clip renders).
+    // Hardened (audit 2026-08-09): the old test degraded to `center-x > composer
+    // midpoint` because looksLikeOurBubble() is null for unpainted media wrappers —
+    // an autoplaying LISTING clip (shared listing / collapsed listing header inside
+    // a [role=row] in GROUP threads) or a buyer clip in a narrow window then marked
+    // text-only chats "already sent" (operator screenshot: Jing Jr.). Now:
+    // message-media size floor, listing-link exclusion, and side decided by
+    // RIGHT-ANCHORING against the ROW rect (our bubbles are flush-right; buyer
+    // media is gutter-inset left) — never against the composer's toolbar-inset box.
     const vids = safe(() => Array.from(main.querySelectorAll('[role="row"] video')), []);
     for (const v of vids) {
       const r = safe(() => v.getBoundingClientRect(), null);
-      if (r && r.top < top && r.width > 0 && ours(v, r)) return true;
+      if (!r || r.top >= top || r.width < 80 || r.height < 80) continue;
+      if (safe(() => v.closest('a[href*="/marketplace/"]'), null)) continue; // inside a listing link
+      const rowEl0 = safe(() => v.closest('[role="row"]'), null);
+      if (!rowEl0) continue;
+      if (safe(() => rowEl0.querySelector('a[href*="/marketplace/"]'), null)) continue; // row carries a listing link
+      const paint = looksLikeOurBubble(v);
+      if (paint === false) continue; // painted gray → the buyer's
+      if (paint === true) return true; // painted blue/gradient → ours
+      const rowR = safe(() => rowEl0.getBoundingClientRect(), null);
+      if (!rowR) continue;
+      const rightGap = rowR.right - r.right, leftGap = r.left - rowR.left;
+      if (rightGap <= 64 && leftGap > rightGap + 40) return true; // flush-right in its row → ours
     }
     // (b) The duration badge ("0:16", "1:03"). It's a small overlay element on the
     //     thumbnail — usually NOT [dir="auto"] — so scan every leaf element in the
@@ -797,6 +816,31 @@
     }
     return false;
   }
+
+  // FROZEN pre-2026-08-10 <video>-branch detector (v0.21.10-13 behavior) — used
+  // ONLY by the false-mark divergence probe in maybeSendVideo: if THIS fires while
+  // the hardened detector does not, the false-positive source of an old mark is
+  // identified live in the DOM and the mark is safe to clear. Never marks chats.
+  function legacyChatVideoDetect() {
+    const main = getMain();
+    const composer = findComposer();
+    if (!main || !composer) return false;
+    const c = safe(() => composer.getBoundingClientRect(), null);
+    if (!c) return false;
+    const top = c.top;
+    const mid = c.left + c.width / 2;
+    const vids = safe(() => Array.from(main.querySelectorAll('[role="row"] video')), []);
+    for (const v of vids) {
+      const r = safe(() => v.getBoundingClientRect(), null);
+      if (!r || r.top >= top || r.width <= 0) continue;
+      if (!safe(() => v.closest('[role="row"]'), null)) continue;
+      const paint = looksLikeOurBubble(v);
+      if (paint === true) return true;
+      if (paint !== false && r.left + r.width / 2 > mid) return true;
+    }
+    return false;
+  }
+  const VIDEO_DETECTOR_FIX_TS = Date.parse("2026-08-10T00:00:00Z"); // marks written before this used the weaker detector
 
   // Send the stored demo video(s) to the current chat — ONCE per chat, a set delay
   // after the text reply (default 10s). Supports MULTIPLE videos, sent in order.
@@ -931,6 +975,45 @@
 
       // (1) CONFIRMED sent → never resend. Only the NEW {done:true} is authoritative.
       if (done[id] && done[id].done && resumeFrom == null) {
+        const dmk = done[id];
+        // SELF-HEAL (i) — orphaned pre-send lock: via:"lock" with no clip ever
+        // confirmed attached, older than 24h = a crash between lock and first
+        // attach. If the open chat visibly has our video → confirm it; if the
+        // loaded chat shows none → provably nothing attached (attach is preview-
+        // based), clear the mark so the chat finally gets its set.
+        if (dmk.via === "lock" && !dmk.sent && now - (dmk.at || 0) > 24 * 3600 * 1000 && !dmk.recon) {
+          const mainEl = getMain();
+          if (mainEl && findComposer() && safe(() => mainEl.querySelector('[role="row"]'), null)) {
+            const dmR = (await getLocal(["videoSentThreads"])).videoSentThreads || {};
+            if (chatAlreadyHasOurVideo()) {
+              dmR[id] = Object.assign({}, dmR[id], { sent: 1, recon: 1 }); // confirmed after all
+              await setLocal({ videoSentThreads: dmR });
+            } else {
+              delete dmR[id];
+              await setLocal({ videoSentThreads: dmR });
+              videoLocked.delete(id);
+              vstat("cleared an orphaned send-lock (" + (name || id) + ") — video sends on a later visit");
+              return; // NEVER send in the same visit as a heal — normal pipeline takes it later
+            }
+          }
+        }
+        // SELF-HEAL (ii) — pre-hardening DOM mark: written by the weaker detector
+        // (v0.21.10-13). One-shot divergence probe: if the HARDENED detector sees
+        // no video while the LEGACY logic still fires, the false-positive source
+        // is identified live → clear the mark. Both-negative (scrolled out) keeps
+        // the mark — the safe, zero-duplicate direction.
+        if (dmk.via === "dom" && !dmk.sent && !dmk.rechecked && (dmk.at || 0) < VIDEO_DETECTOR_FIX_TS) {
+          const dmP = (await getLocal(["videoSentThreads"])).videoSentThreads || {};
+          if (!chatAlreadyHasOurVideo() && legacyChatVideoDetect()) {
+            delete dmP[id];
+            await setLocal({ videoSentThreads: dmP });
+            videoLocked.delete(id);
+            vstat("cleared a false 'already sent' mark (" + (name || id) + ") — video sends on a later visit");
+            return; // heal now, deliver on a later visit through the full pipeline
+          }
+          dmP[id] = Object.assign({}, dmP[id], { rechecked: 1 }); // probe once per chat
+          await setLocal({ videoSentThreads: dmP });
+        }
         videoLocked.add(id);
         clearVideoPending(id);
         vstat("skip — chat already marked sent (" + (name || id) + ")");
@@ -1099,7 +1182,9 @@
         videoLocked.add(id);
         clearVideoPending(id);
         const dm0 = (await getLocal(["videoSentThreads"])).videoSentThreads || {};
-        dm0[id] = { done: true, at: Date.now() };
+        // via:"taildrop" + resumeTotal ⇒ catch-up treats it as confirmed (head clips
+        // WERE attempted — must never re-queue) and the self-heals never touch it.
+        dm0[id] = { done: true, at: Date.now(), via: "taildrop", resumeTotal: typeof done[id].resumeTotal === "number" ? done[id].resumeTotal : 0 };
         await setLocal({ videoSentThreads: dm0 });
         vstat("resume tail dropped — clip set changed since interruption (" + (name || id) + ")");
         return;
@@ -1118,7 +1203,11 @@
       clearVideoPending(id); // committed to sending — off the pending queue
       {
         const dm = (await getLocal(["videoSentThreads"])).videoSentThreads || {};
-        dm[id] = { done: true, at: Date.now() }; // resume marker (if any) cleared here, BEFORE sending
+        // via:"lock": tag the pre-send lock so a crash mid-send is detectable later
+        // (the tag is overwritten by the mid-set/undo/final stamps on normal flow).
+        const priorRecon = dm[id] && dm[id].recon ? 1 : 0;
+        dm[id] = { done: true, at: Date.now(), via: "lock" }; // resume marker (if any) cleared here, BEFORE sending
+        if (priorRecon) dm[id].recon = 1;
         const am = (await getLocal(["videoAttempts"])).videoAttempts || {};
         delete am[id];
         await setLocal({ videoSentThreads: dm, videoAttempts: am });
@@ -1143,7 +1232,14 @@
           return;
         }
         setStatus({ lastAction: `sending video ${i + 1}/${files.length}…`, currentThread: name });
-        if (await injectVideo(files[i])) okCount++;
+        if (await injectVideo(files[i])) {
+          okCount++;
+          // Crash-safe progress stamp: a delivered clip is recorded IMMEDIATELY, so
+          // a mid-set death can never look like "nothing sent" and get re-queued.
+          const dmP2 = (await getLocal(["videoSentThreads"])).videoSentThreads || {};
+          dmP2[id] = { done: true, at: Date.now(), via: "lock", sent: okCount + startAt };
+          await setLocal({ videoSentThreads: dmP2 });
+        }
         if (i < files.length - 1) await sleep(gapSec * 1000 + rand(0, 1500)); // pause BETWEEN videos
       }
       if (okCount === 0 && startAt === 0) {
@@ -1403,7 +1499,10 @@
       // You spoke last — nothing to reply to. But still: (1) send the demo video if
       // this chat never got one, and (2) consider a smart, capped follow-up if the
       // chat has been quiet long enough. Both are once/limited per chat — no spam.
-      await maybeSendVideo(id, name, true);
+      // A visit that DELIVERS a queued/deferred set honors demoVideoDelaySec
+      // (immediate only on genuinely idle revisits) — "instant burst on open" fix.
+      await maybeSendVideo(id, name, videoPending[id] == null && videoPending[sidebarId] == null);
+      if (videoLocked.has(id)) clearVideoPending(sidebarId); // terminal → clear sidebar-keyed pending
       await maybeFollowUp(id, name, anchor);
       setStatus({ lastAction: "skip — you spoke last (checked video + follow-up)", currentThread: name });
       return;
@@ -1421,7 +1520,8 @@
       clearWaiting(id, sidebarId); // already answered this exact message
       // Audit fix: chats that keep landing here (our reply mis-read as not-last)
       // previously NEVER reached a video pass — give them one (idempotent).
-      await maybeSendVideo(id, name, true);
+      await maybeSendVideo(id, name, videoPending[id] == null && videoPending[sidebarId] == null);
+      if (videoLocked.has(id)) clearVideoPending(sidebarId); // terminal → clear sidebar-keyed pending
       setStatus({ lastAction: "skip — already replied to this message (video checked)", currentThread: name });
       return;
     }
@@ -1561,16 +1661,22 @@
     for (const a of conversationAnchors()) {
       if (safe(() => isUnreadAnchor(a), false) && safe(() => snippetSuggestsBuyerLast(a), false)) waitingNow++;
     }
-    if (waitingNow >= 3) {
-      // Postpone, never cancel: the pending queue has its own picker lane, so this
-      // chat's video set is guaranteed to go out minutes later.
-      if (videoPending[id] == null) videoPending[id] = Date.now(); // keep the ORIGINAL deferral time — resetting it kept the busiest chats forever "too young" for delivery
+    if (waitingNow >= 5) {
+      // Threshold 5 (was 3): with phantom system-rows now filtered from the count,
+      // deferral is reserved for a genuinely slammed queue — so the configured
+      // videoDelaySec timing is honored on most replies instead of almost never.
+      // Postpone, never cancel: the pending queue has its own picker lane.
+      // KEY = SIDEBAR id: the picker lanes look chats up by their sidebar anchor id;
+      // keying by the redirect-adopted id made deferred sets invisible to the lanes
+      // on group threads (this fleet is ALL group threads).
+      if (videoPending[sidebarId] == null && videoPending[id] == null) videoPending[sidebarId] = Date.now(); // keep the ORIGINAL deferral time
       persistDedup();
       setStatus({ lastAction: "video queued — " + waitingNow + " buyers waiting; replying to everyone first", currentThread: name });
       return;
     }
     refreshThreadLock(sidebarId); // video delay + uploads can outlive the lease too
     await maybeSendVideo(id, name);
+    if (videoLocked.has(id)) clearVideoPending(sidebarId); // terminal → clear the sidebar-keyed pending too
   }
 
   /* ---------------- main loop ---------------- */
@@ -1941,8 +2047,20 @@
   // partial-set resume markers (resumeFrom/resumeTotal — clearing those would
   // re-send the already-delivered head clips). Then the scan-loop enqueuer +
   // aged-video lane deliver, each send still passing every duplicate guard.
-  async function armVideoCatchUp() {
-    const st = await getLocal(["videoSentThreads", "videoAttempts"]);
+  async function armVideoCatchUp(extraSet) {
+    // Transactional: the one-shot boot flag (extraSet) commits in the SAME write as
+    // the cleared map — a failed read/write leaves the flag unset so the next boot
+    // retries; a landed write means the arm ran exactly once. Read rejects on error
+    // instead of silently defaulting to {} (which would "clear" nothing but still
+    // consume the one-shot).
+    const st = await new Promise((resolve, reject) => {
+      try {
+        chrome.storage.local.get(["videoSentThreads", "videoAttempts"], (r) => {
+          if (chrome.runtime.lastError || !r) return reject(new Error("catch-up read failed"));
+          resolve(r);
+        });
+      } catch (e) { reject(e); }
+    });
     const vt = st.videoSentThreads || {};
     const am = st.videoAttempts || {};
     let cleared = 0;
@@ -1953,7 +2071,7 @@
     }
     videoCatchUp = { armed: true, at: Date.now() };
     catchUpDry = 0;
-    await setLocal({ videoSentThreads: vt, videoAttempts: am, videoCatchUp });
+    await setLocal(Object.assign({ videoSentThreads: vt, videoAttempts: am, videoCatchUp }, extraSet || {}));
     return cleared;
   }
 
@@ -2009,7 +2127,7 @@
       (async () => {
         const cleared = await armVideoCatchUp();
         send({ ok: true, cleared });
-      })();
+      })().catch((e) => send({ ok: false, error: String((e && e.message) || e) }));
       return true;
     }
     if (msg && msg.type === "SEND_FOLLOWUP") {
