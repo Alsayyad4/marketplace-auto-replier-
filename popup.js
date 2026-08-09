@@ -218,6 +218,29 @@
     }
   } catch (e) { /* optional signal — the updater falls back to known names */ }
 
+  /* ----- One-click backlog catch-up (THIS computer) — no per-chat work -----
+   * Re-queues every replied-to chat that has no confirmed video; delivery runs
+   * through the normal paced, duplicate-guarded video pipeline. Only clears
+   * old ambiguous marks — genuine sends are kept. New buyers already get videos
+   * automatically, so this is a one-time cleanup per machine. */
+  if ($("catchUpVideos")) {
+    $("catchUpVideos").addEventListener("click", async () => {
+      const sure = confirm(
+        "Catch up videos on THIS computer?\n\nEvery chat you've replied to that has no video yet will get its video set over the next while (paced automatically so it never interrupts replies).\n\nChats that already have a visible video are skipped. One rare edge: a video sent long ago and scrolled far out of view could resend. Press OK to proceed."
+      );
+      if (!sure) return;
+      const tab = await activeTab();
+      if (!tab) { $("catchUpStatus").textContent = "open a Messenger tab first"; return; }
+      $("catchUpStatus").textContent = "Arming…";
+      chrome.tabs.sendMessage(tab.id, { type: "CATCH_UP_VIDEOS" }, (resp) => {
+        if (chrome.runtime.lastError || !resp) { $("catchUpStatus").textContent = "open messenger.com in this tab first"; return; }
+        $("catchUpStatus").textContent = resp.ok
+          ? "on ✓ — re-queued " + resp.cleared + " chat(s); videos will send automatically"
+          : (resp.error || "failed");
+      });
+    });
+  }
+
   /* ----- Maintenance: clear the "video already sent" mark for the OPEN chat -----
    * For chats wrongly marked served (old bug eras). Operator-verified, one chat at
    * a time; the content script refuses when a sent video is actually visible. */

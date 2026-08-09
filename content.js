@@ -63,6 +63,12 @@
   // Persisted. Serviced by its own picker lane, so a deferred set is GUARANTEED to
   // be delivered minutes later — deferral is a postponement, never a cancellation.
   let videoPending = {};
+  // One-click backlog catch-up (per machine): when armed, replied-to chats that
+  // have NO confirmed video are re-queued for a video visit, delivered through the
+  // existing aged-video lane and gated by the same chatAlreadyHasOurVideo() guard
+  // that prevents duplicates. Persisted so it survives reloads; self-disarms.
+  let videoCatchUp = { armed: false, at: 0 };
+  let catchUpDry = 0;
   let lastHandled = {}; // threadId -> the buyer message we last replied to (persisted)
   // threadId -> how many TEXT replies the bot has sent in this whole conversation.
   // This is the hard per-conversation reply cap (maxRepliesPerConvo). Counted ONLY on a
@@ -79,13 +85,14 @@
   const normMsg = (s) => (s || "").toLowerCase().replace(/\s+/g, " ").trim();
   // Hydrate persisted state at boot.
   safe(() =>
-    chrome.storage.local.get(["recentSent", "cooldowns", "lastHandled", "replyCounts", "waitingSince", "videoPending"], (r) => {
+    chrome.storage.local.get(["recentSent", "cooldowns", "lastHandled", "replyCounts", "waitingSince", "videoPending", "videoCatchUp"], (r) => {
       if (r && Array.isArray(r.recentSent)) recentSent = r.recentSent;
       if (r && r.cooldowns && typeof r.cooldowns === "object") cooldowns = r.cooldowns;
       if (r && r.lastHandled && typeof r.lastHandled === "object") lastHandled = r.lastHandled;
       if (r && r.replyCounts && typeof r.replyCounts === "object") replyCounts = r.replyCounts;
       if (r && r.waitingSince && typeof r.waitingSince === "object") waitingSince = r.waitingSince;
       if (r && r.videoPending && typeof r.videoPending === "object") videoPending = r.videoPending;
+      if (r && r.videoCatchUp && typeof r.videoCatchUp === "object") videoCatchUp = r.videoCatchUp;
       // ONE-TIME MIGRATION (v0.21.4): the "Add video to listing" card false-positive
       // marked chats {done:true} WITHOUT sending since the fleet reinstall. Un-mark
       // every done-flag younger than 7 days so those chats finally get their videos.
@@ -121,7 +128,7 @@
       const keys = Object.keys(map);
       if (keys.length > 400) for (const k of keys.slice(0, keys.length - 400)) delete map[k];
     }
-    safe(() => chrome.storage.local.set({ cooldowns, lastHandled, replyCounts, waitingSince, videoPending }));
+    safe(() => chrome.storage.local.set({ cooldowns, lastHandled, replyCounts, waitingSince, videoPending, videoCatchUp }));
   }
   function clearVideoPending(id) {
     if (id && videoPending[id] != null) {
@@ -1152,6 +1159,13 @@
         setStatus({ lastError: "video: nothing attached — will retry later", currentThread: name });
         return;
       }
+      // Stamp the mark as a CONFIRMED send (sent count) so the backlog catch-up can
+      // tell genuine sends from old ambiguous marks and never re-queues this chat.
+      {
+        const dmS = (await getLocal(["videoSentThreads"])).videoSentThreads || {};
+        dmS[id] = { done: true, at: Date.now(), sent: okCount + startAt };
+        await setLocal({ videoSentThreads: dmS });
+      }
       vstat("sent ✓ " + (okCount + startAt) + "/" + files.length + " to " + (name || id));
       setStatus({ lastAction: `demo video(s) sent ✓ (${okCount + startAt}/${files.length})`, currentThread: name });
       // Mirror to the local + cloud activity log (fire-and-forget; no effect on sending).
@@ -1775,6 +1789,34 @@
       setStatus({ marketplaceAnchorCount: anchors.length, unreadCount: unread, waitingCount: waiting, videoQueueCount: Object.keys(videoPending).length, lastAction: settings.enabled ? "scanning" : "off" });
       if (!settings.enabled || !onMarketplace()) return;
 
+      // BACKLOG CATCH-UP: while armed (operator pressed "Catch up videos"), queue
+      // replied-to chats that have no CONFIRMED video for a video visit. Delivery
+      // runs through the normal aged-video lane (paced, reply-safe) and the same
+      // chatAlreadyHasOurVideo() guard that prevents duplicates. Self-disarms.
+      if (videoCatchUp.armed) {
+        if (nowT - (videoCatchUp.at || 0) > 3 * 24 * 3600 * 1000) {
+          videoCatchUp = { armed: false, at: 0 }; persistDedup();
+        } else {
+          const doneMap = (await getLocal(["videoSentThreads"])).videoSentThreads || {};
+          let queued = 0;
+          for (const a of anchors) {
+            if (queued >= 30) break;
+            const cid = threadId(a);
+            if (!cid || videoPending[cid] != null) continue;
+            if (safe(() => isUnreadAnchor(a), false)) continue;        // buyer waiting → reply lanes handle it
+            if (safe(() => snippetSuggestsBuyerLast(a), false)) continue; // buyer last → not a we-replied chat
+            const dm = doneMap[cid];
+            if (dm && dm.done) continue; // confirmed sent (real / DOM-seen) — never re-queue
+            videoPending[cid] = nowT - (AGED_VIDEO_MIN_AGE_MS + 60000); // immediately aged-eligible
+            queued++;
+          }
+          if (queued > 0) { catchUpDry = 0; persistDedup(); }
+          else if (Object.keys(videoPending).length === 0 && (catchUpDry = (catchUpDry || 0) + 1) >= 6) {
+            videoCatchUp = { armed: false, at: 0 }; catchUpDry = 0; persistDedup(); // backlog drained
+          }
+        }
+      }
+
       // AUTO-RECOVER from Facebook's error page ONLY. Guarded so it can never touch a
       // working page: requires 0 conversations AND Facebook's literal error wording AND
       // two scans in a row AND a 4-min cooldown. On that error screen the bot is already
@@ -1927,6 +1969,28 @@
         await setLocal({ videoSentThreads: vt, videoAttempts: am });
         videoLocked.delete(id); // mandatory: the in-memory lock short-circuits before storage
         send({ ok: true, cleared: had });
+      })();
+      return true;
+    }
+    if (msg && msg.type === "CATCH_UP_VIDEOS") {
+      // Popup one-click backlog catch-up (THIS computer). Clears only AMBIGUOUS
+      // done-marks (old-bug era — no confirmed `sent` count and not DOM-seen),
+      // keeping genuine sends and DOM-confirmed ones, then arms the scan-loop
+      // enqueuer. Delivery + duplicate-safety are the normal video pipeline's.
+      (async () => {
+        const st = await getLocal(["videoSentThreads", "videoAttempts"]);
+        const vt = st.videoSentThreads || {};
+        const am = st.videoAttempts || {};
+        let cleared = 0;
+        for (const k of Object.keys(vt)) {
+          const e = vt[k];
+          const confirmed = e && e.done && (e.sent || e.via === "dom"); // real send / DOM-seen → keep
+          if (e && (e === true || (e.done && !confirmed))) { delete vt[k]; delete am[k]; videoLocked.delete(k); cleared++; }
+        }
+        videoCatchUp = { armed: true, at: Date.now() };
+        catchUpDry = 0;
+        await setLocal({ videoSentThreads: vt, videoAttempts: am, videoCatchUp });
+        send({ ok: true, cleared });
       })();
       return true;
     }
