@@ -1718,8 +1718,10 @@
   // LANE 1, and a chat that just got an aged attempt is skipped for an hour so one
   // stuck chat (e.g. clips in 24h fail-pause) can't wedge the lane. In-memory only —
   // a content-script reload restarts the pacing, which fails toward FEWER preemptions.
-  const AGED_VIDEO_EVERY_MS = 10 * 60 * 1000;
-  const AGED_VIDEO_MIN_AGE_MS = 20 * 60 * 1000;
+  const AGED_VIDEO_EVERY_MS = 4 * 60 * 1000; // was 10 min — operator wants queued sets out fast
+  const AGED_VIDEO_MIN_AGE_MS = 10 * 60 * 1000; // was 20 min — eligible sooner; LANE 0 still absolute
+  // (Note: whenever NO buyer is waiting, LANE 1.5 drains continuously with no
+  // pacing at all — these constants only bound the worst case on busy machines.)
   const AGED_VIDEO_RETRY_MS = 60 * 60 * 1000;
   let lastAgedVideoAt = 0;
   const agedVideoTried = {}; // threadId -> last aged-lane attempt
