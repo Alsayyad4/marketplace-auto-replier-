@@ -956,11 +956,13 @@
       if (!cfg.videoEnabled && !central.length) {
         clearVideoPending(id);
         vstat("videos OFF — no central videos in dashboard and per-machine toggle unchecked");
+        setStatus({ lastError: "VIDEOS OFF on this machine — this machine has no video list (check dashboard Videos tab / this machine's config link)" });
         return;
       }
       if (!local.length && !central.length) {
         clearVideoPending(id);
         vstat("no videos configured");
+        setStatus({ lastError: "NO VIDEOS CONFIGURED — this machine receives no video list (check dashboard Videos tab / this machine's config link)" });
         return;
       }
 
@@ -1657,21 +1659,25 @@
     // REPLIES outrank this chat's videos: defer the set — the existing quiet-chat
     // revisit path delivers it (guaranteed, once per chat) as soon as the queue is
     // clear. Nobody loses their video; everybody gets their answer fast.
-    let waitingNow = 0;
-    for (const a of conversationAnchors()) {
-      if (safe(() => isUnreadAnchor(a), false) && safe(() => snippetSuggestsBuyerLast(a), false)) waitingNow++;
+    // FORCE-VIDEO MODE (operator directive: every convo gets its set, video-first).
+    // The set goes out INLINE, right after this reply, at the configured delay.
+    // Row-count proxies (waitingNow) are GONE — sidebar rows can never postpone a
+    // video again. The one precise exception: a buyer is ALREADY overdue (on the
+    // never-miss ledger for > OVERDUE_MS) at this instant — then this chat's set is
+    // queued (pending lanes deliver it minutes later) and the overdue buyer's
+    // reply goes first. That's the only case where a video ever waits.
+    let overdueNow = false;
+    {
+      const nowD = Date.now();
+      for (const k of Object.keys(waitingSince)) {
+        if (nowD - waitingSince[k] > OVERDUE_MS) { overdueNow = true; break; }
+      }
     }
-    if (waitingNow >= 5) {
-      // Threshold 5 (was 3): with phantom system-rows now filtered from the count,
-      // deferral is reserved for a genuinely slammed queue — so the configured
-      // videoDelaySec timing is honored on most replies instead of almost never.
-      // Postpone, never cancel: the pending queue has its own picker lane.
-      // KEY = SIDEBAR id: the picker lanes look chats up by their sidebar anchor id;
-      // keying by the redirect-adopted id made deferred sets invisible to the lanes
-      // on group threads (this fleet is ALL group threads).
+    if (overdueNow) {
+      // KEY = SIDEBAR id: the picker lanes look chats up by their sidebar anchor id.
       if (videoPending[sidebarId] == null && videoPending[id] == null) videoPending[sidebarId] = Date.now(); // keep the ORIGINAL deferral time
       persistDedup();
-      setStatus({ lastAction: "video queued — " + waitingNow + " buyers waiting; replying to everyone first", currentThread: name });
+      setStatus({ lastAction: "video queued — an overdue buyer needs their reply first", currentThread: name });
       return;
     }
     refreshThreadLock(sidebarId); // video delay + uploads can outlive the lease too
