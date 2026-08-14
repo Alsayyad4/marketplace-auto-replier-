@@ -218,6 +218,52 @@
     }
   } catch (e) { /* optional signal — the updater falls back to known names */ }
 
+  /* ----- 🩺 One-click diagnostic — copy a full (redacted) state report -----
+   * Combines the background's storage/config/queue report with a live probe of
+   * every open Messenger tab (sidebar rows + detector verdicts on the open chat),
+   * drops it in the textarea AND the clipboard. The operator pastes it to Claude
+   * so failures are diagnosed from facts instead of guesses. No secrets: the API
+   * key and config-link key are never included (see buildDiagnostic). */
+  if ($("diagAll")) {
+    $("diagAll").addEventListener("click", async () => {
+      const s = $("diagAllStatus");
+      s.className = "muted";
+      s.textContent = "Collecting…";
+      const parts = [];
+      const bg = await new Promise((r) =>
+        chrome.runtime.sendMessage({ type: "GET_DIAGNOSTIC" }, (x) => r(chrome.runtime.lastError ? null : x))
+      );
+      parts.push(bg && bg.ok ? bg.text : "background report FAILED: " + ((bg && bg.error) || "no response"));
+      const tabs = await new Promise((r) =>
+        chrome.tabs.query({ url: EXISTING_TAB_MATCH }, (t) => r(chrome.runtime.lastError ? [] : t || []))
+      );
+      if (!tabs.length) parts.push("(no Messenger tab open on this profile — live sidebar section missing. Press 📨 Open Marketplace, wait 10s, run the diagnostic again.)");
+      for (const t of tabs.slice(0, 4)) {
+        const resp = await new Promise((r) =>
+          chrome.tabs.sendMessage(t.id, { type: "DIAG_PROBE" }, (x) => r(chrome.runtime.lastError ? null : x))
+        );
+        parts.push(
+          resp && resp.ok
+            ? resp.text
+            : "TAB " + (t.url || "?").replace(/[?#].*$/, "") + " — SCANNER NOT RESPONDING (this is itself a finding: press ⚡ Wake, or reload the tab, then re-run)" +
+              (resp && resp.error ? " [" + resp.error + "]" : "")
+        );
+      }
+      const report = "===== SubSell DIAGNOSTIC — paste this whole block to Claude =====\n" + parts.join("\n---\n") + "\n===== END =====";
+      $("dump").value = report;
+      try {
+        await navigator.clipboard.writeText(report);
+        s.textContent = "copied ✓ — now paste it to Claude";
+        s.className = "ok";
+      } catch (e) {
+        $("dump").focus();
+        $("dump").select();
+        s.textContent = "press Ctrl+C to copy, then paste to Claude";
+        s.className = "warn";
+      }
+    });
+  }
+
   /* ----- One-click backlog catch-up (THIS computer) — no per-chat work -----
    * Re-queues every replied-to chat that has no confirmed video; delivery runs
    * through the normal paced, duplicate-guarded video pipeline. Only clears

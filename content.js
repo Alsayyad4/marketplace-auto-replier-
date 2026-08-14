@@ -2221,6 +2221,77 @@
       send({ ok: true });
       return true;
     }
+    if (msg && msg.type === "DIAG_PROBE") {
+      // Popup 🩺 button — READ-ONLY live probe of THIS tab: what the scanner sees
+      // in the sidebar right now (per-row unread/buyer verdicts + queue ages) and
+      // what the video detectors say about the OPEN chat. Nothing is mutated.
+      (async () => {
+        try {
+          const now = Date.now();
+          const ageM = (t) => (typeof t === "number" && t > 0 ? Math.round((now - t) / 60000) + "m" : "-");
+          const det = (fn) => { try { return fn() ? "Y" : "n"; } catch (e) { return "err"; } };
+          const st = await getLocal(["videoSentThreads", "videoAttempts"]);
+          const vt = st.videoSentThreads || {};
+          const am = st.videoAttempts || {};
+          const anchors = conversationAnchors();
+          let overdue = 0;
+          for (const a of anchors) {
+            const ws = waitingSince[threadId(a)];
+            if (ws && now - ws > OVERDUE_MS && snippetSuggestsBuyerLast(a)) overdue++;
+          }
+          const L = [];
+          L.push("TAB " + location.href.replace(/[?#].*$/, ""));
+          L.push(
+            "state: busy=" + (busy ? "Y(" + ageM(busySince) + ")" : "n") +
+            " pausedForUpdate=" + (pausedForUpdate ? "Y(" + ageM(pausedForUpdate) + ")" : "n") +
+            " catchUp=" + (videoCatchUp && videoCatchUp.armed ? "ARMED dry=" + catchUpDry : "off") +
+            " | mem: waiting=" + Object.keys(waitingSince).length +
+            " vidPending=" + Object.keys(videoPending).length +
+            " sessionLocked=" + videoLocked.size +
+            " cooldowns=" + Object.keys(cooldowns).length
+          );
+          L.push("sidebar: anchors=" + anchors.length + " overdueNow=" + overdue + " — rows (first 12):");
+          anchors.slice(0, 12).forEach((a, i) => {
+            const id = threadId(a);
+            const lines2 = (safe(() => a.innerText || "", "")).split("\n").map((s) => s.trim()).filter(Boolean);
+            const ve = vt[id];
+            const ae = am[id];
+            L.push(
+              " #" + i + " " + (trunc(anchorName(a), 13) || "?") +
+              " unread=" + (isUnreadAnchor(a) ? "Y" : "n") +
+              " buyerLast=" + (snippetSuggestsBuyerLast(a) ? "Y" : "n") +
+              " wait=" + ageM(waitingSince[id]) +
+              " vidQ=" + ageM(videoPending[id]) +
+              " cool=" + (cooldowns[id] && cooldowns[id] > now ? Math.round((cooldowns[id] - now) / 60000) + "m" : "-") +
+              " replies=" + (replyCounts[id] || 0) +
+              " vmark=" + (ve ? (ve.sent ? "sent" + ve.sent : ve.via || "done") : "-") +
+              " att=" + (ae && (ae.fails || 0) >= 3 ? "PAUSED-" + (ae.why || "load") : ae && ae.fails ? "f" + ae.fails : "-") +
+              " \"" + (trunc(lines2.slice(1).join(" "), 32) || "") + "\""
+            );
+          });
+          const m = location.href.match(/\/t\/([^/?#]+)/);
+          if (m) {
+            const convo = safe(() => readConversation(), []) || [];
+            const last = convo.length ? convo[convo.length - 1] : null;
+            L.push(
+              "open chat: id=…" + m[1].slice(-6) +
+              " composer=" + (findComposer() ? "Y" : "NO") +
+              " msgs=" + convo.length + " last=" + (last ? last.role : "-") +
+              " | detectors: hardened=" + det(chatAlreadyHasOurVideo) +
+              " legacyVideo=" + det(legacyChatVideoDetect) +
+              " legacyBadge=" + det(legacyBadgeDetect) +
+              " | mark=" + (vt[m[1]] ? JSON.stringify(vt[m[1]]).slice(0, 90) : "-")
+            );
+          } else {
+            L.push("open chat: none");
+          }
+          send({ ok: true, text: L.join("\n") });
+        } catch (e) {
+          send({ ok: false, error: String((e && e.message) || e) });
+        }
+      })();
+      return true;
+    }
     if (msg && msg.type === "CLEAR_VIDEO_MARK_OPEN_CHAT") {
       // Popup maintenance button: clear the "video already sent" mark for the chat
       // the operator has OPEN and verified by eye. Single-chat, manual-only —

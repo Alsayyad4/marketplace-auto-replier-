@@ -1203,6 +1203,117 @@ function appendLog(entry) {
   });
 }
 
+/* ---------------- one-click diagnostic (popup 🩺 button) ----------------
+ * Assembles EVERYTHING needed to debug "no reply / no video" remotely into one
+ * text block the operator copies and pastes back. Secrets are REDACTED by
+ * construction: the API key becomes a set/not-set flag, config URLs are reduced
+ * to their host (the ?key= secret is never read), and buyer text is truncated. */
+async function buildDiagnostic() {
+  const now = Date.now();
+  const ageM = (t) => (typeof t === "number" && t > 0 ? Math.round((now - t) / 60000) + "m" : "-");
+  const cut = (s, n) => (s == null ? "-" : String(s).length > n ? String(s).slice(0, n) + "…" : String(s));
+  const host = (u) => { try { return new URL(u).host; } catch (e) { return u ? "unparseable" : "-"; } };
+  const st = await new Promise((r) =>
+    chrome.storage.local.get(
+      [
+        "enabledLocal", "remoteConfig", "remoteConfigAt", "remoteConfigUrl", "configKey",
+        "cloudConfig", "cloudConfigAt", "cloudAuth", "cloudStale", "lastMirror", "debugTick",
+        "videoSentThreads", "videoAttempts", "videoUrlFails", "waitingSince", "videoPending",
+        "videoCatchUp", "autoCatchUp01213", "autoCatchUp01217", "videoEnabled", "demoVideos",
+        "videoCache", "replyLog", "sudBase", "sudDirName", "sudLastCheck",
+        "cooldowns", "replyCounts", "lastHandled",
+      ],
+      (x) => r(x || {})
+    )
+  );
+  const settings = await getSettings();
+  const managed = await readManagedConfig();
+  const hadSync = await new Promise((r) => syncedConfigRead((_cfg, had) => r(had)));
+  const cloudOn = !!(st.cloudConfig && typeof st.cloudConfig === "object" && Object.keys(st.cloudConfig).length);
+  const remoteOn = !!(st.remoteConfig && typeof st.remoteConfig === "object" && Object.keys(st.remoteConfig).length);
+  const source = managed ? "managed-policy" : cloudOn ? "cloud(web app)" : remoteOn ? "remote-link" : hadSync ? "chrome-sync" : "local-legacy";
+  const L = [];
+  let ver = "?"; try { ver = chrome.runtime.getManifest().version; } catch (e) { /* keep ? */ }
+  L.push("SubSell v" + ver + " · " + new Date(now).toISOString() + " · label: " + (await getMachineLabel()));
+  L.push(
+    "config: source=" + source +
+    " | cloud: login=" + (st.cloudAuth && st.cloudAuth.refresh_token ? "Y" : "n") +
+    " age=" + ageM(st.cloudConfigAt) + " stale=" + (st.cloudStale ? "YES(" + ageM(st.cloudStale.at || st.cloudStale) + ")" : "n") +
+    " | remote: host=" + host(st.remoteConfigUrl || "") + " age=" + ageM(st.remoteConfigAt) +
+    " | logKey=" + (st.configKey ? "set" : "-") + " sync=" + (hadSync ? "Y" : "n")
+  );
+  L.push(
+    "settings: on=" + (settings.enabled ? "Y" : "OFF") + " api=" + (settings.apiKey ? "set" : "NOT-SET") +
+    " model=" + settings.model + " caps=" + settings.hourlyCap + "/h " + settings.dailyCap + "/d" +
+    " hours=" + settings.businessHoursStart + "-" + settings.businessHoursEnd + (withinBusinessHours(settings) ? "(open)" : "(CLOSED-now)") +
+    " delay=" + settings.responseDelaySec + "s+j" + settings.jitterSec + " maxReplies=" + settings.maxRepliesPerConvo
+  );
+  const cache = st.videoCache || {};
+  const central = Array.isArray(settings.demoVideoUrls) ? settings.demoVideoUrls.filter((v) => v && v.url) : [];
+  const localVids = (Array.isArray(st.demoVideos) ? st.demoVideos : []).filter((v) => v && v.dataUrl).length;
+  L.push(
+    "videos: central=" + central.length +
+    (central.length ? " [" + central.map((v) => {
+      const c = cache[v.url];
+      return cut(v.name || "clip", 12) + "@" + host(v.url) + (c && c.base64 ? " cached" + Math.round(c.base64.length * 0.75 / 1048576) + "MB(" + ageM(c.at) + ")" : " NOT-cached");
+    }).join("; ") + "]" : "") +
+    " localToggle=" + (st.videoEnabled ? "Y" : "n") + " localClips=" + localVids +
+    " firstDelay=" + (settings.demoVideoDelaySec != null ? settings.demoVideoDelaySec : "?") + "s between=" + (settings.demoVideoBetweenSec != null ? settings.demoVideoBetweenSec : "?") + "s"
+  );
+  const c = rollWindows(await getCounters(), now);
+  const tickd = st.debugTick || {};
+  L.push(
+    "counters: hour=" + c.hourCount + " day=" + c.dayCount +
+    " | mirror: " + (st.lastMirror ? (st.lastMirror.ok ? "ok " + ageM(st.lastMirror.at) : "FAIL " + cut(st.lastMirror.error, 40)) : "-") +
+    " | tick: scan=" + (tickd.lastScanTime ? ageM(Date.parse(tickd.lastScanTime)) : "-") +
+    " act=\"" + cut(tickd.lastAction, 60) + "\" vid=\"" + cut(tickd.videoLast, 60) + "\" err=\"" + cut(tickd.lastError, 60) + "\""
+  );
+  const vt = st.videoSentThreads || {};
+  let vTot = 0, vSent = 0, vLock = 0, vDom = 0, vTail = 0, vRecon = 0, vDoneNoSent = 0;
+  for (const k of Object.keys(vt)) {
+    const e = vt[k]; if (!e) continue; vTot++;
+    if (e.sent) vSent++;
+    if (e.via === "lock") vLock++; else if (e.via === "dom") vDom++; else if (e.via === "taildrop") vTail++;
+    if (e.recon) vRecon++;
+    if (e.done && !e.sent && e.via !== "taildrop") vDoneNoSent++;
+  }
+  L.push("video-marks: total=" + vTot + " sent=" + vSent + " lock=" + vLock + " dom=" + vDom + " taildrop=" + vTail + " recon=" + vRecon + " done-no-sent=" + vDoneNoSent);
+  const oldest = (m) => { let o = null; for (const k of Object.keys(m || {})) { const v = m[k]; if (typeof v === "number" && (o == null || v < o)) o = v; } return o; };
+  const cd = st.cooldowns || {}; let cdFut = 0; for (const k of Object.keys(cd)) if (cd[k] > now) cdFut++;
+  const rc = st.replyCounts || {}; let capped = 0;
+  const cap = Number(settings.maxRepliesPerConvo) || 0;
+  if (cap > 0) for (const k of Object.keys(rc)) if (rc[k] >= cap) capped++;
+  L.push(
+    "queues: waiting=" + Object.keys(st.waitingSince || {}).length + "(oldest " + ageM(oldest(st.waitingSince)) + ")" +
+    " vidPending=" + Object.keys(st.videoPending || {}).length + "(oldest " + ageM(oldest(st.videoPending)) + ")" +
+    " cooldownsFuture=" + cdFut + " handled=" + Object.keys(st.lastHandled || {}).length + " replyCapped=" + capped
+  );
+  const am = st.videoAttempts || {}; let pLoad = 0, pAttach = 0, claims = 0;
+  for (const k of Object.keys(am)) {
+    const e = am[k]; if (!e) continue;
+    if ((e.fails || 0) >= 3 && now - (e.failAt || 0) < 24 * 3600 * 1000) { if (e.why === "attach") pAttach++; else pLoad++; }
+    if (e.claimAt && now - e.claimAt < 5 * 60 * 1000) claims++;
+  }
+  const uf = st.videoUrlFails || {}; let strikes = 0;
+  for (const k of Object.keys(uf)) { const e = uf[k]; if (e && (e.n || 0) >= 3 && now - (e.at || 0) < 6 * 3600 * 1000) strikes++; }
+  const cu = st.videoCatchUp || {};
+  L.push(
+    "attempts: pausedLoad=" + pLoad + " pausedAttach=" + pAttach + " liveClaims=" + claims +
+    " urlStrikesActive=" + strikes +
+    " catchUp=" + (cu.armed ? "ARMED(" + ageM(cu.at) + ")" : "off") +
+    " auto13=" + (st.autoCatchUp01213 ? "done" : "-") + " auto17=" + (st.autoCatchUp01217 ? "done" : "-") +
+    " | sud: base=" + (st.sudBase ? "set" : "-") + " dir=" + cut(st.sudDirName, 24) + " lastCheck=" + ageM(st.sudLastCheck)
+  );
+  const alarms = await new Promise((r) => { try { chrome.alarms.getAll((a) => r(a || [])); } catch (e) { r([]); } });
+  L.push("alarms: " + (alarms.length ? alarms.map((a) => a.name + " in " + Math.max(0, Math.round((a.scheduledTime - now) / 60000)) + "m").join("; ") : "NONE"));
+  const logs = Array.isArray(st.replyLog) ? st.replyLog.slice(-10) : [];
+  L.push("log tail (" + logs.length + "/" + (Array.isArray(st.replyLog) ? st.replyLog.length : 0) + "):");
+  for (const e of logs) {
+    L.push(" " + cut(e.at, 16) + " " + cut(e.action, 8) + " " + cut(e.thread, 14) + " → \"" + cut(e.reply, 44) + "\"");
+  }
+  return L.join("\n");
+}
+
 /* ---------------- message router ---------------- */
 
 chrome.runtime.onMessage.addListener((msg, _sender, sendResponse) => {
@@ -1305,6 +1416,15 @@ chrome.runtime.onMessage.addListener((msg, _sender, sendResponse) => {
             withinHours: withinBusinessHours(settings),
             lastMirror, // activity-log health: {at, ok, error} — surfaced in the popup
           });
+          break;
+        }
+        case "GET_DIAGNOSTIC": {
+          // Popup 🩺 button — full redacted state report (see buildDiagnostic).
+          try {
+            sendResponse({ ok: true, text: await buildDiagnostic() });
+          } catch (e) {
+            sendResponse({ ok: false, error: String((e && e.message) || e) });
+          }
           break;
         }
         case "GET_REPLY_SIMPLE": {
