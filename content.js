@@ -91,6 +91,16 @@
       if (r && r.lastHandled && typeof r.lastHandled === "object") lastHandled = r.lastHandled;
       if (r && r.replyCounts && typeof r.replyCounts === "object") replyCounts = r.replyCounts;
       if (r && r.waitingSince && typeof r.waitingSince === "object") waitingSince = r.waitingSince;
+      // TTL sweep (boot): ledger entries older than 24h are unservable ghosts —
+      // buried, deleted, or pre-0.21.14 phantom system rows — that no visit can
+      // clear and that silently forced the overdue-buyer video deferral forever.
+      // A rendered, genuinely waiting buyer is re-stamped by the next scan.
+      {
+        const nowB = Date.now();
+        for (const k of Object.keys(waitingSince)) {
+          if (typeof waitingSince[k] !== "number" || nowB - waitingSince[k] > 24 * 3600 * 1000) delete waitingSince[k];
+        }
+      }
       if (r && r.videoPending && typeof r.videoPending === "object") videoPending = r.videoPending;
       if (r && r.videoCatchUp && typeof r.videoCatchUp === "object") videoCatchUp = r.videoCatchUp;
       // AUTOMATIC one-time backlog catch-up (v0.21.13): the operator wants ZERO
@@ -98,11 +108,14 @@
       // boot after this update. Same engine as the popup button: only ambiguous
       // old-era marks are cleared, delivery is paced through the aged-video lane,
       // every send passes the duplicate guards, and it self-disarms when drained.
-      chrome.storage.local.get(["autoCatchUp01213"], (ac) => {
-        if (chrome.runtime.lastError || (ac && ac.autoCatchUp01213)) return;
-        // Flag rides in the arm's own transactional write — a failed attempt leaves
-        // it unset, so the NEXT boot retries automatically. Button stays as backup.
-        armVideoCatchUp({ autoCatchUp01213: true }).catch(() => { /* retried next boot */ });
+      // v0.21.17 re-arm: the 0.21.13 catch-up self-disarmed within ~48s on
+      // all-dotted machines (the old enqueuer skipped every dotted row, queued 0,
+      // and hit the 6-dry-scan disarm) — its one-shot flag was consumed having
+      // done nothing. Fresh flag = exactly one effective run under the fixed
+      // enqueuer; transactional-write semantics unchanged.
+      chrome.storage.local.get(["autoCatchUp01217"], (ac) => {
+        if (chrome.runtime.lastError || (ac && ac.autoCatchUp01217)) return;
+        armVideoCatchUp({ autoCatchUp01217: true }).catch(() => { /* retried next boot */ });
       });
       // ONE-TIME MIGRATION (v0.21.4): the "Add video to listing" card false-positive
       // marked chats {done:true} WITHOUT sending since the fleet reinstall. Un-mark
@@ -805,13 +818,24 @@
       // voice-note durations and buyer clips in narrow windows/panel-open layouts).
       const rowEl = safe(() => n.closest('[role="row"]'), null);
       if (!rowEl) continue;
+      // Hardened (audit 2026-08-10): listing-link exclusions + side decided by
+      // paint or ROW-rect right-anchoring on the MEDIA rect — the old composer-
+      // midpoint test with null-paint pass-through matched listing/buyer media.
+      if (safe(() => n.closest('a[href*="/marketplace/"]'), null)) continue; // badge inside a listing link
+      if (safe(() => rowEl.querySelector('a[href*="/marketplace/"]'), null)) continue; // row carries a listing link
+      const rowR = safe(() => rowEl.getBoundingClientRect(), null);
+      if (!rowR) continue;
       const bcx = r.left + r.width / 2, bcy = r.top + r.height / 2;
       const medias = safe(() => Array.from(rowEl.querySelectorAll('video, img, [style*="background-image"]')), []);
       for (const mEl of medias) {
         const mr = safe(() => mEl.getBoundingClientRect(), null);
         if (!mr || mr.width < 80 || mr.height < 80) continue; // avatars/emoji/stickers are smaller
         if (bcx <= mr.left || bcx >= mr.right || bcy <= mr.top || bcy >= mr.bottom) continue; // badge not on this thumbnail
-        if (looksLikeOurBubble(mEl) !== false && mr.left + mr.width / 2 > mid) return true; // thumbnail on OUR side
+        const paint = looksLikeOurBubble(mEl);
+        if (paint === false) continue; // painted gray → the buyer's
+        if (paint === true) return true; // painted blue/gradient → ours
+        const rightGap = rowR.right - mr.right, leftGap = mr.left - rowR.left;
+        if (rightGap <= 64 && leftGap > rightGap + 40) return true; // flush-right in its row → ours
       }
     }
     return false;
@@ -840,7 +864,42 @@
     }
     return false;
   }
-  const VIDEO_DETECTOR_FIX_TS = Date.parse("2026-08-10T00:00:00Z"); // marks written before this used the weaker detector
+  const VIDEO_DETECTOR_FIX_TS = Date.parse("2026-08-10T00:00:00Z"); // marks written before this used the weaker <video> branch
+  const BADGE_FIX_TS = Date.parse("2026-08-10T06:00:00Z"); // marks written before this may come from the buggy badge branch
+
+  // FROZEN pre-fix BADGE-branch detector (composer-midpoint side test with
+  // null-paint pass-through — the FP source until 2026-08-10). Used ONLY by the
+  // divergence probe: firing while the hardened detector stays silent identifies
+  // a false mark's source live in the DOM. Never marks chats.
+  function legacyBadgeDetect() {
+    const main = getMain();
+    const composer = findComposer();
+    if (!main || !composer) return false;
+    const c = safe(() => composer.getBoundingClientRect(), null);
+    if (!c) return false;
+    const top = c.top;
+    const mid = c.left + c.width / 2;
+    const leaves = safe(() => Array.from(main.querySelectorAll('[role="row"] span, [role="row"] div')), []);
+    for (const n of leaves) {
+      if (n.childElementCount !== 0) continue;
+      if (safe(() => n.closest('[dir="auto"]'), null)) continue;
+      const t = safe(() => (n.textContent || "").trim(), "");
+      if (!/^\d{1,2}:\d{2}$/.test(t)) continue;
+      const r = safe(() => n.getBoundingClientRect(), null);
+      if (!r || r.top >= top || r.width <= 0 || r.width > 90) continue;
+      const rowEl = safe(() => n.closest('[role="row"]'), null);
+      if (!rowEl) continue;
+      const bcx = r.left + r.width / 2, bcy = r.top + r.height / 2;
+      const medias = safe(() => Array.from(rowEl.querySelectorAll('video, img, [style*="background-image"]')), []);
+      for (const mEl of medias) {
+        const mr = safe(() => mEl.getBoundingClientRect(), null);
+        if (!mr || mr.width < 80 || mr.height < 80) continue;
+        if (bcx <= mr.left || bcx >= mr.right || bcy <= mr.top || bcy >= mr.bottom) continue;
+        if (looksLikeOurBubble(mEl) !== false && mr.left + mr.width / 2 > mid) return true;
+      }
+    }
+    return false;
+  }
 
   // Send the stored demo video(s) to the current chat — ONCE per chat, a set delay
   // after the text reply (default 10s). Supports MULTIPLE videos, sent in order.
@@ -877,6 +936,7 @@
     [/^loaded \d+\/\d+ clip/, "clips-load-failed"],
     [/^⚠ 0\//, "attach-failed"],
     [/^⚠ all /, "clips-all-blocked"],
+    [/^skip — detected an existing video/, "dom-marked"],
     [/can't load/, "clips-excluded"],
     [/^paused 24h/, "chat-paused-24h"],
     [/^error:/, "engine-error"],
@@ -910,7 +970,7 @@
       ask({ type: "LOG_EVENT", entry: { action: "video-status", thread: null, buyer: null, reply: "videos blocked [" + key + "]: " + reason } });
     } catch (e) { /* telemetry must never disturb the bot */ }
   }
-  async function maybeSendVideo(id, name, immediate) {
+  async function maybeSendVideo(id, name, immediate, sidebarKey) {
     try {
       // SYNCHRONOUS guard first (no awaits): if this instance already committed a video
       // to this chat, never touch it again — closes the rapid-re-entry "non-stop" loop.
@@ -950,6 +1010,17 @@
       // guard, and (b) buyers receiving local+central duplicates.
       if (central.length) local = [];
       if (!settingsOk && !central.length && !local.length) {
+        // Queue instead of dropping: a one-cycle settings hiccup used to consume
+        // this chat's visit permanently (next visit could be days away on rotation).
+        {
+          const dn = (cfg.videoSentThreads || {})[id];
+          const alreadyDone = !!(dn && dn.done && typeof dn.resumeFrom !== "number");
+          const qk = sidebarKey || id;
+          if (qk && !alreadyDone && videoPending[qk] == null && videoPending[id] == null) {
+            videoPending[qk] = Date.now();
+            persistDedup();
+          }
+        }
         vstat("couldn't read settings this cycle — will retry");
         return;
       }
@@ -999,22 +1070,31 @@
             }
           }
         }
-        // SELF-HEAL (ii) — pre-hardening DOM mark: written by the weaker detector
-        // (v0.21.10-13). One-shot divergence probe: if the HARDENED detector sees
-        // no video while the LEGACY logic still fires, the false-positive source
-        // is identified live → clear the mark. Both-negative (scrolled out) keeps
-        // the mark — the safe, zero-duplicate direction.
-        if (dmk.via === "dom" && !dmk.sent && !dmk.rechecked && (dmk.at || 0) < VIDEO_DETECTOR_FIX_TS) {
-          const dmP = (await getLocal(["videoSentThreads"])).videoSentThreads || {};
-          if (!chatAlreadyHasOurVideo() && legacyChatVideoDetect()) {
-            delete dmP[id];
+        // SELF-HEAL (ii) — pre-hardening DOM mark (video branch until 2026-08-10,
+        // badge branch until this release): BOUNDED divergence probe, max 3 tries
+        // >= 4h apart, only on a LOADED chat. A single both-negative read is NOT
+        // terminal — on throttled/minimized RDP windows the FP source (autoplaying
+        // listing clip / badge media) is often not rendered at probe time. Clear
+        // ONLY when the hardened detector is silent while a frozen legacy detector
+        // still fires (FP source identified live). Both-negative keeps the mark —
+        // the zero-duplicate direction. Legacy one-shot rechecked:1 counts as one
+        // consumed probe, so already-burned marks get two more chances.
+        const probeN = typeof dmk.recheckN === "number" ? dmk.recheckN : (dmk.rechecked ? 1 : 0);
+        if (dmk.via === "dom" && !dmk.sent && probeN < 3 && now - (dmk.recheckAt || 0) > 4 * 3600 * 1000 && (dmk.at || 0) < BADGE_FIX_TS) {
+          const mainEl2 = getMain();
+          if (mainEl2 && findComposer() && safe(() => mainEl2.querySelector('[role="row"]'), null)) {
+            const dmP = (await getLocal(["videoSentThreads"])).videoSentThreads || {};
+            if (!chatAlreadyHasOurVideo() && (legacyChatVideoDetect() || legacyBadgeDetect())) {
+              delete dmP[id];
+              await setLocal({ videoSentThreads: dmP });
+              videoLocked.delete(id);
+              vstat("cleared a false 'already sent' mark (" + (name || id) + ") — video sends on a later visit");
+              return; // heal now, deliver on a later visit through the full pipeline
+            }
+            dmP[id] = Object.assign({}, dmP[id], { recheckN: probeN + 1, recheckAt: now });
+            if (probeN + 1 >= 3) dmP[id].rechecked = 1; // terminal only after the 3rd both-negative
             await setLocal({ videoSentThreads: dmP });
-            videoLocked.delete(id);
-            vstat("cleared a false 'already sent' mark (" + (name || id) + ") — video sends on a later visit");
-            return; // heal now, deliver on a later visit through the full pipeline
           }
-          dmP[id] = Object.assign({}, dmP[id], { rechecked: 1 }); // probe once per chat
-          await setLocal({ videoSentThreads: dmP });
         }
         videoLocked.add(id);
         clearVideoPending(id);
@@ -1066,11 +1146,11 @@
       // (3) Short-lived claim (TTL) so two passes/tabs don't both send right now.
       const attempts = (await getLocal(["videoAttempts"])).videoAttempts || {};
       const cur = attempts[id];
-      if (cur && cur.claimAt && now - cur.claimAt < VIDEO_CLAIM_TTL && cur.claimTab !== TAB_UID) return;
+      if (cur && cur.claimAt && now - cur.claimAt < VIDEO_CLAIM_TTL && cur.claimTab !== TAB_UID) { vstat("claim race — another pass owns " + (name || id)); return; }
       attempts[id] = Object.assign({}, cur, { claimAt: now, claimTab: TAB_UID });
       await setLocal({ videoAttempts: attempts });
       const verify = (await getLocal(["videoAttempts"])).videoAttempts || {};
-      if (!(verify[id] && verify[id].claimTab === TAB_UID)) return; // lost the claim race
+      if (!(verify[id] && verify[id].claimTab === TAB_UID)) { vstat("claim race — another pass owns " + (name || id)); return; } // lost the claim race
 
       // Delays (configurable): pause before the FIRST video + pause BETWEEN videos.
       const firstSec = centralDelay != null ? centralDelay : cfg.videoDelaySec != null ? cfg.videoDelaySec : 10;
@@ -1100,6 +1180,7 @@
             fresh[id] = { done: true, at: Date.now(), via: "dom" };
             await setLocal({ videoSentThreads: fresh });
           }
+          vstat("skip after delay — video appeared meanwhile (" + (name || id) + ")");
           console.debug("[SubSell] video: skip after delay — chat already has a video", id);
           return;
         }
@@ -1419,7 +1500,10 @@
     // Snapshot the sidebar's opinion BEFORE opening: opening marks the chat READ on
     // Facebook (the blue dot dies), so if this visit fails to reply for any reason
     // we must not lose the fact that a buyer was probably waiting.
-    const sidebarSaysBuyer = safe(() => isUnreadAnchor(anchor), false) || safe(() => snippetSuggestsBuyerLast(anchor), false);
+    // Snippet ONLY — a stuck-lit dot on minimized windows is not evidence of a
+    // waiting buyer (this fleet's dots never clear), and dot-triggered suspicious
+    // rechecks tripled the latency of every queued-video delivery visit.
+    const sidebarSaysBuyer = safe(() => snippetSuggestsBuyerLast(anchor), false);
     cooldowns[id] = Date.now() + COOLDOWN_MS;
     setStatus({ currentThread: name, lastAction: "opening", lastError: null });
 
@@ -1503,7 +1587,7 @@
       // chat has been quiet long enough. Both are once/limited per chat — no spam.
       // A visit that DELIVERS a queued/deferred set honors demoVideoDelaySec
       // (immediate only on genuinely idle revisits) — "instant burst on open" fix.
-      await maybeSendVideo(id, name, videoPending[id] == null && videoPending[sidebarId] == null);
+      await maybeSendVideo(id, name, videoPending[id] == null && videoPending[sidebarId] == null, sidebarId);
       if (videoLocked.has(id)) clearVideoPending(sidebarId); // terminal → clear sidebar-keyed pending
       await maybeFollowUp(id, name, anchor);
       setStatus({ lastAction: "skip — you spoke last (checked video + follow-up)", currentThread: name });
@@ -1522,7 +1606,7 @@
       clearWaiting(id, sidebarId); // already answered this exact message
       // Audit fix: chats that keep landing here (our reply mis-read as not-last)
       // previously NEVER reached a video pass — give them one (idempotent).
-      await maybeSendVideo(id, name, videoPending[id] == null && videoPending[sidebarId] == null);
+      await maybeSendVideo(id, name, videoPending[id] == null && videoPending[sidebarId] == null, sidebarId);
       if (videoLocked.has(id)) clearVideoPending(sidebarId); // terminal → clear sidebar-keyed pending
       setStatus({ lastAction: "skip — already replied to this message (video checked)", currentThread: name });
       return;
@@ -1541,7 +1625,8 @@
       cooldowns[id] = Date.now() + IDLE_COOLDOWN_MS;
       // No more text replies — but the demo video is separate ("2 + videos"), so still
       // make sure this chat got its one-time video (idempotent: no-op if already sent).
-      await maybeSendVideo(id, name);
+      await maybeSendVideo(id, name, false, sidebarId);
+      if (videoLocked.has(id)) clearVideoPending(sidebarId); // terminal → clear sidebar-keyed pending
       if ((settings.convoCapBehavior || "stop") === "notify") {
         setStatus({ lastAction: "needs you — reply cap reached (" + repliesSoFar + "/" + replyCap + "), buyer still messaging", currentThread: name });
       } else {
@@ -1587,7 +1672,7 @@
     if (reply.human) {
       lastHandled[id] = turn.buyerMessage;
       clearWaiting(id, sidebarId); // handed to the human — resolved for the bot
-      await maybeSendVideo(id, name, true); // demo video still helps the human close
+      await maybeSendVideo(id, name, true, sidebarId); // demo video still helps the human close
       setStatus({ lastAction: "needs you: " + reply.reason, currentThread: name });
       return;
     }
@@ -1668,20 +1753,29 @@
     // reply goes first. That's the only case where a video ever waits.
     let overdueNow = false;
     {
+      // LIVENESS-CHECKED (audit 2026-08-10): defer ONLY when LANE 0 can actually
+      // serve someone next scan — the ledger entry must belong to a RENDERED row
+      // whose snippet still reads buyer-last (same gates as lane 0). Scanning raw
+      // ledger keys made ONE immortal ghost entry silently queue EVERY video
+      // forever while the popup looked perfectly healthy — the "no videos, no
+      // errors" fleet mystery.
       const nowD = Date.now();
-      for (const k of Object.keys(waitingSince)) {
-        if (nowD - waitingSince[k] > OVERDUE_MS) { overdueNow = true; break; }
+      for (const a of safe(() => conversationAnchors(), [])) {
+        const k = threadId(a);
+        const ws = waitingSince[k];
+        if (ws && nowD - ws > OVERDUE_MS && safe(() => snippetSuggestsBuyerLast(a), false)) { overdueNow = true; break; }
       }
     }
     if (overdueNow) {
       // KEY = SIDEBAR id: the picker lanes look chats up by their sidebar anchor id.
       if (videoPending[sidebarId] == null && videoPending[id] == null) videoPending[sidebarId] = Date.now(); // keep the ORIGINAL deferral time
       persistDedup();
+      vstat("queued behind overdue buyer — delivering via pending lane");
       setStatus({ lastAction: "video queued — an overdue buyer needs their reply first", currentThread: name });
       return;
     }
     refreshThreadLock(sidebarId); // video delay + uploads can outlive the lease too
-    await maybeSendVideo(id, name);
+    await maybeSendVideo(id, name, false, sidebarId);
     if (videoLocked.has(id)) clearVideoPending(sidebarId); // terminal → clear the sidebar-keyed pending too
   }
 
@@ -1808,7 +1902,10 @@
         // Stuck >24h → evict from the priority lane. NOT a cancellation: every
         // idle/already-replied/cap visit still runs maybeSendVideo, so the chat
         // gets its set on normal rotation once sending works again.
-        if (now - t > 24 * 3600 * 1000) { delete videoPending[id]; evicted = true; continue; }
+        // >24h stuck → RE-STAMP to the back of the queue (still lane-visible),
+        // never evict: eviction dumped the chat onto slow idle rotation, which on
+        // busy machines meant "never". Wedge protection stays via videoAttBlocked.
+        if (now - t > 24 * 3600 * 1000) { videoPending[id] = now - (AGED_VIDEO_MIN_AGE_MS + 60000); evicted = true; continue; }
         // Never churn a chat the video engine would refuse instantly — mirrors the
         // 3-fail/24h pause and the retry backoff exits exactly.
         if (videoAttBlocked(videoAtt, id, now)) continue;
@@ -1901,15 +1998,28 @@
       // timestamp). Entries clear ONLY when the chat is actually resolved, so even a
       // reload, a failed open, or a flood of new buyers can't make one disappear.
       const nowT = Date.now();
-      let unread = 0, waiting = 0;
+      // TTL sweep (ongoing): kill ledger ghosts >24h old BEFORE the stamp loop so a
+      // rendered, still-waiting buyer re-stamps in this same pass (no off-ledger gap).
+      for (const k of Object.keys(waitingSince)) {
+        if (typeof waitingSince[k] !== "number" || nowT - waitingSince[k] > 24 * 3600 * 1000) delete waitingSince[k];
+      }
+      let unread = 0, waiting = 0, purgedStale = false;
       for (const a of anchors) {
         if (safe(() => isUnreadAnchor(a), false)) unread++;
         if (safe(() => snippetSuggestsBuyerLast(a), false)) {
           waiting++;
           const wid = threadId(a);
           if (wid && waitingSince[wid] == null) waitingSince[wid] = nowT;
+        } else if (safe(() => (a.innerText || "").split("\n").filter((s) => s.trim()).length >= 2, false)) {
+          // Row is FULLY RENDERED (name + snippet) and reads not-buyer-last — the
+          // exact condition under which lane 0 refuses to serve it, so its ledger
+          // entry is unservable noise. A buyer who writes again flips the snippet
+          // and is re-stamped this same loop. Mid-render rows never purge.
+          const wid = threadId(a);
+          if (wid && waitingSince[wid] != null) { delete waitingSince[wid]; purgedStale = true; }
         }
       }
+      if (purgedStale) persistDedup(); // batched: at most one local write per scan, only on change
       setStatus({ marketplaceAnchorCount: anchors.length, unreadCount: unread, waitingCount: waiting, videoQueueCount: Object.keys(videoPending).length, lastAction: settings.enabled ? "scanning" : "off" });
       if (!settings.enabled || !onMarketplace()) return;
 
@@ -1927,7 +2037,10 @@
             if (queued >= 30) break;
             const cid = threadId(a);
             if (!cid || videoPending[cid] != null) continue;
-            if (safe(() => isUnreadAnchor(a), false)) continue;        // buyer waiting → reply lanes handle it
+            // NOTE: no dot/unread check here — stuck-lit dots on minimized windows
+            // made the old check skip the ENTIRE sidebar (queued 0 forever). The
+            // snippet test below already leaves every truly-waiting buyer to the
+            // reply lanes; a dotted "You:" row is exactly the backlog to queue.
             if (safe(() => snippetSuggestsBuyerLast(a), false)) continue; // buyer last → not a we-replied chat
             const dm = doneMap[cid];
             if (dm && dm.done) continue; // confirmed sent (real / DOM-seen) — never re-queue
