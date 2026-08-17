@@ -51,7 +51,21 @@
   let pendingReply = {}; // threadId -> {buyerMessage, transcript, text, at} — billed but undelivered replies (abort recovery). In-memory only: a lost memo just falls back to a normal call.
   let cooldowns = {}; // threadId -> timestamp we may re-check it (persisted, shared across tabs)
   let lastOpened = {}; // threadId -> when THIS instance last opened it (unread re-open floor)
-  let openFails = {}; // sidebar threadId -> consecutive failed opens (quarantine at 3)
+  let openFails = {}; // sidebar threadId -> {n, at}: consecutive failed opens (quarantine at 3; strikes decay after 2h)
+  // Strikes older than 2h are stale (a bad-lag morning must not combine with one
+  // later hiccup into a 6h park on a real buyer). In-memory by design.
+  const openFailCount = (tid) => {
+    const e = openFails[tid];
+    if (!e) return 0;
+    if (Date.now() - (e.at || 0) > 2 * 3600 * 1000) { delete openFails[tid]; return 0; }
+    return e.n || 0;
+  };
+  // sidebar threadId -> the ADOPTED canonical id FB redirected it to. Group-style
+  // threads open under a different /t/ id than their sidebar row; per-chat state
+  // written under the adopted id (replyCounts, videoAttempts) is invisible to
+  // sidebar-keyed lookups without this bridge. In-memory: repopulated on the
+  // first visit after a reload, which is soon enough for the gates that use it.
+  const adoptedAlias = {};
   // NEVER-MISS LEDGER: threadId -> when we FIRST saw this chat waiting for a reply.
   // Re-verified every scan; an entry is cleared ONLY when the chat is actually
   // resolved (replied / handed to human / cap-stop / turned out not waiting).
@@ -289,14 +303,27 @@
     if (!t) return false;
     const lines = t.split("\n").map((s) => s.trim()).filter(Boolean);
     if (lines.length < 2) return false;
-    const prev = lines.slice(1).join(" ").toLowerCase();
+    let prev = lines.slice(1).join(" ").toLowerCase();
+    // Messenger now prefixes unread rows' snippet with "Unread message:" (FR:
+    // "Message non lu"). That prefix defeated the ^you:/^vous: anchors below, so
+    // rows where WE spoke last ("Unread message: You: …") counted as waiting
+    // buyers — immortal ghost ledger entries that monopolized lane 0 (real new
+    // buyers never reached, "not replying at all") and kept overdueNow true
+    // (every video force-queued). Diagnosed live from two machine reports
+    // 2026-08-17. Strip the UI prefix before judging; a genuine buyer message
+    // is judged identically with or without it.
+    prev = prev.replace(/^(?:unread messages?|messages? non lus?)\s*[:.,]?\s*/i, "");
     // OUR last message / system & UI lines → not a waiting buyer.
     // NOTE (audit 2026-08-09): terms must survive SIDEBAR TRUNCATION — "This is an
     // automated su…" evaded the full-phrase `automated suggestion` term and made 4
     // system rows count as waiting buyers (⇒ every video deferred, phantom lane-0
     // churn). Do NOT add "waiting for your response" here — that nudge is a GENUINE
     // buyer-waiting signal; rejecting it would starve real buyers off the ledger.
-    if (/^you[:\s]|^vous\s?:|you sent|vous avez envoyé|automated suggestion|this is an automated|ceci est une suggestion|suggestion automati|to help identify|pour (mieux )?identifier|you can now rate|rate each other|vous pouvez (désormais|maintenant) (vous )?évaluer|started this chat|a démarré|marketplace ·|reacted .{0,4}to your|a réagi|liked your|a aimé|left the group|a quitté le groupe|joined the group|a rejoint le groupe/i.test(prev)) return false;
+    // NOTE: terms must survive SIDEBAR TRUNCATION, and the "Unread message: "
+    // prefix (stripped above) eats ~16 chars of the visible width — so the reject
+    // terms are shortened again ("this is an autom…" is how the row actually
+    // renders on the operator's machines).
+    if (/^you[:\s]|^vous\s?:|you sent|vous avez envoyé|automated suggestion|this is an autom|ceci est une sugg|suggestion automati|to help identi|pour (mieux )?identifier|you can now ra|rate each other|vous pouvez (désormais|maintenant) (vous )?évaluer|started this chat|a démarré|marketplace ·|reacted .{0,4}to your|a réagi|liked your|a aimé|left the group|a quitté le groupe|joined the group|a rejoint le groupe/i.test(prev)) return false;
     return true;
   }
 
@@ -670,11 +697,56 @@
   // instead of the buyer. New order: PASTE into the focused composer (unambiguous
   // target) → DRAG-DROP on the composer → file input only as a last resort, and
   // never one that lives inside the "Add video to listing" card.
-  async function injectVideo(file) {
+  // mode: "fresh-first" (first clip of a brand-new run — sweep stale strays),
+  //       "resume-first" (first clip of a RESUME run — a just-sent clip's upload
+  //         may legitimately linger in the tray; WAIT, never sweep, or we could
+  //         cancel a clip already counted as sent),
+  //       "later" (subsequent clip — wait for the previous upload to clear).
+  // Returns: true (attached + send fired), false (provably nothing attached, tray
+  // clean — safe to RE-ATTEMPT this clip later), "dirty" (attach unconfirmed AND
+  // the tray could not be verified clean — the clip must be treated as ATTEMPTED
+  // and never re-attempted, or a hidden half-attach could double-send).
+  async function injectVideo(file, mode) {
     const main = getMain() || document;
     const previewSel = 'img[src^="blob:"], [role="progressbar"], video, [aria-label*="remove" i][aria-label*="attach" i], [aria-label*="supprimer" i][aria-label*="jointe" i]';
     const composer = findComposer();
     if (composer) composer.focus();
+    // TRAY elements = preview-ish elements NOT inside a MESSAGE row. Message rows
+    // ([role="row"]) hold a just-sent clip's upload progressbar / blob thumbnail —
+    // counting those in the attach math is what made a lingering upload mask the
+    // next clip's preview. Hedge: a [role="row"] that CONTAINS the composer is the
+    // composer's own wrapper, not a message row — previews inside it still count
+    // (protects against a Messenger layout that nests the tray in a row).
+    const notInRow = (el) => {
+      const r = safe(() => el.closest('[role="row"]'), null);
+      return !r || safe(() => !!composer && r.contains(composer), false);
+    };
+    const trayEls = () => safe(() => Array.from(main.querySelectorAll(previewSel)).filter(notInRow), []);
+    const removeBtns = () =>
+      safe(() => Array.from(main.querySelectorAll('[aria-label*="remove" i][aria-label*="attach" i], [aria-label*="supprimer" i][aria-label*="jointe" i]')).filter(notInRow), []);
+    // Sweep the tray twice with a settle gap (a paste can render its preview a
+    // beat AFTER a single sweep, then ride out with the next typed message).
+    const sweepTray = async () => {
+      for (const b of removeBtns()) safe(() => b.click());
+      await sleep(2500);
+      for (const b of removeBtns()) safe(() => b.click());
+      await sleep(1500);
+    };
+    if (mode === "fresh-first") {
+      // FIRST clip of a brand-new run: nothing of ours can legitimately be in the
+      // tray yet, so anything there is a stale stray (an earlier undetected paste).
+      // Remove it — otherwise this clip's Enter would send the stray along.
+      if (trayEls().length > 0) await sweepTray();
+    } else {
+      // WAIT for any PREVIOUS clip's upload to leave the tray. On slow uploads the
+      // prior preview lingers (upload still running after Enter); when it detached
+      // DURING the next clip's detection window, the count went (+1 new, −1 old)
+      // = no change and a genuinely-attached clip read as "failed" — the "every
+      // chat stops at 2 of 3 clips" fleet bug. Bounded: proceed anyway after 45s
+      // (the new-element check below still detects correctly).
+      const t0 = Date.now();
+      while (Date.now() - t0 < 45000 && trayEls().length > 0) await sleep(1000);
+    }
     const dtFor = () => {
       const dt = new DataTransfer();
       dt.items.add(file);
@@ -716,21 +788,44 @@
 
     // Try each strategy IN ORDER, and require the preview to actually attach before
     // trusting it — a dispatched event that lands nowhere no longer counts.
+    // Detection is by NEW ELEMENT IDENTITY in the tray, not by count delta: an old
+    // preview detaching at the same moment a new one appears keeps the count flat,
+    // which used to read as "not attached".
     let attached = false;
+    let firstStrategy = true;
     for (const attempt of attempts) {
-      const before = safe(() => main.querySelectorAll(previewSel).length, 0);
+      // A previous strategy's paste may have landed but rendered too late for its
+      // detection window — sweep before escalating, or the next strategy stages a
+      // SECOND copy and one Enter would send the clip twice.
+      if (!firstStrategy && trayEls().length > 0) await sweepTray();
+      firstStrategy = false;
+      const beforeEls = new Set(trayEls());
       if (!safe(attempt, false)) continue;
       const start = Date.now();
-      while (Date.now() - start < 12000) {
+      while (Date.now() - start < 15000) {
         await sleep(1000);
-        if (safe(() => main.querySelectorAll(previewSel).length, before) > before) {
+        if (trayEls().some((el) => !beforeEls.has(el))) {
           attached = true;
           break;
         }
       }
       if (attached) break; // this strategy worked — stop trying others
     }
-    if (!attached) return false; // nothing attached → NEVER blind-press Enter (caused stray sends)
+    if (!attached) {
+      // Clear any stray half-attached preview (a paste that landed but was never
+      // detected) so it can't ride out with the NEXT typed message — and so the
+      // caller's "nothing attached → safe to re-attempt" claim is true by
+      // construction. Remove-attachment buttons exist only in the tray, never on
+      // message-row media.
+      await sweepTray();
+      if (trayEls().length > 0) {
+        // The tray could NOT be verified clean — something half-attached is stuck.
+        // "false" would invite a re-attempt (duplicate risk); report attempted-and-
+        // unconfirmed instead so the caller skips this clip permanently.
+        return "dirty";
+      }
+      return false; // nothing attached → NEVER blind-press Enter (caused stray sends)
+    }
     await sleep(1500);
     const composer2 = findComposer();
     // The clip ATTACHED (uploaded into the composer). Press Enter to send, with a
@@ -740,12 +835,12 @@
     // videos. Attach + Enter is a reliable "it's on its way"; the caller marks the chat
     // done so it can never re-send.
     if (composer2) {
-      const previews = safe(() => main.querySelectorAll(previewSel).length, 1);
+      const previews = trayEls().length || 1;
       pressEnter(composer2);
       const s2 = Date.now();
       while (Date.now() - s2 < 6000) {
         await sleep(300);
-        if (safe(() => main.querySelectorAll(previewSel).length, previews) < previews) return true; // confirmed gone = sent
+        if (trayEls().length < previews) return true; // confirmed gone = sent
       }
       clickSend(); // single fallback for layouts where Enter doesn't send
       await sleep(1500);
@@ -972,10 +1067,18 @@
   }
   async function maybeSendVideo(id, name, immediate, sidebarKey) {
     try {
+      // Terminal exits must clear the pending queue under BOTH keys: deferral
+      // writes videoPending[sidebarId] (v0.21.14) but this engine runs on the
+      // ADOPTED id — clearing only `id` left sidebar-keyed entries immortal
+      // (the aged lane revisited a done chat every hour forever).
+      const clearPend = () => {
+        clearVideoPending(id);
+        if (sidebarKey && sidebarKey !== id) clearVideoPending(sidebarKey);
+      };
       // SYNCHRONOUS guard first (no awaits): if this instance already committed a video
       // to this chat, never touch it again — closes the rapid-re-entry "non-stop" loop.
       if (id && videoLocked.has(id)) {
-        clearVideoPending(id);
+        clearPend();
         vstat("skip — already sent this session (" + (name || id) + ")");
         return;
       }
@@ -1025,13 +1128,13 @@
         return;
       }
       if (!cfg.videoEnabled && !central.length) {
-        clearVideoPending(id);
+        clearPend();
         vstat("videos OFF — no central videos in dashboard and per-machine toggle unchecked");
         setStatus({ lastError: "VIDEOS OFF on this machine — this machine has no video list (check dashboard Videos tab / this machine's config link)" });
         return;
       }
       if (!local.length && !central.length) {
-        clearVideoPending(id);
+        clearPend();
         vstat("no videos configured");
         setStatus({ lastError: "NO VIDEOS CONFIGURED — this machine receives no video list (check dashboard Videos tab / this machine's config link)" });
         return;
@@ -1045,6 +1148,19 @@
       // strictly-untouched tail may be sent later — zero duplicate risk, and the chat
       // finally gets all 3 configured clips instead of 2.
       const resumeFrom = done[id] && done[id].done && typeof done[id].resumeFrom === "number" ? done[id].resumeFrom : null;
+
+      // IN-FLIGHT guard: a via:"lock" progress stamp younger than 30 min means a
+      // set is probably being sent RIGHT NOW in another pass/tab (every loop
+      // iteration refreshes `at`, so a live pass stays fresh even under heavy
+      // background-tab timer throttling). Only a STALE stamp (crash mid-set) may
+      // resume. Belt: even if a live pass IS wrongly resumed, the per-iteration
+      // owner check + pre-attempt stamps below make interleaving duplicate-free —
+      // the resumer starts strictly after the last stamped clip and the old owner
+      // bows out at its next iteration.
+      if (resumeFrom != null && done[id].via === "lock" && now - (done[id].at || 0) < 30 * 60 * 1000) {
+        vstat("set in progress in another pass — waiting (" + (name || id) + ")");
+        return;
+      }
 
       // (1) CONFIRMED sent → never resend. Only the NEW {done:true} is authoritative.
       if (done[id] && done[id].done && resumeFrom == null) {
@@ -1097,7 +1213,7 @@
           }
         }
         videoLocked.add(id);
-        clearVideoPending(id);
+        clearPend();
         vstat("skip — chat already marked sent (" + (name || id) + ")");
         return;
       }
@@ -1105,7 +1221,7 @@
       // (Skipped in resume mode — of course there are already videos there.)
       if (resumeFrom == null && chatAlreadyHasOurVideo()) {
         videoLocked.add(id);
-        clearVideoPending(id);
+        clearPend();
         done[id] = { done: true, at: now, via: "dom" }; // inert marker: DOM-detected, not a confirmed send
         await setLocal({ videoSentThreads: done });
         vstat("skip — detected an existing video in chat (" + (name || id) + ")");
@@ -1154,7 +1270,10 @@
 
       // Delays (configurable): pause before the FIRST video + pause BETWEEN videos.
       const firstSec = centralDelay != null ? centralDelay : cfg.videoDelaySec != null ? cfg.videoDelaySec : 10;
-      const gapSec = betweenSec != null && betweenSec >= 0 ? betweenSec : 8;
+      // Clamp the between-clips gap to 10 min: an extreme dashboard value must
+      // never stretch a live set's stamp-to-stamp gap past the 30-min in-flight
+      // window (and a longer pause serves no one).
+      const gapSec = Math.min(600, betweenSec != null && betweenSec >= 0 ? betweenSec : 8);
       if (!immediate && resumeFrom == null) {
         setStatus({ lastAction: `video in ${Math.round(firstSec)}s…`, currentThread: name });
         await sleep(firstSec * 1000);
@@ -1175,7 +1294,10 @@
       if (resumeFrom == null) {
         const fresh = (await getLocal(["videoSentThreads"])).videoSentThreads || {};
         if (videoLocked.has(id) || (fresh[id] && fresh[id].done) || chatAlreadyHasOurVideo()) {
-          videoLocked.add(id);
+          // Do NOT latch videoLocked when the observed mark is a RESUME marker —
+          // "done" is transient there (another pass's partial set); a latched tab
+          // would eat the tail's pending-queue entry forever without delivering.
+          if (!(fresh[id] && typeof fresh[id].resumeFrom === "number")) videoLocked.add(id);
           if (!(fresh[id] && fresh[id].done)) {
             fresh[id] = { done: true, at: Date.now(), via: "dom" };
             await setLocal({ videoSentThreads: fresh });
@@ -1263,7 +1385,7 @@
       // set size it was recorded with; otherwise drop the tail (never resend).
       if (resumeFrom != null && !(done[id] && done[id].resumeTotal === files.length)) {
         videoLocked.add(id);
-        clearVideoPending(id);
+        clearPend();
         const dm0 = (await getLocal(["videoSentThreads"])).videoSentThreads || {};
         // via:"taildrop" + resumeTotal ⇒ catch-up treats it as confirmed (head clips
         // WERE attempted — must never re-queue) and the self-heals never touch it.
@@ -1271,6 +1393,21 @@
         await setLocal({ videoSentThreads: dm0 });
         vstat("resume tail dropped — clip set changed since interruption (" + (name || id) + ")");
         return;
+      }
+
+      // RE-VERIFY the claim right before locking: the pre-lock phase (first-video
+      // delay + clip downloads) can outlive the 3-min claim TTL on slow machines,
+      // and a second tab may have legitimately claimed over a stale one. Losing
+      // the claim here = the other pass owns this chat — bow out with no writes.
+      {
+        const amV = (await getLocal(["videoAttempts"])).videoAttempts || {};
+        const curV = amV[id];
+        if (curV && curV.claimTab && curV.claimTab !== TAB_UID && curV.claimAt && Date.now() - curV.claimAt < VIDEO_CLAIM_TTL) {
+          vstat("claim lost during the pre-send wait — another pass owns " + (name || id));
+          return;
+        }
+        amV[id] = Object.assign({}, curV, { claimAt: Date.now(), claimTab: TAB_UID });
+        await setLocal({ videoAttempts: amV });
       }
 
       // *** LOCK THE CHAT BEFORE SENDING — the zero-resend guarantee. ***
@@ -1283,23 +1420,44 @@
       // (Operator priority: never re-send / never spam. A rare missed clip on a truly
       // failed upload is the accepted trade.)
       videoLocked.add(id);
-      clearVideoPending(id); // committed to sending — off the pending queue
+      clearPend(); // committed to sending — off the pending queue (both keys)
       {
         const dm = (await getLocal(["videoSentThreads"])).videoSentThreads || {};
         // via:"lock": tag the pre-send lock so a crash mid-send is detectable later
         // (the tag is overwritten by the mid-set/undo/final stamps on normal flow).
         const priorRecon = dm[id] && dm[id].recon ? 1 : 0;
-        dm[id] = { done: true, at: Date.now(), via: "lock" }; // resume marker (if any) cleared here, BEFORE sending
+        dm[id] = { done: true, at: Date.now(), via: "lock", owner: TAB_UID };
         if (priorRecon) dm[id].recon = 1;
+        // On a RESUME visit, carry the marker's fields through the lock: a crash
+        // between this write and the first tail attach used to degrade the mark to
+        // a bare lock — heal (i) could then wrongly clear it (its "no sent means
+        // nothing attached" premise is false here) and re-send the HEAD clips.
+        // With sent/resumeFrom preserved, a crash in this window simply resumes.
+        if (resumeFrom != null) {
+          if (done[id] && done[id].sent) dm[id].sent = done[id].sent;
+          dm[id].resumeFrom = Math.min(resumeFrom, files.length);
+          dm[id].resumeTotal = files.length;
+        }
         const am = (await getLocal(["videoAttempts"])).videoAttempts || {};
-        delete am[id];
+        // Keep the FAIL history through the send attempt (drop only the claim):
+        // deleting the whole entry here reset `fails` to 0 on every retry visit,
+        // so the 3-strikes/24h attach pause could never actually trigger — chats
+        // with a flaky clip retried every 20 min forever (both diagnostics showed
+        // pausedAttach=0 despite repeated attach failures).
+        if (am[id] && am[id].fails) am[id] = { fails: am[id].fails, failAt: am[id].failAt, why: am[id].why };
+        else delete am[id];
         await setLocal({ videoSentThreads: dm, videoAttempts: am });
       }
       const startAt = resumeFrom != null ? Math.min(resumeFrom, files.length) : 0;
       console.debug("[SubSell] video: LOCKED chat + sending clips " + (startAt + 1) + "–" + files.length + " to", id);
 
-      // Best-effort send of the configured clip(s), in order. No retry, no fail record.
+      // Best-effort send of the configured clip(s), in order. A clip that provably
+      // fails to attach STOPS the set with a resume marker (finished on a later,
+      // paced visit) — continuing past it used to stamp the set "done" at 1-2 of 3
+      // with no way back: the "some chats get 1 video, some 2, not stable" bug.
       let okCount = 0;
+      let failedAt = -1;    // first clip whose attach provably failed (tray verified clean → re-attempt allowed)
+      let dirtyStop = false; // a clip whose attach is UNCONFIRMED — must never be re-attempted
       for (let i = startAt; i < files.length; i++) {
         // The between-videos gap is another window for the operator to navigate away —
         // never drop a clip into whatever chat is now open. Record the first
@@ -1308,31 +1466,78 @@
         if (!stillOnThread(id)) {
           console.debug("[SubSell] video: stopped mid-set at clip", i + 1, "— will finish on a later visit", id);
           const dm2 = (await getLocal(["videoSentThreads"])).videoSentThreads || {};
-          dm2[id] = { done: true, at: Date.now(), resumeFrom: i, resumeTotal: files.length };
+          if (dm2[id] && dm2[id].owner && dm2[id].owner !== TAB_UID) return; // taken over — its stamps govern
+          dm2[id] = { done: true, at: Date.now(), resumeFrom: i, resumeTotal: files.length, sent: okCount + startAt };
           await setLocal({ videoSentThreads: dm2 });
           videoLocked.delete(id); // allow the resume visit through the in-memory guard
+          // Queue the finish explicitly: waiting for an organic revisit left tails
+          // sitting for hours (both machine diagnostics showed exactly this).
+          {
+            const qk2 = sidebarKey || id;
+            if (qk2 && videoPending[qk2] == null && videoPending[id] == null) { videoPending[qk2] = Date.now(); persistDedup(); }
+          }
           setStatus({ lastAction: `video set paused at ${i}/${files.length} — finishing later`, currentThread: name });
           return;
         }
+        {
+          // TAKEOVER check: if another pass lock-stamped this chat (its `owner`),
+          // bow out silently — the new owner resumes strictly AFTER our last
+          // stamped clip, so nothing double-sends and nothing is skipped.
+          const curM = ((await getLocal(["videoSentThreads"])).videoSentThreads || {})[id];
+          if (curM && curM.owner && curM.owner !== TAB_UID) {
+            console.debug("[SubSell] video: another pass took over this set — bowing out", id);
+            return;
+          }
+          // PRE-ATTEMPT stamp: exclude the CURRENT clip from any future resume
+          // BEFORE touching it — a crash anywhere inside the attempt (even after
+          // Enter fired) can then never re-send it. This keeps the original
+          // "attempted clips never repeat" law under the new resume machinery;
+          // the cost is the old accepted trade (a crashed attempt's clip may be
+          // missed, never duplicated). Also refreshes `at` (the in-flight signal)
+          // and stamps ownership for the takeover check above.
+          const dmA = (await getLocal(["videoSentThreads"])).videoSentThreads || {};
+          dmA[id] = { done: true, at: Date.now(), via: "lock", owner: TAB_UID, sent: okCount + startAt, resumeFrom: i + 1, resumeTotal: files.length };
+          await setLocal({ videoSentThreads: dmA });
+        }
         setStatus({ lastAction: `sending video ${i + 1}/${files.length}…`, currentThread: name });
-        if (await injectVideo(files[i])) {
+        const res = await injectVideo(files[i], i === startAt ? (startAt === 0 ? "fresh-first" : "resume-first") : "later");
+        if (res === true) {
           okCount++;
-          // Crash-safe progress stamp: a delivered clip is recorded IMMEDIATELY, so
-          // a mid-set death can never look like "nothing sent" and get re-queued.
+          // Progress stamp: the delivered count is recorded IMMEDIATELY, so a
+          // mid-set death can never look like "nothing sent" and get re-queued.
+          // Never clobber a takeover: if another pass owns the mark now, bow out
+          // WITHOUT stamping — it resumed after our last stamped clip, so this
+          // just-delivered clip is excluded from its run (undercounted, never
+          // re-sent).
           const dmP2 = (await getLocal(["videoSentThreads"])).videoSentThreads || {};
-          dmP2[id] = { done: true, at: Date.now(), via: "lock", sent: okCount + startAt };
+          if (dmP2[id] && dmP2[id].owner && dmP2[id].owner !== TAB_UID) return;
+          dmP2[id] = { done: true, at: Date.now(), via: "lock", owner: TAB_UID, sent: okCount + startAt, resumeFrom: i + 1, resumeTotal: files.length };
           await setLocal({ videoSentThreads: dmP2 });
+        } else if (res === "dirty") {
+          // Attach unconfirmed AND the tray couldn't be verified clean — treat the
+          // clip as attempted (pre-attempt stamp already excludes it) and stop.
+          dirtyStop = true;
+          failedAt = i;
+          break;
+        } else {
+          // injectVideo=false ⇒ no preview ever appeared AND the tray was verified
+          // clean ⇒ nothing of this clip can have been sent — re-attempting
+          // exactly this clip later cannot duplicate.
+          failedAt = i;
+          break;
         }
         if (i < files.length - 1) await sleep(gapSec * 1000 + rand(0, 1500)); // pause BETWEEN videos
       }
-      if (okCount === 0 && startAt === 0) {
-        // NOTHING attached in this whole run. Attach detection is preview-based —
-        // no preview ever appeared, so nothing can possibly have been sent. It is
-        // therefore SAFE to undo the lock and let the chat retry later (with the
-        // normal 3-try/24h backoff) instead of burning it forever at 0 videos.
+      if (okCount === 0 && startAt === 0 && !dirtyStop) {
+        // NOTHING attached in this whole run, with the tray VERIFIED CLEAN. Attach
+        // detection is preview-based — no preview ever appeared, so nothing can
+        // possibly have been sent. It is therefore SAFE to undo the lock and let
+        // the chat retry later (with the normal 3-try/24h backoff) instead of
+        // burning it forever at 0 videos. (A dirty stop is NOT safe to undo — the
+        // resume marker written below skips the unverifiable clip instead.)
         videoLocked.delete(id);
         const undo = (await getLocal(["videoSentThreads"])).videoSentThreads || {};
-        if (undo[id] && undo[id].done && !undo[id].resumeFrom) {
+        if (undo[id] && undo[id].done && !undo[id].sent) {
           delete undo[id];
           await setLocal({ videoSentThreads: undo });
         }
@@ -1348,17 +1553,58 @@
         setStatus({ lastError: "video: nothing attached — will retry later", currentThread: name });
         return;
       }
+      if (failedAt >= 0) {
+        // PARTIAL set (some clips delivered, or a resume tail that attached 0):
+        // record the exact tail and finish on a later, paced visit. Previously a
+        // failed resume tail fell through to the terminal stamp — the mark burned
+        // to {done, sent:2} forever and logged "0 demo video(s) sent" (machine
+        // PC-o9ppb's whole sidebar was sent2 for exactly this reason).
+        // A CLEAN failure re-attempts the failed clip (provably nothing attached);
+        // a DIRTY one skips it forever (attach unverifiable — never risk a dup).
+        {
+          const chk = ((await getLocal(["videoSentThreads"])).videoSentThreads || {})[id];
+          if (chk && chk.owner && chk.owner !== TAB_UID) return; // taken over — its stamps govern
+        }
+        const resumeAtF = dirtyStop ? failedAt + 1 : failedAt;
+        if (resumeAtF >= files.length) {
+          // Nothing left to resume (dirty on the LAST clip) — terminal-stamp what
+          // was actually delivered; the unverifiable tail clip is dropped (the
+          // long-standing "never repeat an attempted clip" trade).
+          const dmT = (await getLocal(["videoSentThreads"])).videoSentThreads || {};
+          dmT[id] = { done: true, at: Date.now(), sent: okCount + startAt };
+          await setLocal({ videoSentThreads: dmT });
+          vstat("sent " + (okCount + startAt) + "/" + files.length + " — last clip unverifiable, dropped to stay duplicate-safe (" + (name || id) + ")");
+          if (okCount > 0) ask({ type: "LOG_EVENT", entry: { thread: name, threadId: id, buyer: "(demo video)", action: "video", reply: (okCount + startAt) + "/" + files.length + " demo video(s) sent" } });
+          return;
+        }
+        const dmF = (await getLocal(["videoSentThreads"])).videoSentThreads || {};
+        dmF[id] = { done: true, at: Date.now(), resumeFrom: resumeAtF, resumeTotal: files.length, sent: okCount + startAt };
+        await setLocal({ videoSentThreads: dmF });
+        videoLocked.delete(id); // the finishing visit must pass the in-memory guard
+        await recordVideoFail(id, "attach"); // 20-min backoff, 3 strikes → 24h pause
+        {
+          const qkF = sidebarKey || id;
+          if (qkF && videoPending[qkF] == null && videoPending[id] == null) { videoPending[qkF] = Date.now(); persistDedup(); }
+        }
+        vstat("sent " + (okCount + startAt) + "/" + files.length + " — clip " + (failedAt + 1) + " didn't attach; finishing on a later visit (" + (name || id) + ")");
+        setStatus({ lastError: "video: " + (okCount + startAt) + "/" + files.length + " sent, clip " + (failedAt + 1) + " didn't attach — will finish later", currentThread: name });
+        if (okCount > 0) ask({ type: "LOG_EVENT", entry: { thread: name, threadId: id, buyer: "(demo video)", action: "video", reply: (okCount + startAt) + "/" + files.length + " demo videos sent — finishing the rest on a later visit" } });
+        return;
+      }
       // Stamp the mark as a CONFIRMED send (sent count) so the backlog catch-up can
       // tell genuine sends from old ambiguous marks and never re-queues this chat.
       {
         const dmS = (await getLocal(["videoSentThreads"])).videoSentThreads || {};
+        if (dmS[id] && dmS[id].owner && dmS[id].owner !== TAB_UID) return; // taken over — its stamps govern
         dmS[id] = { done: true, at: Date.now(), sent: okCount + startAt };
-        await setLocal({ videoSentThreads: dmS });
+        const amS = (await getLocal(["videoAttempts"])).videoAttempts || {};
+        if (amS[id]) delete amS[id]; // full set delivered — clean fail/claim slate
+        await setLocal({ videoSentThreads: dmS, videoAttempts: amS });
       }
       vstat("sent ✓ " + (okCount + startAt) + "/" + files.length + " to " + (name || id));
       setStatus({ lastAction: `demo video(s) sent ✓ (${okCount + startAt}/${files.length})`, currentThread: name });
       // Mirror to the local + cloud activity log (fire-and-forget; no effect on sending).
-      ask({ type: "LOG_EVENT", entry: { thread: name, threadId: id, buyer: "(demo video)", action: "video", reply: okCount + " demo video(s) sent" } });
+      ask({ type: "LOG_EVENT", entry: { thread: name, threadId: id, buyer: "(demo video)", action: "video", reply: (okCount + startAt) + "/" + files.length + " demo video(s) sent" } });
     } catch (e) {
       vstat("error: " + e.message);
       setStatus({ lastError: "video error: " + e.message });
@@ -1456,7 +1702,12 @@
       }
       // Advance the clock: a SENT follow-up restarts it fully; a Claude [SKIP] only
       // pushes it HALF a period (a full reset meant a few skips = never following up).
-      const skipped = r.skip || !r.text || !r.text.trim();
+      // TITLE-ECHO GUARD: the model occasionally echoes the thread label ("Svargood ·
+      // S25 ultra S23 ultra…") as its whole answer — one machine SENT that to a
+      // buyer as a "follow-up". A real follow-up never begins with the full
+      // "Name · listing" label; treat an echo as a skip, never type it.
+      const titleEcho = !!(r.text && name && normMsg(name).length >= 8 && normMsg(r.text).startsWith(normMsg(name)));
+      const skipped = r.skip || !r.text || !r.text.trim() || titleEcho;
       st.lastAt = skipped ? now - Math.floor(thresholdMs / 2) : now;
       st.skips = skipped ? (st.skips || 0) + 1 : 0; // 3 in a row → skip-cap above stops the spend
       // Store the billed text BEFORE the send attempt — any abort below keeps it
@@ -1523,21 +1774,52 @@
       // header (it renders "Skylie and 1 other" or the member list), which made the
       // strict match fail forever on group threads.
       const label = ((name || "").split("·")[0] || "").split(/\s*(?:\+|&|,| et | and )\s*/i)[0].trim();
-      const headerHasName =
+      let headerHasName =
         label.length >= 2 &&
         safe(() => (((getMain() && getMain().innerText) || "").toLowerCase().indexOf(label.toLowerCase()) !== -1), false);
-      if (urlId && urlId !== id && headerHasName) {
-        console.debug("[SubSell] thread id redirected", id, "->", urlId, "— adopting");
+      let urlIdNow = urlId;
+      if (!(urlIdNow && urlIdNow !== id && headerHasName)) {
+        // SLOW-LOAD grace: on laggy Remote Desktop the URL/header can land seconds
+        // after the 2s settle — scoring a "failed open" here was how real buyers
+        // collected quarantine strikes. One more beat, then re-judge.
+        await sleep(4000);
+        if (location.href.includes(id)) {
+          // it WAS just slow — fall through below as a normal successful open
+          urlIdNow = id;
+        } else {
+          const m2 = safe(() => location.href.match(/\/t\/([^/?#]+)/), null);
+          urlIdNow = m2 ? m2[1] : "";
+          headerHasName =
+            label.length >= 2 &&
+            safe(() => (((getMain() && getMain().innerText) || "").toLowerCase().indexOf(label.toLowerCase()) !== -1), false);
+        }
+      }
+      if (urlIdNow === id) {
+        // late load — opened fine after all
+      } else if (urlIdNow && urlIdNow !== id && headerHasName) {
+        console.debug("[SubSell] thread id redirected", id, "->", urlIdNow, "— adopting");
         delete openFails[sidebarId];
-        id = urlId; // all state (dedup, caps, videos) now keys on the REAL id
+        id = urlIdNow; // all state (dedup, caps, videos) now keys on the REAL id
+        adoptedAlias[sidebarId] = id; // bridge sidebar-keyed lookups to the real id
         cooldowns[id] = Date.now() + COOLDOWN_MS; // mirror the entry cooldown
       } else {
         // QUARANTINE repeat offenders: a thread that keeps failing to open must not
         // eat scan cycles while real buyers (the next chats down) sit waiting.
-        openFails[sidebarId] = (openFails[sidebarId] || 0) + 1;
-        if (openFails[sidebarId] >= 3) {
-          cooldowns[sidebarId] = Date.now() + 30 * 60 * 1000;
-          setStatus({ lastError: "thread won't open (" + openFails[sidebarId] + "×) — parked for 30 min: " + sidebarId });
+        // ESCALATING parks (30 min → 6 h → 24 h): one diagnostic showed a thread at
+        // 60 failed opens because the flat 30-min park barely slowed the retry loop.
+        // Lanes 0/1/1.5 now honor this park (see pickTarget), so it actually holds.
+        openFails[sidebarId] = { n: openFailCount(sidebarId) + 1, at: Date.now() };
+        const nOF = openFails[sidebarId].n;
+        if (nOF >= 3) {
+          const parkMs = nOF >= 10 ? 24 * 3600 * 1000 : nOF >= 6 ? 6 * 3600 * 1000 : 30 * 60 * 1000;
+          cooldowns[sidebarId] = Date.now() + parkMs;
+          persistDedup();
+          if (nOF === 6) {
+            // Never park a possible buyer silently: one Activity row names the chat
+            // so the operator can open it by hand on this machine.
+            ask({ type: "LOG_EVENT", entry: { thread: name, threadId: sidebarId, buyer: "(system)", action: "video-status", reply: "a chat refuses to open (6+ tries) — open it by hand on this machine: " + (name || sidebarId) } });
+          }
+          setStatus({ lastError: "thread won't open (" + nOF + "×) — parked " + (parkMs >= 3600000 ? Math.round(parkMs / 3600000) + "h" : "30 min") + ": " + sidebarId });
         } else {
           setStatus({ lastError: "couldn't open thread " + sidebarId });
         }
@@ -1826,12 +2108,19 @@
   let lastAgedVideoAt = 0;
   const agedVideoTried = {}; // threadId -> last aged-lane attempt
   // Is this chat's video engine in a backoff that would refuse a send instantly?
+  // Checks BOTH the sidebar id and its adopted canonical id (group threads redirect
+  // on open; the engine records attempts under the ADOPTED id, the lanes look up
+  // the SIDEBAR id — without the alias the 20-min/24h backoffs never gated the
+  // lanes on this all-group fleet and a failing chat churned every scan).
   const videoAttBlocked = (videoAtt, id, now) => {
-    const att = (videoAtt || {})[id];
-    return !!(att && (
-      (((att.fails || 0) >= VIDEO_MAX_TRIES) && now - (att.failAt || 0) < 24 * 3600 * 1000) ||
-      (att.failAt && now - att.failAt < VIDEO_RETRY_BACKOFF)
-    ));
+    const one = (k) => {
+      const att = (videoAtt || {})[k];
+      return !!(att && (
+        (((att.fails || 0) >= VIDEO_MAX_TRIES) && now - (att.failAt || 0) < 24 * 3600 * 1000) ||
+        (att.failAt && now - att.failAt < VIDEO_RETRY_BACKOFF)
+      ));
+    };
+    return one(id) || (adoptedAlias[id] != null && one(adoptedAlias[id]));
   };
   function pickTarget(anchors, now, exclude, videoAtt) {
     // LANE 0 — OVERDUE (the never-miss guarantee): any chat on the waiting ledger
@@ -1846,6 +2135,12 @@
       if (!ws || now - ws < OVERDUE_MS) continue;
       if (!safe(() => snippetSuggestsBuyerLast(a), false)) continue; // resolved meanwhile
       if (now - (lastOpened[id] || 0) <= UNREAD_REOPEN_MS) continue;
+      // WON'T-OPEN quarantine: lane 0 deliberately ignores cooldowns, which made
+      // the 30-min "parked" cooldown on unopenable threads a no-op — one broken
+      // thread was retried every ~4 min for hours (a diagnostic showed 60 failed
+      // opens). Honor the park ONLY for repeat open-failers; normal chats keep
+      // lane 0's cooldown immunity.
+      if (openFailCount(id) >= 3 && now <= (cooldowns[id] || 0)) continue;
       if (ws < overdueT) { overdueT = ws; overdue = a; }
     }
     if (overdue) return overdue;
@@ -1885,6 +2180,7 @@
       if (!safe(() => isUnreadAnchor(a), false)) continue;
       if (!safe(() => snippetSuggestsBuyerLast(a), false)) continue; // stale dot → not lane 1
       if (now - (lastOpened[id] || 0) <= UNREAD_REOPEN_MS) continue;
+      if (openFailCount(id) >= 3 && now <= (cooldowns[id] || 0)) continue; // won't-open park (see lane 0)
       return a; // first match = newest buyer → instant reply
     }
 
@@ -1909,6 +2205,9 @@
         // Never churn a chat the video engine would refuse instantly — mirrors the
         // 3-fail/24h pause and the retry backoff exits exactly.
         if (videoAttBlocked(videoAtt, id, now)) continue;
+        // Won't-open park applies here too — the 15-min cooldown bypass below used
+        // to override it, so one unopenable pending chat was retried every scan.
+        if (openFailCount(id) >= 3 && now <= (cooldowns[id] || 0)) continue;
         if (now <= (cooldowns[id] || 0) && now - t < 15 * 60 * 1000) continue; // fresh cooldown; wait unless pending >15 min
         if (t < pvT) { pvT = t; pv = a; }
       }
@@ -2004,12 +2303,23 @@
         if (typeof waitingSince[k] !== "number" || nowT - waitingSince[k] > 24 * 3600 * 1000) delete waitingSince[k];
       }
       let unread = 0, waiting = 0, purgedStale = false;
+      const capN = Math.max(0, Number(settings.maxRepliesPerConvo) || 0);
       for (const a of anchors) {
         if (safe(() => isUnreadAnchor(a), false)) unread++;
         if (safe(() => snippetSuggestsBuyerLast(a), false)) {
           waiting++;
           const wid = threadId(a);
-          if (wid && waitingSince[wid] == null) waitingSince[wid] = nowT;
+          // REPLY-CAPPED chats are resolved BY POLICY — the bot may not answer, so
+          // holding them on the never-miss ledger jammed lane 0 (oldest-first) and
+          // kept overdueNow true, force-queueing every video. The popup's unread
+          // count still shows them; serving them is the operator's call.
+          // replyCounts keys on the ADOPTED id for redirected group threads — check
+          // through the alias too, or capped group chats (this whole fleet) would
+          // keep re-stamping forever.
+          const effReplies = Math.max(replyCounts[wid] || 0, adoptedAlias[wid] != null ? (replyCounts[adoptedAlias[wid]] || 0) : 0);
+          if (wid && capN > 0 && effReplies >= capN) {
+            if (waitingSince[wid] != null) { delete waitingSince[wid]; purgedStale = true; }
+          } else if (wid && waitingSince[wid] == null) waitingSince[wid] = nowT;
         } else if (safe(() => (a.innerText || "").split("\n").filter((s) => s.trim()).length >= 2, false)) {
           // Row is FULLY RENDERED (name + snippet) and reads not-buyer-last — the
           // exact condition under which lane 0 refuses to serve it, so its ledger
@@ -2022,6 +2332,30 @@
       if (purgedStale) persistDedup(); // batched: at most one local write per scan, only on change
       setStatus({ marketplaceAnchorCount: anchors.length, unreadCount: unread, waitingCount: waiting, videoQueueCount: Object.keys(videoPending).length, lastAction: settings.enabled ? "scanning" : "off" });
       if (!settings.enabled || !onMarketplace()) return;
+
+      // RESUME-MARK RESCUE: a crash mid-set leaves {done, resumeFrom, resumeTotal}
+      // with no pending-queue entry (the lock cleared it), and the tail then waited
+      // for an organic revisit that busy machines never make. Queue it explicitly.
+      // Marks live under the ADOPTED id for redirected group threads; rendered rows
+      // give the sidebar id, so look through the alias too.
+      {
+        const vtScan = (await getLocal(["videoSentThreads"])).videoSentThreads || {};
+        let queuedResume = false;
+        for (const a of anchors) {
+          const rid = threadId(a);
+          if (!rid) continue;
+          const adKey = adoptedAlias[rid];
+          const mk = vtScan[rid] || (adKey != null ? vtScan[adKey] : null);
+          if (!mk || typeof mk.resumeFrom !== "number") continue;
+          if (typeof mk.resumeTotal === "number" && mk.resumeFrom >= mk.resumeTotal) continue; // nothing left to send
+          if (mk.via === "lock" && nowT - (mk.at || 0) < 30 * 60 * 1000) continue; // in-flight — leave it alone
+          if (videoPending[rid] == null && (adKey == null || videoPending[adKey] == null)) {
+            videoPending[rid] = nowT;
+            queuedResume = true;
+          }
+        }
+        if (queuedResume) persistDedup();
+      }
 
       // BACKLOG CATCH-UP: while armed (operator pressed "Catch up videos"), queue
       // replied-to chats that have no CONFIRMED video for a video visit. Delivery
@@ -2188,7 +2522,12 @@
     for (const k of Object.keys(vt)) {
       const e = vt[k];
       const confirmed = e && e.done && (e.sent || e.via === "dom" || e.resumeFrom != null || e.resumeTotal != null);
-      if (e && (e === true || (e.done && !confirmed))) { delete vt[k]; delete am[k]; videoLocked.delete(k); cleared++; }
+      // A bare via:"lock" younger than the in-flight window is a set being sent
+      // RIGHT NOW in some pass — clearing it (and its claim) would let a second
+      // full set go out in parallel. Skip; a genuinely orphaned lock ages past
+      // the window and is healed/cleared by the normal paths.
+      const inFlight = e && e.via === "lock" && Date.now() - (e.at || 0) < 30 * 60 * 1000;
+      if (e && (e === true || (e.done && !confirmed && !inFlight))) { delete vt[k]; delete am[k]; videoLocked.delete(k); cleared++; }
     }
     videoCatchUp = { armed: true, at: Date.now() };
     catchUpDry = 0;
@@ -2264,9 +2603,12 @@
               " vidQ=" + ageM(videoPending[id]) +
               " cool=" + (cooldowns[id] && cooldowns[id] > now ? Math.round((cooldowns[id] - now) / 60000) + "m" : "-") +
               " replies=" + (replyCounts[id] || 0) +
-              " vmark=" + (ve ? (ve.sent ? "sent" + ve.sent : ve.via || "done") : "-") +
+              " vmark=" + (ve
+                ? (ve.sent ? "sent" + ve.sent : ve.via || "done") +
+                  (typeof ve.resumeFrom === "number" ? "+r" + ve.resumeFrom + "/" + (ve.resumeTotal != null ? ve.resumeTotal : "?") : "")
+                : "-") +
               " att=" + (ae && (ae.fails || 0) >= 3 ? "PAUSED-" + (ae.why || "load") : ae && ae.fails ? "f" + ae.fails : "-") +
-              " \"" + (trunc(lines2.slice(1).join(" "), 32) || "") + "\""
+              " \"" + (trunc(lines2.slice(1).join(" "), 48) || "") + "\""
             );
           });
           const m = location.href.match(/\/t\/([^/?#]+)/);

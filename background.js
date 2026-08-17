@@ -1269,15 +1269,16 @@ async function buildDiagnostic() {
     " act=\"" + cut(tickd.lastAction, 60) + "\" vid=\"" + cut(tickd.videoLast, 60) + "\" err=\"" + cut(tickd.lastError, 60) + "\""
   );
   const vt = st.videoSentThreads || {};
-  let vTot = 0, vSent = 0, vLock = 0, vDom = 0, vTail = 0, vRecon = 0, vDoneNoSent = 0;
+  let vTot = 0, vSent = 0, vLock = 0, vDom = 0, vTail = 0, vRecon = 0, vDoneNoSent = 0, vResume = 0;
   for (const k of Object.keys(vt)) {
     const e = vt[k]; if (!e) continue; vTot++;
     if (e.sent) vSent++;
     if (e.via === "lock") vLock++; else if (e.via === "dom") vDom++; else if (e.via === "taildrop") vTail++;
     if (e.recon) vRecon++;
-    if (e.done && !e.sent && e.via !== "taildrop") vDoneNoSent++;
+    if (typeof e.resumeFrom === "number") vResume++; // mid-set marker awaiting its tail
+    else if (e.done && !e.sent && e.via !== "taildrop") vDoneNoSent++;
   }
-  L.push("video-marks: total=" + vTot + " sent=" + vSent + " lock=" + vLock + " dom=" + vDom + " taildrop=" + vTail + " recon=" + vRecon + " done-no-sent=" + vDoneNoSent);
+  L.push("video-marks: total=" + vTot + " sent=" + vSent + " lock=" + vLock + " dom=" + vDom + " taildrop=" + vTail + " recon=" + vRecon + " resume-pending=" + vResume + " done-no-sent=" + vDoneNoSent);
   const oldest = (m) => { let o = null; for (const k of Object.keys(m || {})) { const v = m[k]; if (typeof v === "number" && (o == null || v < o)) o = v; } return o; };
   const cd = st.cooldowns || {}; let cdFut = 0; for (const k of Object.keys(cd)) if (cd[k] > now) cdFut++;
   const rc = st.replyCounts || {}; let capped = 0;
@@ -1356,7 +1357,9 @@ chrome.runtime.onMessage.addListener((msg, _sender, sendResponse) => {
           // foreground pages can) — remember it so the updater finds the folder
           // even when it was renamed or extracted under an unexpected name.
           const n = String(msg.name || "").trim();
-          if (n && !/[\\/]/.test(n)) chrome.storage.local.set({ sudDirName: n });
+          // "crxfs" is the packaged-extension VIRTUAL filesystem root, not a real
+          // Downloads folder name (a diagnostic showed it stored) — never keep it.
+          if (n && !/[\\/]/.test(n) && n.toLowerCase() !== "crxfs") chrome.storage.local.set({ sudDirName: n });
           sendResponse({ ok: true });
           break;
         }
@@ -1517,7 +1520,10 @@ chrome.runtime.onMessage.addListener((msg, _sender, sendResponse) => {
             break;
           }
           await incrementCounters();
-          await appendLog({ thread: msg.threadName, buyer: "(quiet — follow-up)", action: "followup", reply: ftext });
+          // No appendLog here: the content script logs the follow-up when it is
+          // actually DELIVERED (LOG_EVENT). Logging at generation time too meant
+          // every follow-up showed twice in the Activity feed (same minute, same
+          // text) — and logged follow-ups that were never sent at all.
           sendResponse({ ok: true, text: ftext });
           break;
         }
