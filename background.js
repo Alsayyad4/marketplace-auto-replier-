@@ -771,7 +771,7 @@ function buildSystemPrompt(settings) {
       lines.push("1. FIRST REPLY sets the frame: answer their question in one short line, add ONE concrete reason the shop beats the ad (test it in your hands, several units to compare, trade-in evaluated on the spot), then ONE easy question. Never open with a wall of text.");
       lines.push("2. LADDER, don't leap: each message = short answer + ONE small easy question (which model? budget? trade-in?) — micro-commitments build momentum toward the visit.");
       lines.push("3. ASSUME the visit: never ask IF they want to come — ask WHEN. Prefer the two-option close: \"Tu passes aujourd'hui ou demain?\" / \"Afternoon or evening better for you?\"");
-      lines.push("4. RESERVE technique (the strongest move): offer to put the item aside — \"Je peux te le mettre de côté jusqu'à ce soir — c'est à quel nom?\" Asking for their name locks the commitment. Use it the moment they show real interest.");
+      lines.push("4. FIRST COME, FIRST SERVED (the strongest move — and it's the truth): we NEVER reserve, hold, or put items aside — liquidation stock rotates daily: new arrivals constantly, current pieces gone fast. Say it straight the moment they show interest: \"On ne réserve pas — premier arrivé, premier servi. À ce prix ça part vite. Tu peux passer aujourd'hui?\" Availability questions get the same frame: \"Oui, encore là pour l'instant — mais ça bouge vite et on ne réserve pas.\" If a buyer ASKS you to reserve: warmly explain it's first come first served, and that even if that exact piece sells there are always fresh arrivals in store — one more reason to just come by.");
       lines.push("5. TRADE-IN HOOK, early: ask if they have a phone to trade — a trade-in can ONLY be evaluated in person, which makes the visit necessary instead of optional (and a newer phone can even mean CASH for them).");
       lines.push("6. VALUE STACK before any price talk: warranty, tested in front of them, several units to choose from, trade-in/cash, liquidation pricing. Sell the VISIT itself: see it, touch it, compare, walk out with it today.");
       lines.push("7. HONEST urgency only: liquidation is real, stock does move — say so (\"à ce prix-là, ça part vite cette semaine\"). NEVER invent fake buyers or fake deadlines.");
@@ -890,7 +890,7 @@ async function callClaudeFollowup(settings, context, threadName) {
           "Decide whether there is a genuine reason to send ONE short follow-up to re-engage them (they showed real interest, asked about a model, a question was left open, or they hinted at coming by). " +
           "If YES: reply with ONLY the follow-up message, built like a CLOSER's second touch, in the buyer's language, freshly worded (never reuse a previous line): " +
           "(1) open with a light personal hook back to what THEY wanted (the model/budget they mentioned), " +
-          "(2) give ONE honest new reason to come now — liquidation stock at that price is moving / still have units to compare / their trade-in can be evaluated on the spot — never invent stock, buyers, or deadlines, " +
+          "(2) give ONE honest new reason to come now — liquidation stock rotates daily and it's FIRST COME FIRST SERVED (we never reserve or hold items) / new arrivals come in constantly, worth seeing in person / their trade-in can be evaluated on the spot — never invent specific stock, buyers, or deadlines, and NEVER offer to reserve or set anything aside, " +
           "(3) end with ONE easy time-anchored question (\"Tu passes aujourd'hui ou demain?\" / \"Afternoon or evening work better?\"). " +
           "Two short sentences maximum, warm and casual — a busy seller texting, not a marketing blast. " +
           "If there is NO good reason (they declined, said no, it's resolved, they set a visit time already, or another nudge would be spammy): reply with exactly [SKIP].\n\n" +
@@ -1072,7 +1072,7 @@ const ALARM_PREFIX = "followup:";
 const VISIT_PREFIX = "visitconfirm:";
 
 const DEFAULT_VISIT_MSG =
-  "Allô! Tu passes toujours au shop aujourd'hui? Je te garde ça de côté 😊 (Still coming by today? I'm setting it aside for you)";
+  "Allô! Tu passes toujours au shop aujourd'hui? On ne réserve pas — premier arrivé, premier servi 😊 (Still coming by today? First come, first served!)";
 
 async function scheduleFollowUps(threadId) {
   const settings = await getSettings();
