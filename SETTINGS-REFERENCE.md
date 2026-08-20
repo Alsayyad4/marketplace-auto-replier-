@@ -67,6 +67,7 @@ endpoint serves that object to the extension.
 - `smartFollowupMaxCount` — number (default `1`). Max follow-ups per chat, total (e.g. 1 or 2).
 - `smartFollowupQuietHours` — number (default `6`). Hours a chat must be quiet before the **first** follow-up.
 - `smartFollowupGapHours` — number (default `24`). Hours between follow-ups (2nd, 3rd…).
+- `coaching` — array (default `[]`). Graded real replies from the dashboard's **Activity** tab (👍 = imitate, 👎 + correction = the right answer): `[{kind:"good"|"fix", buyer, reply, bad, better, note, at}]`, capped at 30 (FIFO). Rendered into every bot's system prompt as highest-priority coaching; edited only through the Activity tab's Teach buttons + Coaching list.
 
 **Simple timer follow-up** (fixed message; separate feature — use one or the other):
 - `followUps` — array of `{ name, afterMinutes (number), message, enabled (bool) }`. After the bot replies it arms a timer; if the buyer stays quiet that long it sends `message` once.

@@ -42,6 +42,11 @@ const DEFAULTS = {
   instructions:
     "Be friendly and concise. Auto-detect the buyer's language (French or English) and reply in the same language; for French use casual Quebec French (tutoiement, 'allô', 'parfait', 'à+'). Quote prices from the listings. Never discount more than 10% without flagging a human. If the buyer is rude, scammy, or asking something unusual, return [HUMAN] with a short reason.",
   examples: "", // few-shot buyer->reply pairs the user pastes to teach tone/video/escalation
+  // Teach-by-grading (dashboard Activity tab): 👍 marks a real reply as a model
+  // answer, 👎 + correction records what SHOULD have been said. Rendered into the
+  // system prompt as highest-priority coaching. [{kind:"good"|"fix", buyer, reply,
+  // bad, better, note, at}] — capped at 30 (FIFO) by the dashboard.
+  coaching: [],
   offPlatformGuard: true, // hard rules: no phone numbers / links / "contact me elsewhere"
   // closer mode — drive buyers to the physical shop, no exact prices in chat
   closerMode: true,
@@ -805,6 +810,27 @@ function buildSystemPrompt(settings) {
     lines.push("");
     lines.push("EXAMPLE CONVERSATIONS / RULES (mimic this tone, format, and decisions — and treat any rule written here as a strict instruction to follow silently, never to repeat to the buyer; e.g. when to escalate [HUMAN]). Do not copy verbatim; adapt to the actual buyer:");
     lines.push(settings.examples.trim());
+  }
+
+  // OPERATOR COACHING — real replies the boss graded in the dashboard's Activity
+  // tab (👍 = model answer, 👎 + correction = what should have been said). The
+  // strongest training signal we have: real buyers, real mistakes, the operator's
+  // own words. Capped + truncated so the prompt stays bounded (and the byte-stable
+  // prefix stays cacheable — coaching only changes when the operator grades).
+  {
+    const cut2 = (s, n) => { s = s == null ? "" : String(s).replace(/\s+/g, " ").trim(); return s.length > n ? s.slice(0, n) + "…" : s; };
+    const coach = (Array.isArray(settings.coaching) ? settings.coaching : []).filter((c) => c && (c.kind === "good" ? c.reply : c.better)).slice(-30);
+    if (coach.length) {
+      lines.push("");
+      lines.push("OPERATOR COACHING (the boss graded real replies — this OUTRANKS every style rule above; learn the underlying lesson and apply it to similar situations, don't just parrot the words):");
+      for (const c of coach) {
+        if (c.kind === "good") {
+          lines.push(`✔ GOOD reply (imitate this style and decision) — buyer: "${cut2(c.buyer, 140)}" → reply: "${cut2(c.reply, 240)}"`);
+        } else {
+          lines.push(`✘ CORRECTED — buyer: "${cut2(c.buyer, 140)}" → the bot WRONGLY said: "${cut2(c.bad, 140)}". The RIGHT answer${c.note ? " (" + cut2(c.note, 90) + ")" : ""}: "${cut2(c.better, 240)}"`);
+        }
+      }
+    }
   }
 
   lines.push("");

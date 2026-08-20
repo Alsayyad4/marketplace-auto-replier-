@@ -263,8 +263,13 @@
           </div>
           <div id="activityTotals" class="hint">Open this tab to load.</div>
           <div id="activityByMachine" class="hint" style="margin:6px 0;"></div>
+          <div id="coachingBox" style="margin:10px 0;padding:10px;border:1px solid #444;border-radius:8px;">
+            <b>🎓 Coaching — teach the bot from real replies</b>
+            <div class="hint" style="margin:4px 0;">Grade any text reply below: 👍 = "answer like this" &nbsp;·&nbsp; 👎 = "wrong — here's what to say". Every machine learns it within ~1 minute. Kept: last 30 lessons.</div>
+            <div id="coachingList" class="hint">No lessons yet.</div>
+          </div>
           <table id="activityTable">
-            <thead><tr><th>When</th><th>Machine</th><th>Chat</th><th>Type</th><th>Buyer said</th><th>Bot reply</th></tr></thead>
+            <thead><tr><th>When</th><th>Machine</th><th>Chat</th><th>Type</th><th>Buyer said</th><th>Bot reply</th><th>Teach</th></tr></thead>
             <tbody></tbody>
           </table>
           <p class="hint" style="margin-top:8px;">Needs the one-time setup: run <code>supabase/schema.sql</code> (adds the messages table) and deploy the log endpoint — <code>supabase functions deploy subsell-log --no-verify-jwt</code>. Each extension reports automatically once it has your config URL.</p>

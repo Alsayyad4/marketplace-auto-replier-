@@ -57,6 +57,7 @@
     smartFollowupMaxCount: 1,
     smartFollowupQuietHours: 6,
     smartFollowupGapHours: 24,
+    coaching: [], // graded real replies from the Activity tab (👍/👎+correction) — fed into every bot's prompt
   };
 
   const VIDEO_BUCKET = "subsell-videos"; // Supabase Storage bucket for central demo videos
@@ -246,11 +247,13 @@
     settings.followUps = settings.followUps || [];
     settings.videos = settings.videos || [];
     settings.demoVideoUrls = settings.demoVideoUrls || [];
+    settings.coaching = settings.coaching || [];
     fieldsToForm();
     renderListings();
     renderFollowUps();
     renderVideos();
     renderDemoVideos();
+    renderCoaching();
   }
 
   /* ---------------- config URL ---------------- */
@@ -314,6 +317,48 @@
   /* ---------------- activity log (combined feed across all machines) ---------------- */
   const truncTxt = (s, n) => { s = s == null ? "" : String(s); return s.length > n ? s.slice(0, n) + "…" : s; };
 
+  /* ----- 🎓 Coaching: grade real replies (👍 imitate / 👎 + correction) -----
+   * Lessons live in settings.coaching (capped 30, FIFO) and ride the normal
+   * config save — every machine's next system prompt includes them (~1 min). */
+  const COACH_MAX = 30;
+  function renderCoaching() {
+    const el = $("coachingList");
+    if (!el) return;
+    const list = settings.coaching || [];
+    if (!list.length) { el.textContent = "No lessons yet — grade a reply below."; return; }
+    el.innerHTML = "";
+    list.slice().reverse().forEach((c) => {
+      const idx = settings.coaching.indexOf(c);
+      const row = document.createElement("div");
+      row.style.cssText = "display:flex;gap:8px;align-items:flex-start;margin:4px 0;";
+      const txt = document.createElement("div");
+      txt.style.flex = "1";
+      txt.textContent = c.kind === "good"
+        ? `👍 "${truncTxt(c.buyer, 60)}" → "${truncTxt(c.reply, 90)}"`
+        : `👎 "${truncTxt(c.buyer, 60)}" → should say: "${truncTxt(c.better, 90)}"${c.note ? "  (" + truncTxt(c.note, 40) + ")" : ""}`;
+      const del = document.createElement("button");
+      del.type = "button";
+      del.className = "danger";
+      del.textContent = "✕";
+      del.title = "Forget this lesson";
+      del.addEventListener("click", async () => {
+        if (idx >= 0) settings.coaching.splice(idx, 1);
+        renderCoaching();
+        await saveConfig();
+      });
+      row.appendChild(txt);
+      row.appendChild(del);
+      el.appendChild(row);
+    });
+  }
+  async function addCoaching(item) {
+    settings.coaching = settings.coaching || [];
+    settings.coaching.push(Object.assign({ at: Date.now() }, item));
+    while (settings.coaching.length > COACH_MAX) settings.coaching.shift();
+    renderCoaching();
+    await saveConfig();
+  }
+
   async function loadActivity() {
     if (!client || !session) return;
     const totalsEl = $("activityTotals");
@@ -354,7 +399,7 @@
     tb.innerHTML = "";
     if (!rows.length) {
       const tr = document.createElement("tr"), td = document.createElement("td");
-      td.colSpan = 6; td.className = "hint";
+      td.colSpan = 7; td.className = "hint";
       td.textContent = "No messages yet — once your extensions reply or send a video they'll show up here.";
       tr.appendChild(td); tb.appendChild(tr); return;
     }
@@ -369,6 +414,65 @@
         truncTxt(r.bot_text, 240),
       ];
       for (const c of cells) { const td = document.createElement("td"); td.textContent = c; tr.appendChild(td); }
+      // 🎓 Teach cell — only real conversational replies are gradeable.
+      const tdT = document.createElement("td");
+      const gradeable = (r.kind === "text" || r.kind === "followup") && r.bot_text;
+      if (gradeable) {
+        tdT.style.whiteSpace = "nowrap";
+        const up = document.createElement("button");
+        up.type = "button"; up.textContent = "👍"; up.title = "Good — answer like this";
+        up.addEventListener("click", async () => {
+          up.disabled = true;
+          await addCoaching({ kind: "good", buyer: truncTxt(r.buyer_text, 200), reply: truncTxt(r.bot_text, 300) });
+          up.textContent = "✓";
+        });
+        const down = document.createElement("button");
+        down.type = "button"; down.textContent = "👎"; down.title = "Wrong — correct it";
+        down.addEventListener("click", () => {
+          if (tr.nextSibling && tr.nextSibling.dataset && tr.nextSibling.dataset.fixrow) { tr.nextSibling.remove(); return; }
+          const ftr = document.createElement("tr");
+          ftr.dataset.fixrow = "1";
+          const ftd = document.createElement("td");
+          ftd.colSpan = 7;
+          const ta = document.createElement("textarea");
+          ta.style.cssText = "width:100%;min-height:60px;box-sizing:border-box;";
+          ta.placeholder = "Write what the bot SHOULD have answered…";
+          ta.value = r.bot_text || "";
+          const note = document.createElement("input");
+          note.type = "text";
+          note.style.cssText = "width:100%;box-sizing:border-box;margin-top:4px;";
+          note.placeholder = "Optional: the rule to learn (e.g. 'never repeat the price twice — push the visit')";
+          const ok = document.createElement("button");
+          ok.type = "button"; ok.textContent = "Save lesson";
+          ok.addEventListener("click", async () => {
+            const better = ta.value.trim();
+            if (!better) { ta.focus(); return; }
+            ok.disabled = true;
+            await addCoaching({
+              kind: "fix",
+              buyer: truncTxt(r.buyer_text, 200),
+              bad: truncTxt(r.bot_text, 200),
+              better: truncTxt(better, 300),
+              note: truncTxt(note.value.trim(), 120),
+            });
+            ftr.remove();
+          });
+          const cancel = document.createElement("button");
+          cancel.type = "button"; cancel.textContent = "Cancel"; cancel.className = "danger";
+          cancel.addEventListener("click", () => ftr.remove());
+          ftd.appendChild(ta); ftd.appendChild(note);
+          const btnRow = document.createElement("div");
+          btnRow.style.cssText = "margin-top:4px;display:flex;gap:8px;";
+          btnRow.appendChild(ok); btnRow.appendChild(cancel);
+          ftd.appendChild(btnRow);
+          ftr.appendChild(ftd);
+          tr.after(ftr);
+          ta.focus();
+        });
+        tdT.appendChild(up);
+        tdT.appendChild(down);
+      }
+      tr.appendChild(tdT);
       tb.appendChild(tr);
     }
   }

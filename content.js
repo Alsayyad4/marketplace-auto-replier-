@@ -1917,6 +1917,29 @@
       return;
     }
 
+    // VIDEOS-FIRST (v0.21.24, operator directive): the demo set goes out the
+    // moment a buyer engages — BEFORE the text reply, with no first-video delay.
+    // Rationale: the post-reply tail (delay → clips → gaps) was where every
+    // timing bug lived; sending on a freshly-opened, settled chat is the most
+    // reliable moment there is, and the buyer watching clips while the reply is
+    // being written reads perfectly natural. All one-set-per-chat guards live
+    // inside maybeSendVideo, so for an already-served chat this returns in
+    // milliseconds. Costs nothing: zero extra API calls.
+    if (!videoLocked.has(id)) {
+      await maybeSendVideo(id, name, true, sidebarId);
+      if (videoLocked.has(id)) clearVideoPending(sidebarId); // terminal → clear the sidebar-keyed pending too
+      if (!stillOnThread(id)) {
+        // Operator navigated during the send. Nothing is marked handled and the
+        // waiting ledger still holds this chat — the reply happens next cycle.
+        setStatus({ lastAction: "videos sent — reply postponed (you switched chats)", currentThread: name });
+        return;
+      }
+      // The buyer may have kept typing while the clips went out — reply to their
+      // FRESHEST message, not the pre-video snapshot.
+      const t2 = buyerSpokeLast();
+      if (t2 && !isOwnEcho(t2.buyerMessage) && lastHandled[id] !== t2.buyerMessage) turn = t2;
+    }
+
     setStatus({ lastAction: "buyer said: " + trunc(turn.buyerMessage, 80), currentThread: name });
 
     // Pre-call guard: if the operator already clicked into a different chat during
