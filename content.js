@@ -1926,6 +1926,7 @@
     // inside maybeSendVideo, so for an already-served chat this returns in
     // milliseconds. Costs nothing: zero extra API calls.
     if (!videoLocked.has(id)) {
+      refreshThreadLock(sidebarId); // uploads can outlive the cross-tab lease
       await maybeSendVideo(id, name, true, sidebarId);
       if (videoLocked.has(id)) clearVideoPending(sidebarId); // terminal → clear the sidebar-keyed pending too
       if (!stillOnThread(id)) {
