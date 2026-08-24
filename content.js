@@ -1268,16 +1268,16 @@
       const verify = (await getLocal(["videoAttempts"])).videoAttempts || {};
       if (!(verify[id] && verify[id].claimTab === TAB_UID)) { vstat("claim race — another pass owns " + (name || id)); return; } // lost the claim race
 
-      // Delays (configurable): pause before the FIRST video + pause BETWEEN videos.
-      const firstSec = centralDelay != null ? centralDelay : cfg.videoDelaySec != null ? cfg.videoDelaySec : 10;
-      // Clamp the between-clips gap to 10 min: an extreme dashboard value must
-      // never stretch a live set's stamp-to-stamp gap past the 30-min in-flight
-      // window (and a longer pause serves no one).
-      const gapSec = Math.min(600, betweenSec != null && betweenSec >= 0 ? betweenSec : 8);
-      if (!immediate && resumeFrom == null) {
-        setStatus({ lastAction: `video in ${Math.round(firstSec)}s…`, currentThread: name });
-        await sleep(firstSec * 1000);
-      }
+      // NO DELAYS (v0.21.25, operator directive: "any convo start triggers the
+      // video sending — no need to wait seconds — send the videos right away"):
+      // the pre-first-video wait is GONE on every path (the dashboard's
+      // demoVideoDelaySec no longer waits), and the between-clips gap is capped
+      // at 3s — real upload pacing is handled adaptively by injectVideo's
+      // tray-clear wait, so long fixed gaps only added abort windows. `immediate`
+      // and centralDelay are kept in the signature/config for compatibility but
+      // no longer sleep. (void reads keep linters honest.)
+      void immediate; void centralDelay;
+      const gapSec = Math.min(3, betweenSec != null && betweenSec >= 0 ? betweenSec : 3);
 
       // ABORT if the operator opened a different chat during the pre-video wait —
       // uploading now would drop the clip into the WRONG conversation. Not locked
