@@ -1964,6 +1964,31 @@
       // make sure this chat got its one-time video (idempotent: no-op if already sent).
       await maybeSendVideo(id, name, false, sidebarId);
       if (videoLocked.has(id)) clearVideoPending(sidebarId); // terminal → clear sidebar-keyed pending
+      // COURTESY CLOSE at the cap — ZERO API cost. The operator's law is "every
+      // message gets an answer"; going silent mid-conversation broke it. The
+      // FIRST buyer message past the cap gets ONE canned, settings-built closing
+      // line (no Claude call, so the cap still caps the spend); after that,
+      // silence. replyCounts moves to cap+1 as the sent-once flag.
+      if (repliesSoFar === replyCap && stillOnThread(id)) {
+        const composerC = findComposer();
+        if (composerC) {
+          const closeLine =
+            "Passe nous voir au shop quand tu veux — " +
+            (settings.businessAddress || "757 Rue Beaubien E, Montréal") + ", " +
+            (settings.businessHoursText || "9AM–10PM, 7 days") +
+            " 😊 On va bien s'occuper de toi! (Come by anytime — we'll take care of you!)";
+          const okC = await typeAndSend(composerC, closeLine);
+          if (okC) {
+            rememberSent(closeLine);
+            lastHandled[id] = turn.buyerMessage;
+            replyCounts[id] = replyCap + 1; // courtesy close sent once — never again
+            persistDedup();
+            ask({ type: "LOG_EVENT", entry: { thread: name, threadId: id, buyer: trunc(turn.buyerMessage, 120), action: "text", reply: closeLine } });
+            setStatus({ lastAction: "cap reached — one-time courtesy close sent (no API cost)", lastReplySent: trunc(closeLine, 120), currentThread: name });
+            return;
+          }
+        }
+      }
       if ((settings.convoCapBehavior || "stop") === "notify") {
         setStatus({ lastAction: "needs you — reply cap reached (" + repliesSoFar + "/" + replyCap + "), buyer still messaging", currentThread: name });
       } else {

@@ -845,13 +845,130 @@ function buildSystemPrompt(settings) {
   lines.push(
     "CRITICAL — OUTPUT FORMAT: Output ONLY the exact text to send to the buyer (or a single token like [HUMAN]). Send NOTHING else — no reasoning, no preamble, no commentary about what the buyer 'really meant', no mention of 'UI prompts', 'quick-reply buttons', 'automated suggestion', or the buyer's name as a note, and never a '---' separator. The buyer sees your output VERBATIM, so if you wouldn't want them to read a line, do not write it. Begin directly with the first word of the message."
   );
-  return lines.join("\n");
+  const out = lines.join("\n");
+  // CACHE-FLOOR SIZING (economy): Haiku silently IGNORES cache_control below a
+  // 4096-token prompt — a ~2-3k-token sheet was billed at FULL price on every
+  // call while the cache marker sat inert. When the assembled prompt lands
+  // under the floor, append just enough of the static PHRASEBOOK below to cross
+  // it: from then on, repeat calls bill the whole cached prefix at ~10%, which
+  // beats the smaller uncached prompt after the very first hit (the fleet
+  // shares one API key + identical settings = one shared cache entry). The
+  // phrasebook is genuinely useful reference, byte-stable for a given settings
+  // object (cache stays valid), and big configs never pay for padding. Sonnet's
+  // floor is 1024 tokens — already crossed, so no padding there.
+  if (/haiku/i.test(String(settings.model || DEFAULTS.model))) {
+    const est = Math.ceil(out.length / 3.5); // rough chars→tokens
+    const estFull = Math.ceil((out.length + SALES_PHRASEBOOK.length + 90) / 3.5);
+    // Pad ONLY when the phrasebook can actually carry the prompt over the
+    // floor — padding that still lands under 4096 would be pure added cost.
+    if (est < 4300 && estFull >= 4300) {
+      const needChars = Math.min(SALES_PHRASEBOOK.length, (4300 - est) * 4);
+      return out + "\n\nREFERENCE PHRASEBOOK (natural lines to draw from — adapt, never copy twice):\n" + SALES_PHRASEBOOK.slice(0, needChars);
+    }
+  }
+  return out;
 }
+
+/* Static FR/EN Quebec sales phrasebook. Serves two jobs: (1) real reference
+ * material the model can draw from; (2) cache-floor padding (see above). Must
+ * stay STATIC — any dynamic content here would break the shared prompt cache. */
+const SALES_PHRASEBOOK = [
+  "GREETINGS / OPENERS:",
+  "- \"Allô! Oui c'est encore dispo. Tu cherches quel modèle exactement?\"",
+  "- \"Salut! On a ça en liquidation en ce moment. Tu veux quelle capacité — 128 ou 256?\"",
+  "- \"Hey! Yes we've got those in liquidation right now. Which storage size are you after?\"",
+  "- \"Allô allô! Bonne nouvelle, on a du stock. C'est pour toi ou un cadeau?\"",
+  "AVAILABILITY:",
+  "- \"Oui on en a en liquidation! Le stock bouge vite par contre. Tu passes aujourd'hui ou demain?\"",
+  "- \"On en reçoit régulièrement — le stock change tous les jours. Viens voir la sélection d'aujourd'hui!\"",
+  "- \"Still got them, yeah — stock moves quick at these prices though. Afternoon or evening better for you?\"",
+  "PRICE TALK:",
+  "- \"Ça commence à ce prix-là, pis le meilleur deal se fait en personne — surtout si t'as un téléphone à échanger.\"",
+  "- \"Le prix affiché c'est le départ. En magasin on te fait le meilleur prix, garanti.\"",
+  "- \"Best price happens in person — especially with a trade-in. What phone are you using right now?\"",
+  "- \"À ce prix-là en liquidation, honnêtement ça part vite. Tu peux passer à soir?\"",
+  "TRADE-IN HOOKS:",
+  "- \"T'as un téléphone à échanger? On l'évalue sur place pis ça baisse ton prix direct.\"",
+  "- \"Si ton téléphone est plus récent, on peut même te donner du CASH pour. Faut juste le voir en personne.\"",
+  "- \"Bring your old phone — we evaluate it on the spot and it comes right off the price.\"",
+  "VISIT CLOSES:",
+  "- \"Tu passes aujourd'hui ou demain? On est ouvert jusqu'à tard.\"",
+  "- \"Viens le tester en main — tu peux comparer plusieurs unités pis repartir avec aujourd'hui même.\"",
+  "- \"Come see it in person — test it, compare a few units, walk out with it today.\"",
+  "- \"Je suis au shop toute la journée. Passe quand tu veux, ça prend 10 minutes.\"",
+  "OBJECTION — TOO FAR:",
+  "- \"Nos clients viennent de Laval pis de la Rive-Sud — ça vaut le détour pour le prix pis la garantie.\"",
+  "- \"Honestly people drive in from all over for these prices. Worth the trip — and you test before you buy.\"",
+  "OBJECTION — I'LL THINK ABOUT IT:",
+  "- \"Je comprends! Viens juste le voir sans engagement — à ce prix il sera pas là longtemps. Aujourd'hui ou demain?\"",
+  "- \"No pressure! Just come see it — no commitment. But at this price it won't sit long.\"",
+  "OBJECTION — BUDGET:",
+  "- \"On a plusieurs modèles dans ton budget en magasin — viens voir ce qu'on a, tu vas être surpris.\"",
+  "- \"What's your budget? We've got models at every price point in store.\"",
+  "DEAD-CHAT REVIVERS:",
+  "- \"Pis, toujours intéressé? Le stock a bougé cette semaine — viens voir avant que ça parte.\"",
+  "- \"Hey! Still looking? New arrivals came in — worth a look in person.\"",
+  "AFTER A YES:",
+  "- \"Parfait! On t'attend. Demande pour le vendeur du Marketplace en arrivant. À tantôt!\"",
+  "- \"Perfect! See you then — just ask for the Marketplace seller at the counter.\"",
+  "STORAGE / CONDITION QUESTIONS:",
+  "- \"On a plusieurs capacités en stock — 128, 256, des fois 512. Tu utilises beaucoup de photos/vidéos?\"",
+  "- \"Tous nos téléphones sont testés devant toi avant que tu payes. Tu repars juste si t'es satisfait.\"",
+  "- \"Condition varies by unit — that's exactly why coming in beats buying blind online. You pick YOUR unit.\"",
+  "- \"La batterie? On te montre le pourcentage exact en magasin, sur l'appareil que TU choisis.\"",
+  "WARRANTY / TRUST:",
+  "- \"Tout est testé devant toi pis tu peux comparer plusieurs unités avant de choisir.\"",
+  "- \"On est un vrai shop avec pignon sur rue — pas un gars dans un stationnement. Tu viens, tu testes, tu décides.\"",
+  "- \"You test everything in front of us before paying. No surprises — that's the whole point of coming in.\"",
+  "PAYMENT QUESTIONS:",
+  "- \"Cash ou virement Interac, comme tu préfères. Tout se règle au shop.\"",
+  "- \"Cash or e-transfer, whatever works. All handled at the shop.\"",
+  "MULTIPLE MODELS / COMPARISONS:",
+  "- \"Entre les deux? Viens les prendre en main côte à côte — deux minutes pis tu vas savoir lequel est pour toi.\"",
+  "- \"Les deux sont en liquidation. La vraie différence tu la sens en main — viens comparer.\"",
+  "- \"Honestly the best way to decide is holding both. Come compare them side by side.\"",
+  "GIFT BUYERS:",
+  "- \"Un cadeau? Bonne idée! Dis-moi le budget pis pour qui c'est, on va trouver le bon modèle ensemble en magasin.\"",
+  "- \"For a gift? Nice! Come by and we'll pick the right one together — takes ten minutes.\"",
+  "HESITANT / SLOW BUYERS:",
+  "- \"Prends ton temps! Juste sache que la liquidation avance — les meilleurs deals partent en premier.\"",
+  "- \"Pas de pression. Mais viens au moins le voir — regarder coûte rien pis tu vas savoir à quoi t'en tenir.\"",
+  "- \"Take your time — just know liquidation stock rotates. The good deals go first.\"",
+  "WHEN THE BUYER ASKS TO NEGOTIATE IN CHAT:",
+  "- \"Le prix se négocie en personne — c'est là qu'on peut vraiment te faire un deal, surtout avec un échange.\"",
+  "- \"I can't do numbers over chat, but in person we'll work something out — especially with a trade-in.\"",
+  "WHEN THE BUYER ASKS FOR DELIVERY/SHIPPING:",
+  "- \"On fait tout en personne au shop — c'est plus sûr pour toi comme pour nous, pis tu testes avant de payer.\"",
+  "- \"Everything's in person at the shop — safer for both of us, and you test before you pay.\"",
+  "TIME-SPECIFIC CLOSES:",
+  "- Morning: \"On vient d'ouvrir — passe ce matin, c'est tranquille pis on prend le temps avec toi.\"",
+  "- Afternoon: \"Passe cet après-midi, on est là jusqu'à tard à soir.\"",
+  "- Evening: \"On est ouvert encore quelques heures à soir — t'as le temps en masse de passer aujourd'hui.\"",
+  "- Weekend: \"On est ouvert la fin de semaine aussi — samedi ou dimanche, comme ça t'adonne.\"",
+  "FOLLOW-UP SECOND TOUCHES (quiet chats):",
+  "- \"Allô! Le [modèle] t'intéresse toujours? Le stock a tourné — viens voir ce qui est arrivé cette semaine.\"",
+  "- \"Hey, still thinking about it? New stock came in — worth a quick look before the weekend rush.\"",
+  "TONE RULES OF THUMB:",
+  "- Quebec French: tutoiement toujours, 'allô', 'pis', 'à tantôt', 'ça marche', 'parfait'. Jamais de vouvoiement.",
+  "- Short beats long. One idea per message. One question per message, always at the end.",
+  "- Match their energy: dry buyer gets efficient answers; chatty buyer gets warmth.",
+  "- Emojis: light touch — one per message max, usually 😊 👍 or none.",
+  "- Never sound like a script. Vary every opener; never send the same line to two buyers.",
+].join("\n");
 
 /* ---------------- Anthropic call ---------------- */
 
+// Long chats used to ship their WHOLE transcript on every call — unbounded
+// input billing for zero reply-quality gain. The last ~4500 chars (≈15+
+// messages) is all the model needs; older history is trimmed with a marker.
+function trimContext(ctx) {
+  const s = ctx == null ? "" : String(ctx);
+  return s.length > 4500 ? "(earlier messages trimmed)\n" + s.slice(-4500) : s;
+}
+
 async function callClaude(settings, buyerMessage, extraContext) {
   if (!settings.apiKey) return { error: "No API key set." };
+  extraContext = trimContext(extraContext);
   const body = {
     model: settings.model || "claude-haiku-4-5",
     max_tokens: 1024,
@@ -924,7 +1041,7 @@ async function callClaudeFollowup(settings, context, threadName) {
           "Two short sentences maximum, warm and casual — a busy seller texting, not a marketing blast. " +
           "If there is NO good reason (they declined, said no, it's resolved, they set a visit time already, or another nudge would be spammy): reply with exactly [SKIP].\n\n" +
           "Conversation so far (most recent last):\n" +
-          (context || ""),
+          trimContext(context),
       },
     ],
   };
