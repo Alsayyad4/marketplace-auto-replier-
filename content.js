@@ -1062,7 +1062,60 @@
       ask({ type: "LOG_EVENT", entry: { action: "video-status", thread: null, buyer: null, reply: "videos blocked [" + key + "]: " + reason } });
     } catch (e) { /* telemetry must never disturb the bot */ }
   }
-  async function maybeSendVideo(id, name, immediate, sidebarKey) {
+  // Set true when a deferSend run staged the whole set but SKIPPED the Enter so
+  // the caller can put the text reply into the SAME message (one send delivers
+  // videos + answer together). The caller is then responsible for firing an
+  // Enter (typeAndSend, or sendAttachedVideos as fallback) in this same visit.
+  let videoSendDeferred = false;
+  // Called by the reply path AFTER an Enter actually shipped the staged bundle:
+  // converts the owned DRAFT marker into a real sent stamp, and only THEN posts
+  // the "sent ✓" status + Activity row (staging must never claim delivery). A
+  // partial set keeps its tail resumable and stays on the pending queue.
+  async function finalizeDeferredVideoSend(id, sidebarKey, name) {
+    try {
+      const dm = (await getLocal(["videoSentThreads"])).videoSentThreads || {};
+      const mk = dm[id];
+      if (!mk || mk.owner !== TAB_UID || typeof mk.resumeFrom !== "number") return;
+      const total = typeof mk.resumeTotal === "number" ? mk.resumeTotal : mk.resumeFrom;
+      const n = mk.sent || 0;
+      if (mk.resumeFrom < total) {
+        // Partial set shipped with the reply — tail still owed on a later visit.
+        dm[id] = { done: true, at: Date.now(), owner: TAB_UID, sent: n, resumeFrom: mk.resumeFrom, resumeTotal: total };
+        await setLocal({ videoSentThreads: dm });
+        await recordVideoFail(id, "attach"); // paces the tail retries
+        vstat("sent " + n + "/" + total + " with the reply — finishing the rest on a later visit (" + (name || id) + ")");
+        if (n > 0) ask({ type: "LOG_EVENT", entry: { thread: name, threadId: id, buyer: "(demo video)", action: "video", reply: n + "/" + total + " demo videos sent — finishing the rest later" } });
+        return;
+      }
+      dm[id] = { done: true, at: Date.now(), owner: TAB_UID, sent: n };
+      const am = (await getLocal(["videoAttempts"])).videoAttempts || {};
+      if (am[id]) delete am[id];
+      await setLocal({ videoSentThreads: dm, videoAttempts: am });
+      videoLocked.add(id);
+      clearVideoPending(id);
+      if (sidebarKey && sidebarKey !== id) clearVideoPending(sidebarKey);
+      vstat("sent ✓ " + n + "/" + total + " to " + (name || id) + " (with the reply)");
+      if (n > 0) ask({ type: "LOG_EVENT", entry: { thread: name, threadId: id, buyer: "(demo video)", action: "video", reply: n + "/" + total + " demo video(s) sent" } });
+    } catch (e) { /* bookkeeping must never break the reply path */ }
+  }
+  // Called when a staged draft is being ABANDONED this visit (navigation, send
+  // failure): drops the in-flight via:"lock" tag so the pending-lane visit may
+  // adopt and ship the draft immediately instead of waiting out the 30-min
+  // in-flight window. Everything else about the marker stays honest.
+  async function demoteDraftMarker(id) {
+    try {
+      const dm = (await getLocal(["videoSentThreads"])).videoSentThreads || {};
+      const mk = dm[id];
+      if (mk && mk.owner === TAB_UID && mk.via === "lock" && typeof mk.resumeFrom === "number") {
+        delete mk.via;
+        mk.at = Date.now();
+        dm[id] = mk;
+        await setLocal({ videoSentThreads: dm });
+      }
+    } catch (e) { /* best-effort */ }
+  }
+  async function maybeSendVideo(id, name, immediate, sidebarKey, deferSend) {
+    videoSendDeferred = false;
     try {
       // Terminal exits must clear the pending queue under BOTH keys: deferral
       // writes videoPending[sidebarId] (v0.21.14) but this engine runs on the
@@ -1574,6 +1627,37 @@
       // explain — send what's there, but never RE-ATTEMPT ambiguous clips
       // (skip-forward), the duplicate-safe direction.
       const trayMismatch = wantSend && attachedNow !== knownCount;
+      if (wantSend && deferSend) {
+        // COMBINED-MESSAGE MODE: leave the set STAGED — the caller types the text
+        // reply into the same composer and ONE Enter ships videos + text together.
+        // CRITICAL: nothing has been sent yet, so NO terminal stamp, NO "sent ✓"
+        // status and NO Activity row here — those fire in
+        // finalizeDeferredVideoSend() only after an Enter actually goes. The mark
+        // becomes an owned DRAFT (resumeFrom = resumeTotal = full set attached):
+        // if this visit is abandoned, the queued pending visit adopts the draft
+        // and ships it through the normal send path.
+        videoSendDeferred = true;
+        {
+          const dmD = (await getLocal(["videoSentThreads"])).videoSentThreads || {};
+          if (!(dmD[id] && dmD[id].owner && dmD[id].owner !== TAB_UID)) {
+            dmD[id] = {
+              done: true, at: Date.now(), via: "lock", owner: TAB_UID, sent: okCount + startAt,
+              // Partial attach: the tail stays resumable (same skip-forward rules
+              // as the normal partial branch); full attach: resumeFrom = total.
+              resumeFrom: failedAt >= 0 ? ((dirtyStop || trayMismatch) ? failedAt + 1 : failedAt) : files.length,
+              resumeTotal: files.length,
+            };
+            await setLocal({ videoSentThreads: dmD });
+          }
+        }
+        videoLocked.delete(id); // DRAFT is not terminal — finalize re-locks
+        {
+          const qkD = sidebarKey || id;
+          if (qkD && videoPending[qkD] == null && videoPending[id] == null) { videoPending[qkD] = Date.now(); persistDedup(); }
+        }
+        setStatus({ lastAction: `${Math.max(attachedNow, okCount)} video(s) staged — sending with the reply…`, currentThread: name });
+        return;
+      }
       if (wantSend) {
         setStatus({ lastAction: `sending ${Math.max(attachedNow, okCount)} video(s) in one message…`, currentThread: name });
         await sendAttachedVideos();
@@ -2005,37 +2089,12 @@
     // being written reads perfectly natural. All one-set-per-chat guards live
     // inside maybeSendVideo, so for an already-served chat this returns in
     // milliseconds. Costs nothing: zero extra API calls.
-    let justSentVideos = false;
-    if (!videoLocked.has(id)) {
-      refreshThreadLock(sidebarId); // uploads can outlive the cross-tab lease
-      await maybeSendVideo(id, name, true, sidebarId);
-      if (videoLocked.has(id)) clearVideoPending(sidebarId); // terminal → clear the sidebar-keyed pending too
-      // Did a set (or partial set) actually go out THIS visit (vs a skip)?
-      // Fresh sent-stamp = yes — checked regardless of the in-memory lock,
-      // because partial deliveries unlock for their resume visit.
-      {
-        const mkV = ((await getLocal(["videoSentThreads"])).videoSentThreads || {})[id];
-        justSentVideos = !!(mkV && mkV.sent && Date.now() - (mkV.at || 0) < 3 * 60 * 1000);
-      }
-      if (!stillOnThread(id)) {
-        // Operator navigated during the send. Nothing is marked handled and the
-        // waiting ledger still holds this chat — the reply happens next cycle.
-        setStatus({ lastAction: "videos sent — reply postponed (you switched chats)", currentThread: name });
-        return;
-      }
-      // The buyer may have kept typing while the clips went out — reply to their
-      // FRESHEST message, not the pre-video snapshot.
-      const t2 = buyerSpokeLast();
-      if (t2 && !isOwnEcho(t2.buyerMessage) && lastHandled[id] !== t2.buyerMessage) turn = t2;
-    }
-
     setStatus({ lastAction: "buyer said: " + trunc(turn.buyerMessage, 80), currentThread: name });
 
     // Pre-call guard: if the operator already clicked into a different chat during
     // the load/settle window above, the Claude call's result would only be thrown
-    // away by the identical stillOnThread guard after the reply delay — don't pay
-    // for it. No state is touched (not marked handled, still on the waiting
-    // ledger), so the chat is retried on a later cycle exactly like that abort.
+    // away later — don't pay for it. No state is touched (not marked handled,
+    // still on the waiting ledger), so the chat is retried on a later cycle.
     if (!stillOnThread(id)) {
       setStatus({ lastAction: "aborted — you switched chats before asking Claude (will retry)", currentThread: name });
       return;
@@ -2046,12 +2105,62 @@
     const memo = pendingReply[id];
     const memoOk = !!(memo && memo.buyerMessage === turn.buyerMessage && memo.transcript === turn.transcript && Date.now() - memo.at < 10 * 60 * 1000);
     if (memo && !memoOk) delete pendingReply[id];
-    const reply = await ask({ type: "GET_REPLY_SIMPLE", buyerMessage: turn.buyerMessage, context: turn.transcript, threadName: name, cachedText: memoOk ? memo.text : undefined });
+
+    // PARALLEL PIPELINE (v0.21.28, operator: "videos instantly AND start replying
+    // at the same time"): the Claude call is FIRED here (not awaited) so the reply
+    // is generated WHILE the clips attach; the video engine stages the set without
+    // sending (deferSend), the reply text is typed into the SAME composer, and ONE
+    // Enter delivers videos + answer as a single message. Total time ≈ the attach
+    // time alone; still exactly one API call per reply.
+    const replyPromise = ask({ type: "GET_REPLY_SIMPLE", buyerMessage: turn.buyerMessage, context: turn.transcript, threadName: name, cachedText: memoOk ? memo.text : undefined });
+
+    let justSentVideos = false;
+    let deferredAttach = false;
+    if (!videoLocked.has(id)) {
+      refreshThreadLock(sidebarId); // uploads can outlive the cross-tab lease
+      await maybeSendVideo(id, name, true, sidebarId, true);
+      deferredAttach = videoSendDeferred; // set is STAGED, unsent — we owe an Enter this visit
+      if (videoLocked.has(id)) clearVideoPending(sidebarId); // terminal → clear the sidebar-keyed pending too
+      // Did a set actually go out / get staged THIS visit (vs a skip)?
+      {
+        const mkV = ((await getLocal(["videoSentThreads"])).videoSentThreads || {})[id];
+        justSentVideos = !!(mkV && mkV.sent && Date.now() - (mkV.at || 0) < 3 * 60 * 1000);
+      }
+      if (!stillOnThread(id)) {
+        // Operator navigated. A staged set stays as this chat's draft — the
+        // queued pending visit adopts and ships it. The billed reply is
+        // MEMOIZED so the retry cycle replays it for free instead of
+        // re-billing an identical call.
+        const r0 = await replyPromise;
+        if (r0 && r0.ok && !r0.skip && !r0.human && r0.text && r0.text.trim() && !memoOk) {
+          pendingReply[id] = { buyerMessage: turn.buyerMessage, transcript: turn.transcript, text: r0.text, at: Date.now() };
+        }
+        if (deferredAttach) await demoteDraftMarker(id);
+        setStatus({ lastAction: "videos staged — reply postponed (you switched chats)", currentThread: name });
+        return;
+      }
+    }
+    const reply = await replyPromise; // usually already resolved while clips attached
+    // A staged, unsent set must NEVER be left silently — every early exit below
+    // ships it first (videos alone still beat nothing), then FINALIZES the mark
+    // (the "sent" stamp + Activity row only exist after a real Enter).
+    const flushStaged = async () => {
+      if (!deferredAttach) return;
+      deferredAttach = false;
+      if (stillOnThread(id)) {
+        await sendAttachedVideos();
+        await finalizeDeferredVideoSend(id, sidebarId, name);
+      } else {
+        await demoteDraftMarker(id); // draft ships via the queued pending visit
+      }
+    };
     if (!reply || !reply.ok) {
+      await flushStaged();
       setStatus({ lastError: "Claude error: " + (reply && reply.error) });
       return;
     }
     if (reply.skip) {
+      await flushStaged();
       if (reply.reason === "empty reply") {
         // Claude DELIBERATELY chose silence (system/meta message, nothing to answer).
         // Mark handled so the same unanswerable message isn't re-billed every
@@ -2064,48 +2173,67 @@
       return;
     }
     if (reply.human) {
+      await flushStaged(); // videos alone still help the human close
       lastHandled[id] = turn.buyerMessage;
       clearWaiting(id, sidebarId); // handed to the human — resolved for the bot
-      await maybeSendVideo(id, name, true, sidebarId); // demo video still helps the human close
+      await maybeSendVideo(id, name, true, sidebarId); // no-op when already handled above
       setStatus({ lastAction: "needs you: " + reply.reason, currentThread: name });
       return;
     }
     if (!reply.text || !reply.text.trim()) {
+      await flushStaged();
       setStatus({ lastAction: "skip — empty reply" });
       return;
     }
-    // Remember the billed text until it's actually delivered — an abort during the
-    // delay below used to throw it away and bill a fresh call on the retry.
+    // Remember the billed text until it's actually delivered — an abort below used
+    // to throw it away and bill a fresh call on the retry.
     if (!memoOk) pendingReply[id] = { buyerMessage: turn.buyerMessage, transcript: turn.transcript, text: reply.text, at: Date.now() };
 
-    // Small, human-ish delay before replying — SKIPPED when this visit just sent
-    // the video set (operator: "then start replying"): the send itself already
-    // took human-scale time, so waiting again only slows the buyer's answer.
-    const delayMs = justSentVideos ? rand(800, 2500) : (settings.responseDelaySec || 15) * 1000 + rand(0, (settings.jitterSec || 15) * 1000);
+    // No human-ish delay when a set is staged or just went out — the attach time
+    // WAS the human pause, and a staged draft must not sit exposed to operator
+    // clicks. Only a plain text-only reply (no video activity) keeps the
+    // configured delay.
+    const delayMs = deferredAttach ? rand(600, 1500) : justSentVideos ? rand(800, 2500) : (settings.responseDelaySec || 15) * 1000 + rand(0, (settings.jitterSec || 15) * 1000);
     setStatus({ lastAction: "waiting " + Math.round(delayMs / 1000) + "s before replying", currentThread: name });
     await sleep(delayMs);
     refreshThreadLock(sidebarId); // the delay is the longest window — re-stamp the lease
 
     // ABORT if the operator navigated to a different chat during the wait — typing
     // now would post this reply into the WRONG conversation. The chat is not marked
-    // handled, so it's retried cleanly on a later cycle.
+    // handled, so it's retried cleanly on a later cycle. (A staged set stays as
+    // this chat's draft — the queued pending visit adopts and ships it; the billed
+    // reply is already memoized above.)
     if (!stillOnThread(id)) {
+      if (deferredAttach) await demoteDraftMarker(id);
       setStatus({ lastAction: "aborted — you switched chats during the wait (will retry)", currentThread: name });
       return;
     }
-    // Also make sure the chat didn't move on while we waited (buyer sent more) —
-    // better to re-read next cycle with full context than answer a stale message.
-    const recheck = buyerSpokeLast();
-    if (!recheck || recheck.buyerMessage !== turn.buyerMessage) {
-      setStatus({ lastAction: "aborted — conversation changed during the wait (will retry)", currentThread: name });
-      return;
+    // Make sure the chat didn't move on while we waited (buyer sent more) — better
+    // to re-read next cycle than answer a stale message. NOT enforced when a set
+    // is staged: the bundle must ship now (a human answers sequentially anyway —
+    // the buyer's newer message gets its own reply next cycle).
+    if (!deferredAttach) {
+      const recheck = buyerSpokeLast();
+      if (!recheck || recheck.buyerMessage !== turn.buyerMessage) {
+        setStatus({ lastAction: "aborted — conversation changed during the wait (will retry)", currentThread: name });
+        return;
+      }
     }
 
-    const sent = await typeAndSend(composer, reply.text);
+    // The composer node may have been re-rendered by the attach work — re-find it.
+    const composerNow = findComposer() || composer;
+    const sent = await typeAndSend(composerNow, reply.text);
     if (!sent) {
-      setStatus({ lastError: "typed the reply but couldn't send it" });
+      // NO blind re-fire: typeAndSend's false covers ambiguous outcomes (its
+      // compose-mismatch guard may have CLEARED the text, or the Enter may have
+      // actually taken) — a second Enter here could ship a garbled fragment or a
+      // duplicate. The billed reply stays memoized (replayed free next cycle)
+      // and a staged draft is demoted so the pending visit ships the videos.
+      if (deferredAttach) await demoteDraftMarker(id);
+      setStatus({ lastError: "typed the reply but couldn't send it (will retry)" });
       return;
     }
+    if (deferredAttach) await finalizeDeferredVideoSend(id, sidebarId, name); // bundle shipped — now the mark says sent
     rememberSent(reply.text); // so we never mistake this for a buyer message later
     lastHandled[id] = turn.buyerMessage;
     delete pendingReply[id]; // delivered — the billed-reply memo is no longer needed
@@ -2147,6 +2275,12 @@
     // never-miss ledger for > OVERDUE_MS) at this instant — then this chat's set is
     // queued (pending lanes deliver it minutes later) and the overdue buyer's
     // reply goes first. That's the only case where a video ever waits.
+    // Already handled this visit (combined-message send or a normal terminal) —
+    // don't re-queue or re-enter the engine for a chat whose set just shipped.
+    if (videoLocked.has(id)) {
+      clearVideoPending(sidebarId);
+      return;
+    }
     let overdueNow = false;
     {
       // LIVENESS-CHECKED (audit 2026-08-10): defer ONLY when LANE 0 can actually
