@@ -1287,8 +1287,15 @@ chrome.alarms.onAlarm.addListener(async (alarm) => {
     chrome.tabs.sendMessage(
       tab.id,
       { type: "SEND_FOLLOWUP", threadId, text, kind: "visitconfirm" },
-      () => {
+      (resp) => {
         if (chrome.runtime.lastError) LOG("visit-confirm send error", chrome.runtime.lastError.message);
+        // Content script busy / another tab holds the chat: these one-shot alarms
+        // used to be silently LOST in that window (video cycles make it minutes
+        // long) — re-arm instead of dropping.
+        else if (resp && !resp.ok && /busy|another tab/i.test(resp.error || "")) {
+          chrome.alarms.create(alarm.name, { when: Date.now() + 3 * 60 * 1000 });
+          LOG("visit-confirm re-armed (content busy)", alarm.name);
+        }
       }
     );
     return;
@@ -1311,8 +1318,13 @@ chrome.alarms.onAlarm.addListener(async (alarm) => {
   chrome.tabs.sendMessage(
     tab.id,
     { type: "SEND_FOLLOWUP", threadId, text: f.message },
-    () => {
+    (resp) => {
       if (chrome.runtime.lastError) LOG("follow-up send error", chrome.runtime.lastError.message);
+      // One-shot alarm + busy content script = the follow-up would be lost.
+      else if (resp && !resp.ok && /busy|another tab/i.test(resp.error || "")) {
+        chrome.alarms.create(alarm.name, { when: Date.now() + 3 * 60 * 1000 });
+        LOG("follow-up re-armed (content busy)", alarm.name);
+      }
     }
   );
 });

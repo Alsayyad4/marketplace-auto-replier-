@@ -423,10 +423,21 @@
   function isNoise(text) {
     const t = text.trim().toLowerCase().replace(/\s+/g, " ");
     if (!t) return true;
-    if (/^ca\$|^\$\d|^\d+\s*(go|gb|tb)\b/.test(t)) return true; // price / spec card
-    if (/^\d{1,2}:\d{2}\s*(am|pm)?$/i.test(t)) return true; // bare time
-    if (/^(mon|tue|wed|thu|fri|sat|sun)\b/i.test(t)) return true; // "Sat 7:11 PM" headers
-    if (/^(yesterday|today|hier|aujourd)/i.test(t)) return true; // relative date headers
+    // Price / spec CARD text only — the old prefix forms ("^\$\d", "^\d+gb")
+    // ate real buyer messages ("$300 possible?", "128gb still available?") and
+    // those chats never got a reply.
+    if (/^ca\$/.test(t)) return true; // "CA$420 · …" listing card
+    if (/^\$\s?\d[\d.,\s]*$/.test(t)) return true; // bare amount ONLY — "$300 cash?" survives
+    if (/^\d+\s*(go|gb|tb)\b[^a-z0-9]*$/.test(t)) return true; // "128 GB ·" card — "128gb still available?" survives
+    // Time/date HEADERS only. Buyers type compact times ("18h30", "demain 14h30",
+    // "dimanche 13h00") when scheduling a visit — those must NOT be noise, and
+    // the old "^(mon|…)" / "^(…|hier|aujourd)" prefixes ate real FR messages
+    // ("mon budget c'est 300", "hier j'ai vu l'annonce").
+    if (/^\d{1,2}\s*:\s*\d{2}\s*(a\.?m\.?|p\.?m\.?)?$/.test(t)) return true; // bare "7:11 pm"
+    if (/^\d{1,2}\s+h\s+\d{2}$/.test(t)) return true; // FR header "19 h 11" (buyers type "19h11")
+    if (/^(mon(day)?|tue(s(day)?)?|wed(nesday)?|thu(rs(day)?)?|fri(day)?|sat(urday)?|sun(day)?)\s*,?\s+(at\s+)?\d{1,2}\s*(:\s*\d{2}\s*(a\.?m\.?|p\.?m\.?)?|h\s+\d{2})$/.test(t)) return true; // "Sat 7:11 PM" headers — "saturday works for me" survives
+    if (/^(yesterday|today|hier|aujourd['’]hui)\s*(at|à)?\s*\d{1,2}\s*[:h]\s*\d{2}/.test(t)) return true; // "Today at 7:11" / "aujourd’hui à 19 h 11"
+    if (/^(yesterday|today|hier|aujourd['’]hui)$/.test(t)) return true; // bare relative-date header
     if (/^to help identify/.test(t) || t.includes("meta may use technology")) return true; // Meta footer
     // Facebook system / rating prompts — NOT real buyer messages (don't reply to these).
     if (/^you can now rate/.test(t)) return true; // "You can now rate each other"
@@ -449,14 +460,19 @@
     // Facebook "Send a quick response" card + its preset reply buttons (seller options,
     // NOT buyer messages).
     if (/send a quick response|tap a response|réponse rapide|envoyer une réponse/.test(t)) return true;
-    if (/^(yes, are you interested|in talks|sorry,? it'?s not available|is this still available|yes,? it'?s available|when can you|is this available)/.test(t)) return true;
+    // NOTE: "is this (still) available" is deliberately NOT in this list — that
+    // exact text is also the buyer's REAL standard opener (Facebook sends it as
+    // their first message); filtering it meant those chats never got a reply.
+    // The preset CHIPS with that text are excluded structurally instead (the
+    // closest('[role="button"]…') check in readConversation).
+    if (/^(yes, are you interested|in talks|sorry,? it'?s not available|yes,? it'?s available|when can you)/.test(t)) return true;
     // FRENCH equivalents of the system/UI lines above (operator runs FR accounts too).
     if (/suggestion automatis/.test(t)) return true; // "Ceci est une suggestion automatisée"
     if (/attend (ta|votre) réponse/.test(t)) return true; // "X attend ta/votre réponse"
     if (/vous a envoyé un|t'a envoyé un/.test(t)) return true; // "X vous a envoyé un message"
     if (/a démarré (cette|la) discussion|a lancé cette conversation/.test(t)) return true;
     if (/ajouter (une |la )?vidéo|mettre à jour l'annonce|voir l'acheteur|marquer comme vendu/.test(t)) return true;
-    if (/^(jour|hier|aujourd|lun|mar|mer|jeu|ven|sam|dim)\b/.test(t)) return true; // FR date headers
+    if (/^(lun|mar|mer|jeu|ven|sam|dim)\.?,?\s+(à\s+)?\d{1,2}\s*[:h]\s*\d{2}/.test(t)) return true; // FR day headers ("sam. 19:11") — day word + TIME required, so "mardi je peux passer" survives
     return NOISE_EXACT.has(t) || NOISE.some((n) => t === n || t.startsWith(n));
   }
 
@@ -529,12 +545,39 @@
       seen.add(key);
       cands.push({ el, text, r });
     }
-    if (!cands.length) return [];
+
+    // Pass 1.5 — MEDIA bubbles (photos/videos/stickers have no text node). A buyer
+    // whose LAST message is just a picture used to be invisible: the chat read as
+    // "we spoke last" and was parked forever — one of the "never replied" causes.
+    // Avatars and inline emoji are tiny (<48px); composer upload previews use
+    // blob: URLs; the listing card sits inside a link — all skipped.
+    const mediaCands = [];
+    const mediaEls = safe(() => Array.from(main.querySelectorAll('[role="row"] img, [role="row"] video')), []);
+    for (const el of mediaEls) {
+      const src = safe(() => el.getAttribute("src") || "", "");
+      if (src.startsWith("blob:")) continue; // upload preview in the tray, not a message
+      if (safe(() => el.closest("a[href]"), null)) continue; // listing card / profile links
+      if (safe(() => el.closest('[role="button"],[role="menuitem"],button'), null)) continue;
+      const r = safe(() => el.getBoundingClientRect(), null);
+      if (!r || r.width < 48 || r.height < 48) continue;
+      const cx = r.left + r.width / 2;
+      if (cx < cLeft - 60 || cx > cRight + 60) continue;
+      if (r.top >= top) continue;
+      const key = "[attachment]@" + Math.round(r.top / 40); // merge poster+player of one bubble
+      if (seen.has(key)) continue;
+      seen.add(key);
+      mediaCands.push({ el, r });
+    }
+    if (!cands.length && !mediaCands.length) return [];
 
     // The real message column = the span of the bubbles themselves. Self-calibrating,
     // so role detection no longer depends on the composer's exact width/position.
     let colLeft = Infinity, colRight = -Infinity;
     for (const k of cands) {
+      if (k.r.left < colLeft) colLeft = k.r.left;
+      if (k.r.right > colRight) colRight = k.r.right;
+    }
+    for (const k of mediaCands) {
       if (k.r.left < colLeft) colLeft = k.r.left;
       if (k.r.right > colRight) colRight = k.r.right;
     }
@@ -557,20 +600,60 @@
       }
       out.push({ role, text, top: r.top });
     }
+    // Media bubbles carry no paint to read, so the SAME rule applies: buyer only
+    // with positive evidence (clearly hugging the left); ambiguous = "me".
+    for (const { el, r } of mediaCands) {
+      const ours = looksLikeOurBubble(el); // usually null for media
+      let role;
+      if (ours === true) role = "me";
+      else if (ours === false) role = "buyer";
+      else role = (colRight - r.right) - (r.left - colLeft) > 30 ? "buyer" : "me";
+      out.push({ role, text: "[attachment]", top: r.top });
+    }
     out.sort((a, b) => a.top - b.top);
     return out;
   }
   // The buyer message to answer: the last bubble, and only if it's the buyer's.
   function buyerSpokeLast() {
     const convo = readConversation();
+    // Our own demo clips render as trailing "me [attachment]" bubbles — never
+    // let them hide a buyer message whose TEXT reply still needs to go out.
+    while (
+      convo.length &&
+      convo[convo.length - 1].role === "me" &&
+      convo[convo.length - 1].text === "[attachment]"
+    )
+      convo.pop();
     if (!convo.length) return null;
     const last = convo[convo.length - 1];
     if (last.role !== "buyer") return null;
+    // Dedupe key = what WE last said + how many buyer TEXT bubbles followed + the
+    // buyer's text. lastHandled keyed on the text alone meant a buyer who repeated
+    // the same words later ("ok", "?") was skipped forever. TEXT bubbles only —
+    // media rendering varies between opens and must not re-fire handled messages.
+    let lastMine = "";
+    let trailing = 0;
+    for (let i = convo.length - 1; i >= 0; i--) {
+      if (convo[i].text === "[attachment]") continue;
+      if (convo[i].role === "me") {
+        lastMine = convo[i].text;
+        break;
+      }
+      trailing++;
+    }
+    const buyerMessage =
+      last.text === "[attachment]"
+        ? "(the buyer sent a photo/video attachment with no text)"
+        : last.text;
     const transcript = convo
       .slice(-12)
       .map((m) => (m.role === "buyer" ? "Buyer: " : "You: ") + m.text)
       .join("\n");
-    return { buyerMessage: last.text, transcript };
+    return {
+      buyerMessage,
+      transcript,
+      dedupeKey: lastMine + "\u0001" + trailing + "\u0001" + last.text,
+    };
   }
   // Transcript regardless of who spoke last (used for smart follow-ups on quiet chats).
   function fullTranscript() {
@@ -589,6 +672,13 @@
     const convo = readConversation();
     let n = 0;
     for (let i = convo.length - 1; i >= 0; i--) {
+      // Media bubbles don't count: our demo clips must not eat the follow-up
+      // budget (pre-media-detection behavior counted text messages only), and a
+      // buyer photo (rare "buyer" media) still ends our tail.
+      if (convo[i].text === "[attachment]") {
+        if (convo[i].role === "me") continue;
+        break;
+      }
       if (convo[i].role === "me") n++;
       else break;
     }
@@ -2197,7 +2287,11 @@
       setStatus({ lastAction: "skip — that last message was ours, not the buyer", currentThread: name });
       return;
     }
-    if (lastHandled[id] === turn.buyerMessage) {
+    // Composite dedupe key (new writes) with backward compat for entries persisted
+    // by older builds as the plain buyer text. The composite key lets a buyer who
+    // REPEATS the same words later ("ok", "?") get answered again — the plain-text
+    // key skipped them forever.
+    if (lastHandled[id] === turn.dedupeKey || lastHandled[id] === turn.buyerMessage) {
       clearWaiting(id, sidebarId); // already answered this exact message
       // Audit fix: chats that keep landing here (our reply mis-read as not-last)
       // previously NEVER reached a video pass — give them one (idempotent).
@@ -2238,7 +2332,7 @@
           const okC = await typeAndSend(composerC, closeLine);
           if (okC) {
             rememberSent(closeLine);
-            lastHandled[id] = turn.buyerMessage;
+            lastHandled[id] = turn.dedupeKey;
             replyCounts[id] = replyCap + 1; // courtesy close sent once — never again
             persistDedup();
             ask({ type: "LOG_EVENT", entry: { thread: name, threadId: id, buyer: trunc(turn.buyerMessage, 120), action: "text", reply: closeLine } });
@@ -2340,7 +2434,7 @@
         // Claude DELIBERATELY chose silence (system/meta message, nothing to answer).
         // Mark handled so the same unanswerable message isn't re-billed every
         // cooldown; a NEW buyer message (different text) still gets handled fresh.
-        lastHandled[id] = turn.buyerMessage;
+        lastHandled[id] = turn.dedupeKey;
         clearWaiting(id, sidebarId);
         persistDedup();
       }
@@ -2349,7 +2443,7 @@
     }
     if (reply.human) {
       await flushStaged(); // videos alone still help the human close
-      lastHandled[id] = turn.buyerMessage;
+      lastHandled[id] = turn.dedupeKey;
       clearWaiting(id, sidebarId); // handed to the human — resolved for the bot
       await maybeSendVideo(id, name, true, sidebarId); // no-op when already handled above
       setStatus({ lastAction: "needs you: " + reply.reason, currentThread: name });
@@ -2414,7 +2508,7 @@
     }
     if (deferredAttach) await finalizeDeferredVideoSend(id, sidebarId, name); // bundle shipped — now the mark says sent
     rememberSent(reply.text); // so we never mistake this for a buyer message later
-    lastHandled[id] = turn.buyerMessage;
+    lastHandled[id] = turn.dedupeKey;
     delete pendingReply[id]; // delivered — the billed-reply memo is no longer needed
     replyCounts[id] = repliesSoFar + 1; // count this text reply toward the per-convo cap
     clearWaiting(id, sidebarId); // ANSWERED — off the never-miss ledger

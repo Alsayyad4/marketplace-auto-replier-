@@ -6,6 +6,27 @@ French), built for used-iPhone sales in Montréal. Runs locally per Chrome profi
 by default; **optional cloud sync** turns it into a web app so one change reaches
 every computer.
 
+> 🩹 **v0.21.33 — reply-reliability fixes ported from the review branch.**
+> Four classes of "this convo never got a reply" fixed, plus one message-loss fix:
+> - **Noise filter regressions:** the price/spec/date-header rules matched real buyer
+>   messages as prefixes — "$300 possible?", "128gb still available?", "mon budget
+>   c'est 300", "hier j'ai vu l'annonce", "demain 18h30", "dimanche 13h00" were all
+>   dropped, so the bot thought IT spoke last and parked those chats. Headers now
+>   need real header shapes (day word + time, amount-only, incl. the FR
+>   "aujourd'hui" typographic apostrophe). Covered by a 60-case regression test.
+> - **"Is this still available?" answered again:** that exact text is the buyer's
+>   standard opener; it was being filtered as a preset-chip. Chips stay excluded
+>   structurally (role=button), the real opener gets a reply.
+> - **Photo/sticker-only messages:** media bubbles (≥48px, non-blob, outside links)
+>   are now read with the same buyer-only-with-positive-evidence rule, so a buyer
+>   who answers with just a picture gets a reply instead of an endless idle park;
+>   our own clips are ignored when deciding who spoke last.
+> - **Repeated identical messages:** dedupe now keys on (our last message + trailing
+>   buyer texts + buyer text), so a buyer who says "ok" twice gets answered twice
+>   (old plain-text marks still honored — no re-billing of parked chats).
+> - **Follow-up/visit-confirm alarms** that fire while the content script is busy
+>   (or another tab holds the chat) re-arm 3 minutes later instead of being lost.
+>
 > ☁️ **v0.12.0 — cloud sync (web app).** Run SubSell like a web app: sign into a hosted
 > **settings dashboard** (Google or email) that serves your settings to every computer.
 > Edit once → every machine picks it up within ~10 min. Backed by your own free
