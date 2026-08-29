@@ -770,6 +770,50 @@
   // slow machines reject a new paste while an upload is running — the direct
   // cause of "clip 1-2 attach, clip 3 always fails" on those machines.
   const trayUploads = () => safe(() => trayQuery('[role="progressbar"]').length, 0);
+  // BULK ATTACH (v0.21.31 — the big speed win): hand ALL clips to the composer
+  // in ONE paste, exactly like a human dragging three files at once. Facebook
+  // then uploads them in PARALLEL instead of one-after-another, which is the
+  // difference between ~15s and ~45s for a 3-clip set — and it removes the
+  // per-clip settle waits entirely. Returns the number of NEW previews verified
+  // (0 = nothing landed, caller falls back to the one-by-one path), or
+  // "navigated" when the operator switched chats mid-attach.
+  async function attachVideosBulk(filesArr, tid) {
+    const composer = findComposer();
+    if (!composer) return 0;
+    composer.focus();
+    if (tid && !stillOnThread(tid)) return "navigated";
+    const before = new Set(trayEls());
+    const beforeBtns = new Set(trayRemoveBtns());
+    const dtAll = () => {
+      const dt = new DataTransfer();
+      for (const f of filesArr) dt.items.add(f);
+      return dt;
+    };
+    const fired = safe(() => {
+      const ev = new ClipboardEvent("paste", { bubbles: true, cancelable: true });
+      Object.defineProperty(ev, "clipboardData", { value: dtAll() });
+      composer.dispatchEvent(ev);
+      return true;
+    }, false);
+    if (!fired) return 0;
+    // Wait for ALL previews. Bounded generously — uploads run in parallel, so
+    // this is one wait for the whole set instead of one per clip.
+    const want = filesArr.length;
+    const start = Date.now();
+    let seen = 0;
+    while (Date.now() - start < 45000) {
+      await sleep(700);
+      if (tid && !stillOnThread(tid)) {
+        for (const b of trayRemoveBtns()) if (!beforeBtns.has(b)) safe(() => b.click());
+        return "navigated";
+      }
+      seen = trayEls().filter((el) => !before.has(el)).length;
+      if (seen >= want) return want;
+    }
+    await sleep(6000); // late-render grace — a slow machine may still be painting
+    seen = trayEls().filter((el) => !before.has(el)).length;
+    return Math.min(seen, want);
+  }
   async function attachVideo(file, knownCount, tid) {
     const composer = findComposer();
     if (composer) composer.focus();
@@ -1560,7 +1604,52 @@
       let okCount = 0;
       let failedAt = -1;    // first clip whose attach provably failed (tray verified clean → re-attempt allowed)
       let dirtyStop = false; // a clip whose attach is UNCONFIRMED — must never be re-attempted
-      for (let i = startAt; i < files.length; i++) {
+
+      // FAST PATH: hand the whole remaining set over in ONE paste so Facebook
+      // uploads the clips in PARALLEL (a human dragging 3 files at once). This
+      // is where the old 30-60s went — serialized uploads plus a settle wait
+      // between each. Nothing is SENT until the final Enter, so if the bulk
+      // paste lands only partially we can simply clear the tray and fall back
+      // to the verified one-by-one path: zero duplicate risk either way.
+      let bulkDone = false;
+      if (files.length - startAt > 1) {
+        const rest = files.slice(startAt);
+        const bulk = await attachVideosBulk(rest, id);
+        safe(() => chrome.storage.local.get(["videoAttachTrace"], (rB) => {
+          if (chrome.runtime.lastError) return;
+          const tr = (rB && rB.videoAttachTrace) || [];
+          tr.push({ at: Date.now(), clip: 0, of: rest.length, res: "bulk:" + String(bulk), tray: trayRemoveBtns().length, up: trayUploads() });
+          while (tr.length > 12) tr.shift();
+          chrome.storage.local.set({ videoAttachTrace: tr }, () => void chrome.runtime.lastError);
+        }));
+        if (bulk === "navigated") {
+          const dmB2 = (await getLocal(["videoSentThreads"])).videoSentThreads || {};
+          if (dmB2[id] && dmB2[id].owner && dmB2[id].owner !== TAB_UID) return;
+          dmB2[id] = { done: true, at: Date.now(), owner: TAB_UID, resumeFrom: startAt, resumeTotal: files.length, sent: startAt };
+          await setLocal({ videoSentThreads: dmB2 });
+          videoLocked.delete(id);
+          {
+            const qkB2 = sidebarKey || id;
+            if (qkB2 && videoPending[qkB2] == null && videoPending[id] == null) { videoPending[qkB2] = Date.now(); persistDedup(); }
+          }
+          setStatus({ lastAction: "video set interrupted (chat switched) — finishing later", currentThread: name });
+          return;
+        }
+        if (typeof bulk === "number" && bulk >= rest.length) {
+          okCount = rest.length;
+          knownCount = trayRemoveBtns().length;
+          bulkDone = true;
+          const dmB = (await getLocal(["videoSentThreads"])).videoSentThreads || {};
+          if (dmB[id] && dmB[id].owner && dmB[id].owner !== TAB_UID) return;
+          dmB[id] = { done: true, at: Date.now(), via: "lock", owner: TAB_UID, sent: okCount + startAt, resumeFrom: files.length, resumeTotal: files.length };
+          await setLocal({ videoSentThreads: dmB });
+          setStatus({ lastAction: `${okCount} video(s) attached together`, currentThread: name });
+        } else if (trayRemoveBtns().length > knownCount) {
+          await sweepTrayExtras(knownCount); // partial/none: reset (nothing sent yet) and verify one by one
+        }
+      }
+
+      for (let i = bulkDone ? files.length : startAt; i < files.length; i++) {
         // Navigation abort: NOTHING has been sent yet (send is one Enter at the
         // end) and Enter must never fire after the operator switched chats.
         // Clips already attached are recorded as attempted (if Messenger kept
@@ -2181,18 +2270,19 @@
     // time alone; still exactly one API call per reply.
     const replyPromise = ask({ type: "GET_REPLY_SIMPLE", buyerMessage: turn.buyerMessage, context: turn.transcript, threadName: name, cachedText: memoOk ? memo.text : undefined });
 
-    let justSentVideos = false;
+    // The configured response delay runs CONCURRENTLY with the video work from
+    // THIS moment (operator: "right away — just the time I set in the settings").
+    // Total time to the buyer = max(your delay, the actual upload time), never
+    // the sum: whatever the clips take is subtracted from the wait below.
+    const replyClockStart = Date.now();
+    const targetDelayMs = (settings.responseDelaySec || 15) * 1000 + rand(0, (settings.jitterSec || 15) * 1000);
+
     let deferredAttach = false;
     if (!videoLocked.has(id)) {
       refreshThreadLock(sidebarId); // uploads can outlive the cross-tab lease
       await maybeSendVideo(id, name, true, sidebarId, true);
       deferredAttach = videoSendDeferred; // set is STAGED, unsent — we owe an Enter this visit
       if (videoLocked.has(id)) clearVideoPending(sidebarId); // terminal → clear the sidebar-keyed pending too
-      // Did a set actually go out / get staged THIS visit (vs a skip)?
-      {
-        const mkV = ((await getLocal(["videoSentThreads"])).videoSentThreads || {})[id];
-        justSentVideos = !!(mkV && mkV.sent && Date.now() - (mkV.at || 0) < 3 * 60 * 1000);
-      }
       if (!stillOnThread(id)) {
         // Operator navigated. A staged set stays as this chat's draft — the
         // queued pending visit adopts and ships it. The billed reply is
@@ -2260,9 +2350,13 @@
     // WAS the human pause, and a staged draft must not sit exposed to operator
     // clicks. Only a plain text-only reply (no video activity) keeps the
     // configured delay.
-    const delayMs = deferredAttach ? rand(600, 1500) : justSentVideos ? rand(800, 2500) : (settings.responseDelaySec || 15) * 1000 + rand(0, (settings.jitterSec || 15) * 1000);
-    setStatus({ lastAction: "waiting " + Math.round(delayMs / 1000) + "s before replying", currentThread: name });
-    await sleep(delayMs);
+    // Only the REMAINDER of the configured delay — the attach time already
+    // counted toward it. Zero extra waiting is ever added on top.
+    const delayMs = Math.max(0, targetDelayMs - (Date.now() - replyClockStart));
+    if (delayMs > 0) {
+      setStatus({ lastAction: "waiting " + Math.round(delayMs / 1000) + "s before replying", currentThread: name });
+      await sleep(delayMs);
+    }
     refreshThreadLock(sidebarId); // the delay is the longest window — re-stamp the lease
 
     // ABORT if the operator navigated to a different chat during the wait — typing
