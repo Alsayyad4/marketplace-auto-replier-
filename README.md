@@ -6,14 +6,17 @@ Marketplace buyer messages using the Anthropic Claude API. Bilingual FR/EN
 cloud — runs locally, one Chrome profile per Facebook account.
 
 > ⚡ **v0.12.0 — instant videos + reply reliability + cheaper API calls.**
-> - **Videos now fire INSTANTLY** when a buyer messages (once per chat) — before
->   the text reply, which still waits your configured response delay + jitter.
->   The per-video "seconds after the reply" delay is gone.
+> - **Videos now fire INSTANTLY** when a buyer messages (once per chat) —
+>   seconds after the message, right after Claude screens it (so scammers and
+>   off-hours messages get no video), and long before the text reply, which
+>   still waits your configured response delay + jitter. The per-video
+>   "seconds after the reply" delay is gone.
 > - **Videos actually send**: the uploader now verifies the file really attached
->   (upload preview appears) before marking a chat "video sent", waits for the
->   upload to finish before pressing send, and **retries up to 3×** on later
->   scans if the attach failed. Previously a failed attach was silently marked
->   as sent and never retried.
+>   (upload preview appears in the composer tray) AND that the send cleared the
+>   tray, waits for the upload to finish before pressing send, tracks each
+>   configured video individually, and **retries up to 3×** on later scans if
+>   anything failed — without ever stacking duplicate copies. Previously a
+>   failed attach was silently marked as sent and never retried.
 > - **Conversations stopped being skipped**: buyers who repeat the same message
 >   ("ok", "?") get answered again; photo/sticker-only messages are detected and
 >   answered; the noise filter no longer eats real messages starting with

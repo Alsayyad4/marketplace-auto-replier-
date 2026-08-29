@@ -444,8 +444,10 @@ async function callClaude(settings, buyerMessage, extraContext) {
     // cost of a runaway generation.
     max_tokens: 500,
     // The system prompt is identical between calls (it only changes when the
-    // operator edits settings), so mark it cacheable: repeat calls within the
-    // cache window bill ~10% for those input tokens instead of 100%.
+    // operator edits settings), so mark it cacheable: during busy stretches,
+    // calls within the ~5-min cache window bill ~10% for those input tokens.
+    // (Cache writes cost 1.25x and prompts under the model's minimum prefix
+    // silently don't cache — worst case a tiny premium, big savings in bursts.)
     system: [
       {
         type: "text",
@@ -617,8 +619,14 @@ chrome.alarms.onAlarm.addListener(async (alarm) => {
     chrome.tabs.sendMessage(
       tab.id,
       { type: "SEND_FOLLOWUP", threadId, text, kind: "visitconfirm" },
-      () => {
+      (resp) => {
         if (chrome.runtime.lastError) LOG("visit-confirm send error", chrome.runtime.lastError.message);
+        // Content script busy handling another chat (video uploads make that
+        // window minutes long now) — re-arm instead of silently dropping.
+        else if (resp && !resp.ok && resp.error === "busy") {
+          chrome.alarms.create(alarm.name, { when: Date.now() + 3 * 60 * 1000 });
+          LOG("visit-confirm re-armed (content busy)", alarm.name);
+        }
       }
     );
     return;
@@ -641,8 +649,13 @@ chrome.alarms.onAlarm.addListener(async (alarm) => {
   chrome.tabs.sendMessage(
     tab.id,
     { type: "SEND_FOLLOWUP", threadId, text: f.message },
-    () => {
+    (resp) => {
       if (chrome.runtime.lastError) LOG("follow-up send error", chrome.runtime.lastError.message);
+      // One-shot alarm + busy content script = the follow-up would be lost.
+      else if (resp && !resp.ok && resp.error === "busy") {
+        chrome.alarms.create(alarm.name, { when: Date.now() + 3 * 60 * 1000 });
+        LOG("follow-up re-armed (content busy)", alarm.name);
+      }
     }
   );
 });

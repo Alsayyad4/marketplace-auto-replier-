@@ -73,8 +73,9 @@ These live in each computer's local storage and are **not** in the config JSON:
 - `enabled` — on/off toggle per machine.
 - `videoEnabled` (bool), `demoVideos` (uploaded mp4 files as base64) — the actual
   demo video is uploaded per machine (too big to serve as JSON). Videos are sent
-  INSTANTLY when a buyer messages (once per chat); the text reply follows after the
-  configured response delay. The **Videos** tab above syncs video *URLs* only.
+  INSTANTLY when a buyer messages (once per chat, right after Claude's screening —
+  [HUMAN]-flagged buyers get nothing); the text reply follows after the configured
+  response delay. The **Videos** tab above syncs video *URLs* only.
 
 ## Source of truth
 `DEFAULTS` and `buildSystemPrompt()` in `background.js`. The web app only stores/serves

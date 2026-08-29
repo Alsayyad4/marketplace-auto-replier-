@@ -6,8 +6,9 @@
  *   1. Go through every conversation in the list (unread chats first).
  *   2. Open it and read the LAST message (text OR photo/video attachment).
  *   3. If that last message is from the BUYER:
- *        a. send the demo video(s) INSTANTLY (once per chat, if enabled),
- *        b. ask Claude for a text reply,
+ *        a. ask Claude for a reply (its hours/caps/[HUMAN] screening also
+ *           gates the video — scammers get neither),
+ *        b. send the demo video(s) right away (once per chat, if enabled),
  *        c. wait the configured response delay, then type + send the text.
  *   4. Move on. Repeat.
  *
@@ -41,6 +42,7 @@
   const cooldowns = {}; // threadId -> timestamp we may re-check it
   const lastHandled = {}; // threadId -> dedupe key of the buyer turn we last replied to
   const lastOpenedAt = {}; // threadId -> last time we opened it (spaces out unread re-opens)
+  const unreadMisses = {}; // threadId -> consecutive opens that sent nothing (demotes stuck-bold rows)
   let tick = {}; // live status shown in the popup
 
   /* ---------------- popup status ---------------- */
@@ -141,10 +143,14 @@
     if (!t) return true;
     if (/^(ca\s?)?\$\s?\d[\d.,\s]*$/.test(t)) return true; // price card ("CA$420") — amount ONLY, "300$ cash?" survives
     if (/^\d+\s*(go|gb|tb)\b[^a-z0-9]*$/.test(t)) return true; // spec card ("128 GB ·") — "128gb still available?" survives
-    if (/^\d{1,2}\s*[:h]\s*\d{2}\s*(a\.?m\.?|p\.?m\.?)?$/.test(t)) return true; // bare time
-    if (/^[a-zà-ÿ]{2,10}\.?,?\s+\d{1,2}\s*[:h]\s*\d{2}\s*(a\.?m\.?|p\.?m\.?)?$/.test(t)) return true; // "sat 7:11 pm" headers
-    if (/^(yesterday|today|hier|aujourd'hui)\s*(at|à)?\s*\d{1,2}\s*[:h]\s*\d{2}/.test(t)) return true; // "today at 7:11"
-    if (/^(yesterday|today|hier|aujourd'hui)$/.test(t)) return true; // bare relative-date header
+    // Time/date HEADERS only. Buyers type compact times ("18h30", "demain 14h30",
+    // "dimanche 13h00") when scheduling a visit — those must NOT be noise, so:
+    // colon or spaced-h forms only, and day words only as real day names.
+    if (/^\d{1,2}\s*:\s*\d{2}\s*(a\.?m\.?|p\.?m\.?)?$/.test(t)) return true; // bare "7:11 pm"
+    if (/^\d{1,2}\s+h\s+\d{2}$/.test(t)) return true; // FR header "19 h 11" (buyers type "19h11")
+    if (/^(mon(day)?|tue(s(day)?)?|wed(nesday)?|thu(rs(day)?)?|fri(day)?|sat(urday)?|sun(day)?|lun\.|mar\.|mer\.|jeu\.|ven\.|sam\.|dim\.)\s*,?\s+\d{1,2}\s*(:\s*\d{2}\s*(a\.?m\.?|p\.?m\.?)?|\s+h\s+\d{2})$/.test(t)) return true; // "sat 7:11 pm" / "sam. 19 h 11" headers ("dimanche 13h00" survives)
+    if (/^(yesterday|today|hier|aujourd['’]hui)\s*(at|à)?\s*\d{1,2}\s*[:h]\s*\d{2}/.test(t)) return true; // "today at 7:11" / "aujourd’hui à 19 h 11"
+    if (/^(yesterday|today|hier|aujourd['’]hui)$/.test(t)) return true; // bare relative-date header
     if (/^to help identify/.test(t) || t.includes("meta may use technology")) return true; // Meta footer
     return NOISE_EXACT.some((n) => t === n) || NOISE_PREFIX.some((n) => t.startsWith(n));
   }
@@ -204,15 +210,28 @@
   // The buyer message to answer: the last bubble, and only if it's the buyer's.
   function buyerSpokeLast() {
     const convo = readConversation();
+    // Our own just-sent demo video shows up as a trailing "me [attachment]"
+    // bubble. Ignore those when deciding who spoke last — otherwise a buyer
+    // message whose TEXT reply failed after the video went out would be
+    // hidden behind our video forever.
+    while (
+      convo.length &&
+      convo[convo.length - 1].role === "me" &&
+      convo[convo.length - 1].text === "[attachment]"
+    )
+      convo.pop();
     if (!convo.length) return null;
     const last = convo[convo.length - 1];
     if (last.role !== "buyer") return null;
     // Dedupe key = what WE last said + how many buyer bubbles followed + the
     // buyer's text. Keying on the text alone meant a buyer who repeated the
-    // same words later ("ok", "?") was skipped forever.
+    // same words later ("ok", "?") was skipped forever. Built from TEXT
+    // bubbles only: media/header rendering varies between opens and must not
+    // re-fire an already-handled message ([HUMAN] pings, paid Claude calls).
     let lastMine = "";
     let trailing = 0;
     for (let i = convo.length - 1; i >= 0; i--) {
+      if (convo[i].text === "[attachment]") continue;
       if (convo[i].role === "me") {
         lastMine = convo[i].text;
         break;
@@ -333,17 +352,30 @@
     for (let i = 0; i < bin.length; i++) bytes[i] = bin.charCodeAt(i);
     return new File([bytes], name || "demo.mp4", { type: type || "video/mp4" });
   }
-  // Drop the file into Messenger's uploader and send it. Tries the hidden file
-  // input, then a paste, then drag-drop — and only reports success if the upload
-  // preview ACTUALLY appeared. (The old version returned true as soon as an
-  // event was dispatched, so threads got marked "video sent" when nothing was
-  // ever attached — the main reason videos silently never went out.)
-  const PREVIEW_SEL = 'img[src^="blob:"], [role="progressbar"]';
-  async function waitForNewPreview(main, before, ms) {
+  // Drop the file into Messenger's uploader and send it, VERIFIED end to end.
+  // Two failure modes of the old code are handled explicitly:
+  //   - "dispatched an event" is not "attached": success requires the upload
+  //     preview to actually appear in the composer TRAY;
+  //   - "pressed send" is not "sent": success requires the tray to empty again.
+  // The tray is everything matching PREVIEW_SEL that is NOT inside a chat
+  // [role="row"] — chat bubbles (including our own sent videos) live in rows,
+  // so they can't pollute the counts.
+  const PREVIEW_SEL = 'img[src^="blob:"], video, [role="progressbar"]';
+  function trayCount() {
+    return safe(() => {
+      const main = getMain() || document;
+      let n = 0;
+      for (const el of main.querySelectorAll(PREVIEW_SEL)) {
+        if (!el.closest('[role="row"]')) n++;
+      }
+      return n;
+    }, 0);
+  }
+  async function waitForTray(base, ms) {
     const start = Date.now();
     while (Date.now() - start < ms) {
       await sleep(800);
-      if (safe(() => main.querySelectorAll(PREVIEW_SEL).length, before) > before) return true;
+      if (trayCount() > base) return true;
     }
     return false;
   }
@@ -359,7 +391,6 @@
   }
   async function injectVideo(file) {
     const main = getMain() || document;
-    const before = safe(() => main.querySelectorAll(PREVIEW_SEL).length, 0);
     const composer = findComposer();
     if (composer) composer.focus();
 
@@ -393,29 +424,44 @@
       return true;
     };
 
-    let attached = false;
-    for (const attempt of [tryInput, tryPaste, tryDrop]) {
-      if (!safe(attempt, false)) continue;
-      attached = await waitForNewPreview(main, before, 12000);
-      if (attached) break;
+    // A leftover attachment from a previous failed attempt? Send IT instead of
+    // stacking another copy of the file into the tray.
+    let base = trayCount();
+    let attached = base > 0;
+    if (attached) base = 0;
+
+    if (!attached) {
+      for (const attempt of [tryInput, tryPaste, tryDrop]) {
+        // A previous channel may have landed late — never attach a 2nd copy.
+        if (trayCount() > base) {
+          attached = true;
+          break;
+        }
+        if (!safe(attempt, false)) continue;
+        attached = await waitForTray(base, 15000);
+        if (attached) break;
+      }
     }
     if (!attached) return false; // nothing ever reached the uploader — caller retries later
 
-    // Let the upload finish before sending (progressbar gone, up to 60s for big files).
+    // Let the upload finish before sending. Sending mid-upload does nothing,
+    // so if the progressbar outlives the wait, bail — the leftover-tray path
+    // above will send it on the next attempt instead of re-attaching.
     const upStart = Date.now();
-    while (Date.now() - upStart < 60000) {
-      if (!safe(() => main.querySelector('[role="progressbar"]'), null)) break;
+    while (Date.now() - upStart < 90000) {
+      if (!safe(() => (getMain() || document).querySelector('[role="progressbar"]'), null)) break;
       await sleep(1000);
     }
+    if (safe(() => (getMain() || document).querySelector('[role="progressbar"]'), null)) return false;
     await sleep(1200);
 
     // Send it: Enter, then the send button, then Enter again — verified by the
-    // upload preview leaving the composer tray.
+    // tray emptying back to (at most) its baseline.
     const cleared = async () => {
       const t0 = Date.now();
       while (Date.now() - t0 < 8000) {
         await sleep(700);
-        if (safe(() => main.querySelectorAll(PREVIEW_SEL).length, 0) <= before) return true;
+        if (trayCount() <= base) return true;
       }
       return false;
     };
@@ -428,14 +474,15 @@
       composer2.focus();
       pressEnter(composer2);
     }
-    await cleared();
-    return true; // it attached and we pushed every send path — don't re-attach a duplicate
+    return await cleared(); // honest: unverified send = failure, retried later without re-attaching
   }
-  // Send the stored demo video(s) to the current chat — INSTANTLY when the buyer
-  // messages (no delay; the TEXT reply is the one that waits), ONCE per chat.
-  // Supports MULTIPLE videos, sent in order. Failed attach attempts are retried
-  // on later scans, up to VIDEO_MAX_TRIES per chat.
+  // Send the stored demo video(s) to the current chat — INSTANTLY once Claude's
+  // reply confirms this buyer should be answered (the TEXT reply is the one that
+  // waits out the response delay). Each configured video is delivered at most
+  // once per chat, tracked INDIVIDUALLY, and failed ones are retried up to
+  // VIDEO_MAX_TRIES passes per chat.
   const VIDEO_MAX_TRIES = 3;
+  const vkey = (v) => (v.name || "video") + "|" + (v.size || 0);
   async function maybeSendVideo(id, name) {
     try {
       const cfg = await getLocal(["videoEnabled", "demoVideos", "demoVideo", "videoSentThreads", "videoTries"]);
@@ -445,38 +492,91 @@
       vids = vids.filter((v) => v && v.dataUrl);
       if (!vids.length) return;
       const sent = cfg.videoSentThreads || {};
-      if (sent[id]) return; // already sent in this conversation
+      if (sent[id] === true) return; // legacy "all done" marker
+      const done = Array.isArray(sent[id]) ? sent[id] : [];
+      let pending = vids.filter((v) => !done.includes(vkey(v)));
+      if (!pending.length) {
+        sent[id] = true;
+        await setLocal({ videoSentThreads: sent });
+        return;
+      }
       const tries = cfg.videoTries || {};
       if ((tries[id] || 0) >= VIDEO_MAX_TRIES) return; // uploader keeps rejecting — stop trying this chat
       tries[id] = (tries[id] || 0) + 1;
       await setLocal({ videoTries: tries });
+      // Re-read right before sending: another tab of this profile may have
+      // just delivered to this chat (narrows the multi-tab race window).
+      const again = (await getLocal(["videoSentThreads"])).videoSentThreads || {};
+      if (again[id] === true) return;
+      const doneNow = Array.isArray(again[id]) ? again[id] : done;
+      pending = vids.filter((v) => !doneNow.includes(vkey(v)));
+      if (!pending.length) return;
 
-      let sentCount = 0;
-      for (let i = 0; i < vids.length; i++) {
-        setStatus({ lastAction: `sending video ${i + 1}/${vids.length}…`, currentThread: name });
-        const file = dataUrlToFile(vids[i].dataUrl, vids[i].name, vids[i].type);
-        if (await injectVideo(file)) sentCount++;
-        if (i < vids.length - 1) await sleep(rand(3000, 5000)); // gap between videos
+      let failed = 0;
+      for (let i = 0; i < pending.length; i++) {
+        setStatus({ lastAction: `sending video ${i + 1}/${pending.length}…`, currentThread: name });
+        const v = pending[i];
+        const file = dataUrlToFile(v.dataUrl, v.name, v.type);
+        if (await injectVideo(file)) {
+          doneNow.push(vkey(v));
+          // Persist after EVERY success so a mid-pass crash can't cause a resend.
+          const m = (await getLocal(["videoSentThreads"])).videoSentThreads || {};
+          m[id] = doneNow;
+          await setLocal({ videoSentThreads: m });
+        } else {
+          failed++;
+        }
+        if (i < pending.length - 1) await sleep(rand(3000, 5000)); // gap between videos
       }
-      if (sentCount > 0) {
-        // At least one went out — mark the chat done so we never send duplicates.
-        sent[id] = true;
-        await setLocal({ videoSentThreads: sent });
-        setStatus({ lastAction: `demo video(s) sent ✓ (${sentCount}/${vids.length})`, currentThread: name });
-        ask({ type: "LOG_EVENT", entry: { thread: name, action: "video", reply: `sent ${sentCount}/${vids.length} demo video(s)` } });
+      if (!failed) {
+        const m = (await getLocal(["videoSentThreads"])).videoSentThreads || {};
+        m[id] = true; // every configured video delivered — chat done
+        await setLocal({ videoSentThreads: m });
+        setStatus({ lastAction: `demo video(s) sent ✓ (${pending.length}/${pending.length})`, currentThread: name });
+        ask({ type: "LOG_EVENT", entry: { thread: name, action: "video", reply: `sent ${pending.length} demo video(s)` } });
       } else {
-        setStatus({ lastError: `video didn't attach (try ${tries[id]}/${VIDEO_MAX_TRIES}) — will retry` });
+        setStatus({ lastError: `${failed} video(s) didn't send (try ${tries[id]}/${VIDEO_MAX_TRIES}) — will retry` });
+        if (doneNow.length > done.length) {
+          ask({ type: "LOG_EVENT", entry: { thread: name, action: "video", reply: `sent ${doneNow.length - done.length} demo video(s), ${failed} pending retry` } });
+        }
       }
     } catch (e) {
       setStatus({ lastError: "video error: " + e.message });
     }
   }
+  // Does this chat still owe the buyer a demo video? (Used to retry a failed
+  // attach on later scans even when we spoke last.)
+  async function videoRetryPending(id) {
+    const cfg = await getLocal(["videoEnabled", "demoVideos", "demoVideo", "videoSentThreads", "videoTries"]);
+    if (!cfg.videoEnabled) return false;
+    let vids = Array.isArray(cfg.demoVideos) ? cfg.demoVideos : [];
+    if (!vids.length && cfg.demoVideo && cfg.demoVideo.dataUrl) vids = [cfg.demoVideo];
+    vids = vids.filter((v) => v && v.dataUrl);
+    if (!vids.length) return false;
+    const tries = (cfg.videoTries || {})[id] || 0;
+    if (tries < 1 || tries >= VIDEO_MAX_TRIES) return false; // only chats where a buyer-triggered pass already ran
+    const rec = (cfg.videoSentThreads || {})[id];
+    if (rec === true) return false;
+    const done = Array.isArray(rec) ? rec : [];
+    return vids.some((v) => !done.includes(vkey(v)));
+  }
 
   /* ---------------- handle ONE conversation ---------------- */
+  // Local gate for actions that don't go through GET_REPLY_SIMPLE (the video
+  // retry path). FAILS CLOSED: no confirmed status = nothing goes out.
+  async function statusAllowsSending() {
+    const st = await ask({ type: "GET_STATUS" });
+    if (!st || !st.ok) return false;
+    if (!st.withinHours) return false;
+    if (st.hourlyCap && st.hourCount >= st.hourlyCap) return false;
+    if (st.fullDailyCap && st.dayCount >= st.fullDailyCap) return false;
+    return true;
+  }
   async function handleThread(anchor) {
     const id = threadId(anchor);
     const name = anchorName(anchor);
     lastOpenedAt[id] = Date.now();
+    unreadMisses[id] = (unreadMisses[id] || 0) + 1; // reset below when we actually send
     cooldowns[id] = Date.now() + COOLDOWN_MS;
     setStatus({ currentThread: name, lastAction: "opening", lastError: null });
 
@@ -496,6 +596,15 @@
     const turn = buyerSpokeLast();
     if (!turn) {
       cooldowns[id] = Date.now() + IDLE_COOLDOWN_MS;
+      // A failed video attach still owes this buyer the demo video — retry it
+      // here (business hours + caps checked, fail-closed) even though the text
+      // conversation is up to date.
+      if (await videoRetryPending(id)) {
+        if (await statusAllowsSending()) {
+          await maybeSendVideo(id, name);
+          return;
+        }
+      }
       setStatus({ lastAction: "skip — you spoke last (nothing to answer)", currentThread: name });
       return;
     }
@@ -505,41 +614,23 @@
     }
     setStatus({ lastAction: "buyer said: " + trunc(turn.buyerMessage, 80), currentThread: name });
 
-    // Cheap LOCAL pre-check (no API call): business hours + caps gate the
-    // instant video too, so nothing goes out at 3 AM or over the limits.
-    const st = await ask({ type: "GET_STATUS" });
-    if (st && st.ok) {
-      if (!st.withinHours) {
-        cooldowns[id] = Date.now() + IDLE_COOLDOWN_MS;
-        setStatus({ lastAction: "skip — outside business hours", currentThread: name });
-        return;
-      }
-      if (st.hourlyCap && st.hourCount >= st.hourlyCap) {
-        setStatus({ lastAction: "skip — hourly cap reached", currentThread: name });
-        return;
-      }
-      if (st.fullDailyCap && st.dayCount >= st.fullDailyCap) {
-        setStatus({ lastAction: "skip — daily cap reached", currentThread: name });
-        return;
-      }
-    }
-
-    // 1) demo video FIRST — triggered instantly by the buyer's message
-    //    (once per chat). The text reply below is the one that waits.
-    await maybeSendVideo(id, name);
-
-    // 2) ask Claude for the text reply.
+    // 1) ask Claude for the reply FIRST — its business-hours/caps gates (all
+    //    checked in the background before any API spend) and its [HUMAN]
+    //    screening cover the video too: scammers and off-hours messages get
+    //    neither a video nor a text.
     const reply = await ask({ type: "GET_REPLY_SIMPLE", buyerMessage: turn.buyerMessage, context: turn.transcript, threadName: name });
     if (!reply || !reply.ok) {
       setStatus({ lastError: "Claude error: " + (reply && reply.error) });
       return;
     }
     if (reply.skip) {
+      if (/business hours/i.test(reply.reason || "")) cooldowns[id] = Date.now() + IDLE_COOLDOWN_MS;
       setStatus({ lastAction: "skip — " + reply.reason, currentThread: name });
       return;
     }
     if (reply.human) {
       lastHandled[id] = turn.dedupeKey;
+      unreadMisses[id] = 0;
       setStatus({ lastAction: "needs you: " + reply.reason, currentThread: name });
       return;
     }
@@ -547,6 +638,10 @@
       setStatus({ lastAction: "skip — empty reply" });
       return;
     }
+
+    // 2) demo video NOW — instantly, seconds after the buyer's message
+    //    (once per chat). Only the text reply waits out the delay.
+    await maybeSendVideo(id, name);
 
     // 3) the TEXT reply respects the configured delay (human-ish typing lag).
     const settings = (await ask({ type: "GET_SETTINGS" })).settings || {};
@@ -562,6 +657,7 @@
       return;
     }
     lastHandled[id] = turn.dedupeKey;
+    unreadMisses[id] = 0;
     cooldowns[id] = Date.now() + COOLDOWN_MS;
     setStatus({ lastAction: "replied ✓", lastReplySent: trunc(reply.text, 200), currentThread: name });
 
@@ -603,11 +699,17 @@
 
     const now = Date.now();
     // Unread chats jump the queue (a buyer just wrote — answer promptly) and
-    // bypass idle cooldowns; a minimum reopen spacing plus oldest-first order
-    // stops any single chat from being hammered in a loop. Everything else
-    // rotates through cooldowns exactly like before.
+    // bypass idle cooldowns, with two guards against a row that STAYS bold
+    // (heuristic false positive / unclearable message request): a minimum
+    // reopen spacing, and after 3 fruitless opens in a row the thread falls
+    // back to normal cooldown pacing. Everything else rotates like before.
     const unreadEligible = unread
-      .filter((a) => now > (lastOpenedAt[threadId(a)] || 0) + UNREAD_REOPEN_MS)
+      .filter((a) => {
+        const uid = threadId(a);
+        if (now <= (lastOpenedAt[uid] || 0) + UNREAD_REOPEN_MS) return false;
+        if ((unreadMisses[uid] || 0) >= 3) return !cooldowns[uid] || now > cooldowns[uid];
+        return true;
+      })
       .sort((a, b) => (lastOpenedAt[threadId(a)] || 0) - (lastOpenedAt[threadId(b)] || 0));
     const target =
       unreadEligible[0] ||
