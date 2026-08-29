@@ -5,6 +5,24 @@ Marketplace buyer messages using the Anthropic Claude API. Bilingual FR/EN
 (casual Quebec French), built for used-iPhone sales in Montréal. No backend, no
 cloud — runs locally, one Chrome profile per Facebook account.
 
+> ⚡ **v0.12.0 — instant videos + reply reliability + cheaper API calls.**
+> - **Videos now fire INSTANTLY** when a buyer messages (once per chat) — before
+>   the text reply, which still waits your configured response delay + jitter.
+>   The per-video "seconds after the reply" delay is gone.
+> - **Videos actually send**: the uploader now verifies the file really attached
+>   (upload preview appears) before marking a chat "video sent", waits for the
+>   upload to finish before pressing send, and **retries up to 3×** on later
+>   scans if the attach failed. Previously a failed attach was silently marked
+>   as sent and never retried.
+> - **Conversations stopped being skipped**: buyers who repeat the same message
+>   ("ok", "?") get answered again; photo/sticker-only messages are detected and
+>   answered; the noise filter no longer eats real messages starting with
+>   "sent…", "mon…" (FR), "$300", "128gb…"; unread chats jump the scan queue so
+>   replies go out promptly instead of waiting out 10-minute cooldowns.
+> - **Cheaper Claude calls**: the system prompt is now cached
+>   (`cache_control: ephemeral` — repeat calls bill ~10% for those tokens) and
+>   `max_tokens` trimmed to 500 (replies are short texts anyway).
+>
 > 🏢 **v0.11.0 — fleet deploy for your own machines.** Fixed extension ID
 > (`jdbjbonhdnfkkfihbodmhpmccoiajflm`) + Chrome enterprise-policy support, so you can
 > **force-install + auto-update** SubSell across hundreds of machines and **push the

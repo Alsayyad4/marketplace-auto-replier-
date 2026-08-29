@@ -134,13 +134,12 @@
         <div><label>Ask after (minutes)</label><input type="number" id="visitConfirmAfterMin" min="0" /></div>
 
         <hr />
-        <label class="check"><input type="checkbox" id="videoEnabled" /> Send demo video(s) once per chat <span class="hint">after the bot's first text reply to a buyer, send your video(s) — only ONE time per conversation</span></label>
+        <label class="check"><input type="checkbox" id="videoEnabled" /> Send demo video(s) once per chat <span class="hint">sent INSTANTLY when a buyer messages (the text reply follows after your response delay) — only ONE time per conversation</span></label>
         <div class="row">
           <input type="file" id="videoFile" accept="video/mp4,video/*" />
           <span class="hint">pick a file to add it to the list (add more than one to send several)</span>
         </div>
         <div id="videoList" class="hint">No videos uploaded yet.</div>
-        <div><label>Send the video(s) this many seconds after the reply</label><input type="number" id="videoDelaySec" min="0" max="120" /></div>
         <div class="hint">Keep each under ~25&nbsp;MB for a reliable upload. Stored locally on this computer only (not synced).</div>
       </section>
 

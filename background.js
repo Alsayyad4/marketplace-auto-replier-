@@ -440,8 +440,19 @@ async function callClaude(settings, buyerMessage, extraContext) {
   if (!settings.apiKey) return { error: "No API key set." };
   const body = {
     model: settings.model || "claude-sonnet-4-6",
-    max_tokens: 1024,
-    system: buildSystemPrompt(settings),
+    // Replies are short SMS-style texts — 500 tokens is plenty and caps the
+    // cost of a runaway generation.
+    max_tokens: 500,
+    // The system prompt is identical between calls (it only changes when the
+    // operator edits settings), so mark it cacheable: repeat calls within the
+    // cache window bill ~10% for those input tokens instead of 100%.
+    system: [
+      {
+        type: "text",
+        text: buildSystemPrompt(settings),
+        cache_control: { type: "ephemeral" },
+      },
+    ],
     messages: [
       {
         role: "user",

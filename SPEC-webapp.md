@@ -71,8 +71,8 @@ nothing in the shipped extension: `wpmMin`, `wpmMax`, `maxRepliesPerConvo`,
 ### Per-machine settings (NOT web-managed — leave these to the extension)
 These live in each computer's local storage, not in the config JSON:
 - `enabled` — on/off toggle per machine.
-- **Demo video** — `videoEnabled` (bool), `videoDelaySec` (number, default 10),
-  `demoVideos` (array of uploaded files as base64). Videos are large and are
+- **Demo video** — `videoEnabled` (bool), `demoVideos` (array of uploaded files as
+  base64; sent instantly on a buyer's message, once per chat). Videos are large and are
   uploaded per machine in the extension's Settings; **do not put them in the web
   config** (too big to serve as JSON). (Future option: store video *URLs* instead and
   have the extension download them — not in v9.)
