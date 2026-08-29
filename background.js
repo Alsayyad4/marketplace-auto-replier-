@@ -1375,7 +1375,7 @@ async function buildDiagnostic() {
         "videoSentThreads", "videoAttempts", "videoUrlFails", "waitingSince", "videoPending",
         "videoCatchUp", "autoCatchUp01213", "autoCatchUp01217", "videoEnabled", "demoVideos",
         "videoCache", "replyLog", "sudBase", "sudDirName", "sudLastCheck",
-        "cooldowns", "replyCounts", "lastHandled",
+        "cooldowns", "replyCounts", "lastHandled", "videoAttachTrace",
       ],
       (x) => r(x || {})
     )
@@ -1459,6 +1459,10 @@ async function buildDiagnostic() {
     " auto13=" + (st.autoCatchUp01213 ? "done" : "-") + " auto17=" + (st.autoCatchUp01217 ? "done" : "-") +
     " | sud: base=" + (st.sudBase ? "set" : "-") + " dir=" + cut(st.sudDirName, 24) + " lastCheck=" + ageM(st.sudLastCheck)
   );
+  const trA = Array.isArray(st.videoAttachTrace) ? st.videoAttachTrace : [];
+  L.push("attach-trace: " + (trA.length
+    ? trA.map((t) => "clip" + t.clip + "/" + t.of + " " + t.res + " tray" + t.tray + (t.up ? " up" + t.up : "") + " " + ageM(t.at)).join("; ")
+    : "-"));
   const alarms = await new Promise((r) => { try { chrome.alarms.getAll((a) => r(a || [])); } catch (e) { r([]); } });
   L.push("alarms: " + (alarms.length ? alarms.map((a) => a.name + " in " + Math.max(0, Math.round((a.scheduledTime - now) / 60000)) + "m").join("; ") : "NONE"));
   const logs = Array.isArray(st.replyLog) ? st.replyLog.slice(-10) : [];

@@ -66,6 +66,13 @@
   // sidebar-keyed lookups without this bridge. In-memory: repopulated on the
   // first visit after a reload, which is soon enough for the gates that use it.
   const adoptedAlias = {};
+  // threadId -> suppress-until timestamp: chats whose OPEN CHAT read idle three
+  // times in a row while the sidebar nudge kept claiming "waiting" (FB's
+  // "X is waiting for your response" row can stay lit for hours after the chat
+  // is actually resolved). Without this, such a chat re-entered the never-miss
+  // ledger every scan and burned a lane-0 visit every few minutes all day
+  // (a diagnostic showed one chat churning like that for 9.5 hours).
+  const waitSuppress = {};
   // NEVER-MISS LEDGER: threadId -> when we FIRST saw this chat waiting for a reply.
   // Re-verified every scan; an entry is cleared ONLY when the chat is actually
   // resolved (replied / handed to human / cap-stop / turned out not waiting).
@@ -138,6 +145,22 @@
       chrome.storage.local.get(["autoCatchUp01226"], (ac) => {
         if (chrome.runtime.lastError || (ac && ac.autoCatchUp01226)) return;
         armVideoCatchUp({ autoCatchUp01226: true }).catch(() => { /* retried next boot */ });
+      });
+      // v0.21.29 ONE-SHOT UNPAUSE: the 15s attach-detection window judged good
+      // pastes "failed" on slow machines — chats collected 3 strikes and sat in
+      // 24h attach-pauses (a diagnostic showed 20 on one machine). The window is
+      // fixed now; clear the attach-pauses once so those chats retry under the
+      // fixed engine immediately instead of waiting out the day.
+      chrome.storage.local.get(["autoUnpause0129", "videoAttempts"], (r) => {
+        if (chrome.runtime.lastError || (r && r.autoUnpause0129)) return;
+        const am = (r && r.videoAttempts) || {};
+        let n = 0;
+        for (const k of Object.keys(am)) {
+          const e = am[k];
+          if (e && e.why === "attach" && (e.fails || 0) >= 1) { delete am[k]; n++; }
+        }
+        chrome.storage.local.set({ videoAttempts: am, autoUnpause0129: true }, () => void chrome.runtime.lastError);
+        if (n) console.debug("[SubSell] cleared", n, "attach strikes/pauses for the fixed engine");
       });
       // ONE-TIME MIGRATION (v0.21.4): the "Add video to listing" card false-positive
       // marked chats {done:true} WITHOUT sending since the fleet reinstall. Un-mark
@@ -743,10 +766,23 @@
   // leftover — treat the clip as attempted, never re-attempt), "navigated"
   // (the operator switched chats mid-attach — nothing may be trusted or sent;
   // any stray the paste created in the NEW chat's tray is best-effort removed).
+  // Attachments still UPLOADING in the tray (progressbars). Some FB builds /
+  // slow machines reject a new paste while an upload is running — the direct
+  // cause of "clip 1-2 attach, clip 3 always fails" on those machines.
+  const trayUploads = () => safe(() => trayQuery('[role="progressbar"]').length, 0);
   async function attachVideo(file, knownCount, tid) {
     const composer = findComposer();
     if (composer) composer.focus();
     if (tid && !stillOnThread(tid)) return "navigated";
+    // Let the PREVIOUS clip's upload finish before pasting the next (attachments
+    // themselves stay staged — only the progressbars need to settle). Bounded.
+    {
+      const t0 = Date.now();
+      while (Date.now() - t0 < 60000 && trayUploads() > 0) {
+        if (tid && !stillOnThread(tid)) return "navigated";
+        await sleep(1000);
+      }
+    }
     const dtFor = () => {
       const dt = new DataTransfer();
       dt.items.add(file);
@@ -789,13 +825,13 @@
     // Try each strategy IN ORDER; require a NEW preview element to appear before
     // trusting it (identity, not count-delta — immune to simultaneous changes).
     let attached = false;
-    let firstStrategy = true;
+    let strategyIdx = 0;
+    let lastBeforeEls = new Set();
     for (const attempt of attempts) {
       // A previous strategy's paste may have rendered too late for its window —
       // clean the EXTRAS (never the known-good clips) before escalating, or the
       // next strategy would stage a second copy and one Enter sends both.
-      if (!firstStrategy && trayRemoveBtns().length > knownCount) await sweepTrayExtras(knownCount);
-      firstStrategy = false;
+      if (strategyIdx > 0 && trayRemoveBtns().length > knownCount) await sweepTrayExtras(knownCount);
       // Navigating away mid-attach means any further paste would land in the
       // WRONG chat's composer — stop before dispatching, and if a stray already
       // appeared in the new chat's tray, remove it immediately (fresh node
@@ -803,10 +839,16 @@
       const beforeBtns = new Set(trayRemoveBtns());
       if (tid && !stillOnThread(tid)) return "navigated";
       const beforeEls = new Set(trayEls());
-      if (!safe(attempt, false)) continue;
+      lastBeforeEls = beforeEls;
+      if (!safe(attempt, false)) { strategyIdx++; continue; }
+      // The paste strategy gets a LONG window: on throttled/RDP machines the
+      // preview can render 20-30s after a perfectly good paste, and a too-short
+      // window judged those attaches "failed", swept them away and struck the
+      // chat — the root of the fleet's PAUSED-attach lockouts.
+      const windowMs = strategyIdx === 0 ? 30000 : 12000;
       const start = Date.now();
       let navigated = false;
-      while (Date.now() - start < 15000) {
+      while (Date.now() - start < windowMs) {
         await sleep(1000);
         if (tid && !stillOnThread(tid)) { navigated = true; break; }
         if (trayEls().some((el) => !beforeEls.has(el))) {
@@ -819,8 +861,16 @@
         return "navigated";
       }
       if (attached) break; // this strategy worked — stop trying others
+      strategyIdx++;
     }
     if (!attached) {
+      // LATE-RENDER GRACE before declaring failure: one more beat — a paste that
+      // rendered after the last window is a SUCCESS, not a stray to sweep.
+      await sleep(8000);
+      if (trayEls().some((el) => !lastBeforeEls.has(el))) {
+        await sleep(1200);
+        return true;
+      }
       await sweepTrayExtras(knownCount);
       if (trayRemoveBtns().length > knownCount) return "dirty"; // unverifiable leftover — never re-attempt
       return false; // provably nothing new attached — re-attempting later cannot duplicate
@@ -1554,6 +1604,15 @@
         }
         setStatus({ lastAction: `attaching video ${i + 1}/${files.length}…`, currentThread: name });
         const res = await attachVideo(files[i], knownCount, id);
+        // ATTACH TRACE (ring of 12, shown in 🩺): which clip, what verdict, how
+        // the tray looked — ends the guessing when a machine's attaches fail.
+        safe(() => chrome.storage.local.get(["videoAttachTrace"], (rT) => {
+          if (chrome.runtime.lastError) return;
+          const tr = (rT && rT.videoAttachTrace) || [];
+          tr.push({ at: Date.now(), clip: i + 1, of: files.length, res: res === true ? "ok" : String(res), tray: trayRemoveBtns().length, up: trayUploads() });
+          while (tr.length > 12) tr.shift();
+          chrome.storage.local.set({ videoAttachTrace: tr }, () => void chrome.runtime.lastError);
+        }));
         if (res === "navigated") {
           // Mid-attach navigation: clip i counts as ATTEMPTED (its paste may have
           // landed somewhere unverifiable — re-attempting could double-send);
@@ -2002,6 +2061,14 @@
         return;
       }
       clearWaiting(id, sidebarId); // genuinely idle — resolved, off the never-miss ledger
+      // Three straight idle reads against a still-lit sidebar nudge: stop the
+      // ledger from re-stamping this chat for a while, or lane 0 revisits it
+      // every few minutes all day. A NEW buyer message clears through lane 1
+      // (unread + buyer snippet) regardless of this suppression.
+      if (sidebarSaysBuyer) {
+        waitSuppress[id] = Date.now() + 6 * 3600 * 1000;
+        waitSuppress[sidebarId] = waitSuppress[id];
+      }
       cooldowns[id] = Date.now() + IDLE_COOLDOWN_MS;
       // You spoke last — nothing to reply to. But still: (1) send the demo video if
       // this chat never got one, and (2) consider a smart, capped follow-up if the
@@ -2567,6 +2634,10 @@
           const effReplies = Math.max(replyCounts[wid] || 0, adoptedAlias[wid] != null ? (replyCounts[adoptedAlias[wid]] || 0) : 0);
           if (wid && capN > 0 && effReplies >= capN) {
             if (waitingSince[wid] != null) { delete waitingSince[wid]; purgedStale = true; }
+          } else if (wid && waitSuppress[wid] && waitSuppress[wid] > nowT) {
+            // Chat repeatedly read idle in-chat despite the lit sidebar nudge —
+            // keep it OFF the ledger until the suppression lapses (see waitSuppress).
+            if (waitingSince[wid] != null) { delete waitingSince[wid]; purgedStale = true; }
           } else if (wid && waitingSince[wid] == null) waitingSince[wid] = nowT;
         } else if (safe(() => (a.innerText || "").split("\n").filter((s) => s.trim()).length >= 2, false)) {
           // Row is FULLY RENDERED (name + snippet) and reads not-buyer-last — the
@@ -2856,6 +2927,8 @@
                   (typeof ve.resumeFrom === "number" ? "+r" + ve.resumeFrom + "/" + (ve.resumeTotal != null ? ve.resumeTotal : "?") : "")
                 : "-") +
               " att=" + (ae && (ae.fails || 0) >= 3 ? "PAUSED-" + (ae.why || "load") : ae && ae.fails ? "f" + ae.fails : "-") +
+              (suspiciousReads[id] ? " susp=" + suspiciousReads[id] : "") +
+              (waitSuppress[id] && waitSuppress[id] > now ? " SUPP" : "") +
               " \"" + (trunc(lines2.slice(1).join(" "), 48) || "") + "\""
             );
           });
