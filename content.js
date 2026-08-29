@@ -809,6 +809,12 @@
       }
       seen = trayEls().filter((el) => !before.has(el)).length;
       if (seen >= want) return want;
+      // FAIL FAST (v0.21.32): a live diagnostic showed Facebook's composer takes
+      // ZERO files from a synthetic multi-file paste on at least some builds
+      // (attach-trace "bulk:0") — and this probe then burned ~50s per set before
+      // the fallback. If NOTHING has appeared within 10s, multi-paste is
+      // unsupported here: bail immediately to the one-by-one path.
+      if (seen === 0 && Date.now() - start > 10000) return 0;
     }
     await sleep(6000); // late-render grace — a slow machine may still be painting
     seen = trayEls().filter((el) => !before.has(el)).length;
@@ -818,15 +824,13 @@
     const composer = findComposer();
     if (composer) composer.focus();
     if (tid && !stillOnThread(tid)) return "navigated";
-    // Let the PREVIOUS clip's upload finish before pasting the next (attachments
-    // themselves stay staged — only the progressbars need to settle). Bounded.
-    {
-      const t0 = Date.now();
-      while (Date.now() - t0 < 60000 && trayUploads() > 0) {
-        if (tid && !stillOnThread(tid)) return "navigated";
-        await sleep(1000);
-      }
-    }
+    // OPTIMISTIC PIPELINING (v0.21.32): the next clip is pasted immediately,
+    // WHILE the previous clip is still uploading — most FB builds accept it,
+    // which makes the uploads overlap instead of running one after another
+    // (this was the remaining 30-60s). Builds that reject a mid-upload paste
+    // fail the first short detection window; the loop then waits the uploads
+    // out and pastes AGAIN (second attempt below) with the long window — the
+    // proven v0.21.29 behavior, just demoted from "always" to "fallback".
     const dtFor = () => {
       const dt = new DataTransfer();
       dt.items.add(file);
@@ -834,12 +838,14 @@
     };
     const attempts = [];
     if (composer) {
-      attempts.push(() => {
+      const pasteFn = () => {
         const ev = new ClipboardEvent("paste", { bubbles: true, cancelable: true });
         Object.defineProperty(ev, "clipboardData", { value: dtFor() });
         composer.dispatchEvent(ev);
         return true;
-      });
+      };
+      attempts.push(pasteFn); // optimistic — fired even while a previous upload runs
+      attempts.push(pasteFn); // retry after the loop settles the uploads (see below)
       attempts.push(() => {
         const dt = dtFor();
         for (const t of ["dragenter", "dragover", "drop"]) {
@@ -876,6 +882,15 @@
       // clean the EXTRAS (never the known-good clips) before escalating, or the
       // next strategy would stage a second copy and one Enter sends both.
       if (strategyIdx > 0 && trayRemoveBtns().length > knownCount) await sweepTrayExtras(knownCount);
+      // Escalating past the optimistic paste: settle any running uploads first
+      // (some FB builds reject a paste mid-upload — the retry then lands).
+      if (strategyIdx > 0 && trayUploads() > 0) {
+        const tS = Date.now();
+        while (Date.now() - tS < 60000 && trayUploads() > 0) {
+          if (tid && !stillOnThread(tid)) return "navigated";
+          await sleep(1000);
+        }
+      }
       // Navigating away mid-attach means any further paste would land in the
       // WRONG chat's composer — stop before dispatching, and if a stray already
       // appeared in the new chat's tray, remove it immediately (fresh node
@@ -884,12 +899,15 @@
       if (tid && !stillOnThread(tid)) return "navigated";
       const beforeEls = new Set(trayEls());
       lastBeforeEls = beforeEls;
+      const uploadsAtDispatch = trayUploads();
       if (!safe(attempt, false)) { strategyIdx++; continue; }
-      // The paste strategy gets a LONG window: on throttled/RDP machines the
-      // preview can render 20-30s after a perfectly good paste, and a too-short
-      // window judged those attaches "failed", swept them away and struck the
-      // chat — the root of the fleet's PAUSED-attach lockouts.
-      const windowMs = strategyIdx === 0 ? 30000 : 12000;
+      // Window sizing: the OPTIMISTIC paste fails fast (12s) when uploads were
+      // running at dispatch — if this build rejects mid-upload pastes we want to
+      // move to the settle-and-retry quickly, not burn 30s. The settled retry
+      // keeps the LONG 30s window (throttled/RDP machines render previews
+      // 20-30s late; a short window there judged good attaches "failed", swept
+      // them away and struck the chat — the v0.21.29 lockout bug).
+      const windowMs = strategyIdx === 0 ? (uploadsAtDispatch > 0 ? 12000 : 30000) : strategyIdx === 1 ? 30000 : 12000;
       const start = Date.now();
       let navigated = false;
       while (Date.now() - start < windowMs) {
