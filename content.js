@@ -2460,12 +2460,31 @@
     }
     if (overdue) return overdue;
 
+    // LANE 1 — INSTANT, and now ABOVE the aged-video lane (v0.21.30, operator:
+    // "new people first — videos + reply the moment they message"): the NEWEST
+    // genuinely-waiting buyer (topmost matching row — the sidebar is
+    // recency-sorted) is served before any old chat's queued video visit. Their
+    // visit delivers everything at once anyway (staged clips + reply in one
+    // message), so prioritizing them costs old chats at most one ~1-min slot.
+    // Two conditions, not just the dot: unread AND the preview reads like the
+    // BUYER's message. A dot with OUR preview ("You: …") is a STALE dot — on
+    // minimized windows FB often never clears dots after we reply, and those
+    // ghosts were re-opened forever, eating the queue.
+    for (const a of anchors) {
+      const id = threadId(a);
+      if (exclude.has(id)) continue;
+      if (!safe(() => isUnreadAnchor(a), false)) continue;
+      if (!safe(() => snippetSuggestsBuyerLast(a), false)) continue; // stale dot → not lane 1
+      if (now - (lastOpened[id] || 0) <= UNREAD_REOPEN_MS) continue;
+      if (openFailCount(id) >= 3 && now <= (cooldowns[id] || 0)) continue; // won't-open park (see lane 0)
+      return a; // first match = newest buyer → instant videos + reply
+    }
+
     // LANE 0.5 — AGED PENDING VIDEOS (anti-starvation): on busy accounts lanes 0/1
     // are never both empty during business hours, so LANE 1.5 never ran and deferred
     // sets waited FOREVER ("replies fine, videos never send" — the busiest accounts).
-    // At most one pending set older than 20 min goes out per 10 min. LANE 0 above
-    // still absolutely outranks this, so an overdue buyer is never displaced; a
-    // fresh buyer waits at most one video visit (~1-2 min), at most once per 10 min.
+    // At most one pending set goes out per 4 min. LANES 0 and 1 above outrank this:
+    // an overdue buyer or a BRAND-NEW buyer is never displaced by an old chat's set.
     if (now - lastAgedVideoAt > AGED_VIDEO_EVERY_MS) {
       let av = null, avT = Infinity;
       for (const a of anchors) {
@@ -2482,21 +2501,6 @@
         agedVideoTried[threadId(av)] = now; // stamped BEFORE the visit — a lock collision or failed open just delays 10 min (safe direction)
         return av;
       }
-    }
-
-    // LANE 1 — INSTANT: the NEWEST genuinely-waiting buyer (topmost matching row —
-    // the sidebar is recency-sorted). Two conditions, not just the dot: unread AND
-    // the preview reads like the BUYER's message. A dot with OUR preview ("You: …")
-    // is a STALE dot — on minimized windows FB often never clears dots after we
-    // reply, and those ghosts were re-opened forever, eating the queue.
-    for (const a of anchors) {
-      const id = threadId(a);
-      if (exclude.has(id)) continue;
-      if (!safe(() => isUnreadAnchor(a), false)) continue;
-      if (!safe(() => snippetSuggestsBuyerLast(a), false)) continue; // stale dot → not lane 1
-      if (now - (lastOpened[id] || 0) <= UNREAD_REOPEN_MS) continue;
-      if (openFailCount(id) >= 3 && now <= (cooldowns[id] || 0)) continue; // won't-open park (see lane 0)
-      return a; // first match = newest buyer → instant reply
     }
 
     // LANE 1.5 — PENDING VIDEOS (guaranteed delivery): sets deferred during a busy
