@@ -6,7 +6,7 @@ French), built for used-iPhone sales in Montréal. Runs locally per Chrome profi
 by default; **optional cloud sync** turns it into a web app so one change reaches
 every computer.
 
-> 🎯 **v0.21.35 — videos attached through Chrome's own file API (the permanent fix).**
+> 🎯 **v0.21.36 — videos attached through Chrome's own file API (the permanent fix).**
 > Field evidence (screenshot + diagnostic): the bot replied but no video went out because
 > the *attach* step — faking a paste/drag/file-input event into Facebook's composer — is
 > accepted only some of the time on this Facebook build. Now the primary path is the one

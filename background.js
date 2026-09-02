@@ -1212,7 +1212,7 @@ async function fetchVideo(url) {
   }
 }
 
-/* ---------------- ON-DISK clips + Chrome FILE API attach (v0.21.35) ----------------
+/* ---------------- ON-DISK clips + Chrome FILE API attach (v0.21.36) ----------------
  * Synthetic paste/drop/change events into Facebook's composer are accepted only
  * SOME of the time on some builds — the direct cause of "replied but no video"
  * chats. The robust way (what Playwright does) is Chrome's own debugger protocol:

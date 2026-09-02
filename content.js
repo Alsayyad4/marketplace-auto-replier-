@@ -927,7 +927,7 @@
     if (tid && !stillOnThread(tid)) return "navigated";
     const before = new Set(trayEls());
     const beforeBtns = new Set(trayRemoveBtns());
-    // CHROME FILE API FIRST (v0.21.35): hand the real on-disk files to the
+    // CHROME FILE API FIRST (v0.21.36): hand the real on-disk files to the
     // composer's <input type=file> through the debugger protocol — Chrome then
     // stages them exactly as if the operator picked them in the file dialog
     // (trusted change event), which this build honors where synthetic pastes
@@ -1007,7 +1007,7 @@
     const composer = findComposer();
     if (composer) composer.focus();
     if (tid && !stillOnThread(tid)) return "navigated";
-    // CHROME FILE API FIRST (v0.21.35) when the clip is on disk — see
+    // CHROME FILE API FIRST (v0.21.36) when the clip is on disk — see
     // attachVideosBulk. Runs as strategy 0 with the long window; the synthetic
     // strategies keep their exact old order/windows behind it.
     const useCdp = !!diskPath && cdpUsableNow() && !!composer && !composerText(composer);
@@ -1324,7 +1324,7 @@
   // (with the first-video delay + the between-videos delay), CONFIRM they actually
   // landed, RETRY later if a send genuinely failed (backoff, capped — no spam), and
   // NEVER resend once a video is confirmed in the chat.
-  // ---- Chrome FILE API attach (v0.21.35): real files via the debugger protocol ----
+  // ---- Chrome FILE API attach (v0.21.36): real files via the debugger protocol ----
   // See background.js cdpSetFiles(). A hard failure parks the path for a while so a
   // machine without the permission/file access doesn't burn seconds on every clip.
   let cdpDisabledUntil = 0;
