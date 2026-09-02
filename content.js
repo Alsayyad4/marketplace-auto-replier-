@@ -46,7 +46,7 @@
   // never settles, a dead message port, …) the next tick force-resets after
   // BUSY_MAX_MS instead of freezing the bot until a manual page reload.
   let busySince = 0;
-  const BUSY_MAX_MS = 6 * 60 * 1000; // > max legit cycle (delay+jitter+typing+videos)
+  const BUSY_MAX_MS = 9 * 60 * 1000; // > max legit cycle (delay+jitter+typing+a fully streamed 3-clip set)
   let pausedForUpdate = 0; // set by PAUSE_SCANS: an update is on disk, stop starting new chats
   let pendingReply = {}; // threadId -> {buyerMessage, transcript, text, at} — billed but undelivered replies (abort recovery). In-memory only: a lost memo just falls back to a normal call.
   let cooldowns = {}; // threadId -> timestamp we may re-check it (persisted, shared across tabs)
@@ -161,6 +161,21 @@
         }
         chrome.storage.local.set({ videoAttempts: am, autoUnpause0129: true }, () => void chrome.runtime.lastError);
         if (n) console.debug("[SubSell] cleared", n, "attach strikes/pauses for the fixed engine");
+      });
+      // v0.21.34 ONE-SHOT UNPAUSE: the old hold-then-send path struck chats whose
+      // 2nd/3rd clip was rejected mid-upload; under streaming delivery each clip
+      // attaches on an empty, settled tray. Clear the attach-pauses once so those
+      // chats retry now instead of waiting out the day (same pattern as 0.21.29).
+      chrome.storage.local.get(["autoUnpause0134", "videoAttempts"], (r) => {
+        if (chrome.runtime.lastError || (r && r.autoUnpause0134)) return;
+        const am = (r && r.videoAttempts) || {};
+        let n = 0;
+        for (const k of Object.keys(am)) {
+          const e = am[k];
+          if (e && e.why === "attach" && (e.fails || 0) >= 1) { delete am[k]; n++; }
+        }
+        chrome.storage.local.set({ videoAttempts: am, autoUnpause0134: true }, () => void chrome.runtime.lastError);
+        if (n) console.debug("[SubSell] cleared", n, "attach strikes/pauses for the streaming engine");
       });
       // ONE-TIME MIGRATION (v0.21.4): the "Add video to listing" card false-positive
       // marked chats {done:true} WITHOUT sending since the fleet reinstall. Un-mark
@@ -356,6 +371,27 @@
     // renders on the operator's machines).
     if (/^you[:\s]|^vous\s?:|you sent|vous avez envoyé|automated suggestion|this is an autom|ceci est une sugg|suggestion automati|to help identi|pour (mieux )?identifier|you can now ra|rate each other|vous pouvez (désormais|maintenant) (vous )?évaluer|started this chat|a démarré|marketplace ·|reacted .{0,4}to your|a réagi|liked your|a aimé|left the group|a quitté le groupe|joined the group|a rejoint le groupe/i.test(prev)) return false;
     return true;
+  }
+
+  // The sidebar row's OWN attribution of the last message: "Charles: How much? · 2h"
+  // → { body: "How much?", media: false }. Messenger writes the sender's name
+  // itself, so this is positive "the BUYER spoke last" evidence — used to rescue
+  // chats where the open-chat paint/geometry read is inconclusive (defaults to
+  // "me") and a real buyer was being suppressed for hours. Returns null for our
+  // own rows ("You: …"), system rows, or rows without a "Name: body" shape.
+  function sidebarSnippetBody(a) {
+    const t = safe(() => a.innerText || "", "");
+    if (!t) return null;
+    const lines = t.split("\n").map((s) => s.trim()).filter(Boolean);
+    if (lines.length < 2) return null;
+    let s = lines.slice(1).join(" ").replace(/^(?:unread messages?|messages? non lus?)\s*[:.,]?\s*/i, "");
+    const m = s.match(/^([^:]{1,60}?):\s*(.+)$/);
+    if (!m) return null;
+    if (/^(you|vous|toi|moi)$/i.test(m[1].trim())) return null;
+    let body = m[2].replace(/\s*[·•]\s*\d{1,3}\s?(min|m|h|hr|j|d|sem|w)\b.*$/i, "").replace(/(\.\.\.|…)\s*$/, "").trim();
+    if (!body) return null;
+    const media = /\b(sent|a envoyé|vous a envoyé|t'a envoyé)\b.*\b(photo|video|vidéo|attachment|pièce jointe|voice|vocal|audio|gif|sticker|autocollant)/i.test(body);
+    return { body, media };
   }
 
   // Does this sidebar row show as UNREAD (buyer waiting)? Two independent signals:
@@ -614,8 +650,11 @@
     return out;
   }
   // The buyer message to answer: the last bubble, and only if it's the buyer's.
-  function buyerSpokeLast() {
-    const convo = readConversation();
+  // `hint` (optional) = the sidebar's own attribution of the last message (see
+  // sidebarSnippetBody): when the open-chat read is inconclusive and defaulted
+  // the last bubble to "me", but its text is exactly what the sidebar attributes
+  // to the BUYER by name, that bubble IS the buyer's — Messenger says so.
+  function turnFromConvo(convo, hint) {
     // Our own demo clips render as trailing "me [attachment]" bubbles — never
     // let them hide a buyer message whose TEXT reply still needs to go out.
     while (
@@ -626,7 +665,15 @@
       convo.pop();
     if (!convo.length) return null;
     const last = convo[convo.length - 1];
-    if (last.role !== "buyer") return null;
+    if (last.role !== "buyer") {
+      if (!hint) return null;
+      const lt = normMsg(last.text);
+      const hb = normMsg(hint.body || "");
+      const textMatch = last.text !== "[attachment]" && hb.length >= 2 && (lt === hb || lt.startsWith(hb));
+      const mediaMatch = !!hint.media && last.text === "[attachment]";
+      if (!textMatch && !mediaMatch) return null;
+      last.role = "buyer"; // sidebar-confirmed: Messenger attributes this message to the buyer
+    }
     // Dedupe key = what WE last said + how many buyer TEXT bubbles followed + the
     // buyer's text. lastHandled keyed on the text alone meant a buyer who repeated
     // the same words later ("ok", "?") was skipped forever. TEXT bubbles only —
@@ -654,6 +701,12 @@
       transcript,
       dedupeKey: lastMine + "\u0001" + trailing + "\u0001" + last.text,
     };
+  }
+  function buyerSpokeLast() {
+    return turnFromConvo(readConversation(), null);
+  }
+  function buyerSpokeLastConfirmed(hint) {
+    return turnFromConvo(readConversation(), hint);
   }
   // Transcript regardless of who spoke last (used for smart follow-ups on quiet chats).
   function fullTranscript() {
@@ -1316,7 +1369,7 @@
       }
     } catch (e) { /* best-effort */ }
   }
-  async function maybeSendVideo(id, name, immediate, sidebarKey, deferSend) {
+  async function maybeSendVideo(id, name, immediate, sidebarKey, deferSend, hooks) {
     videoSendDeferred = false;
     try {
       // Terminal exits must clear the pending queue under BOTH keys: deferral
@@ -1712,6 +1765,31 @@
       let okCount = 0;
       let failedAt = -1;    // first clip whose attach provably failed (tray verified clean → re-attempt allowed)
       let dirtyStop = false; // a clip whose attach is UNCONFIRMED — must never be re-attempted
+      // STREAMING DELIVERY (v0.21.34, operator: "send whatever can send"): in the
+      // one-by-one path each clip is SENT the moment its own upload finishes,
+      // instead of being held until the whole set is attached. On builds where
+      // Facebook rejects a paste while a previous clip is still uploading (this
+      // fleet: every set showed bulk:0 + ~60s per clip) the old hold meant ~4
+      // minutes of nothing, then everything at once — and the text reply waited
+      // just as long. Now: clip 1 out in ~30s, the reply right behind it (via
+      // hooks.onClipSent), clips 2..N streaming after, and between clips the
+      // engine YIELDS whenever another buyer is waiting (the tail resumes via
+      // the pending lane — a postponement, never a loss). The bulk fast path
+      // (all clips landed in one paste) still sends as one message.
+      const streaming = !deferSend;
+      let streamedCount = 0;
+      // Park the un-sent tail (resume marker + pending queue) — shared by the
+      // navigation and yield exits of the streaming path.
+      const parkTail = async (nextIdx, statusLine) => {
+        const dmPk = (await getLocal(["videoSentThreads"])).videoSentThreads || {};
+        if (dmPk[id] && dmPk[id].owner && dmPk[id].owner !== TAB_UID) return; // taken over — its stamps govern
+        dmPk[id] = { done: true, at: Date.now(), owner: TAB_UID, resumeFrom: nextIdx, resumeTotal: files.length, sent: okCount + startAt };
+        await setLocal({ videoSentThreads: dmPk });
+        videoLocked.delete(id); // the finishing visit must pass the in-memory guard
+        const qkPk = sidebarKey || id;
+        if (qkPk && videoPending[qkPk] == null && videoPending[id] == null) { videoPending[qkPk] = Date.now(); persistDedup(); }
+        setStatus({ lastAction: statusLine, currentThread: name });
+      };
 
       // FAST PATH: hand the whole remaining set over in ONE paste so Facebook
       // uploads the clips in PARALLEL (a human dragging 3 files at once). This
@@ -1842,6 +1920,44 @@
           if (dmP2[id] && dmP2[id].owner && dmP2[id].owner !== TAB_UID) return;
           dmP2[id] = { done: true, at: Date.now(), via: "lock", owner: TAB_UID, sent: okCount + startAt, resumeFrom: i + 1, resumeTotal: files.length };
           await setLocal({ videoSentThreads: dmP2 });
+          if (streaming) {
+            // Let THIS clip's upload finish (Enter mid-upload is queued by FB, but
+            // a finished upload sends instantly and leaves the tray empty for the
+            // next paste — which is also what makes the next attach land on the
+            // first try instead of being rejected mid-upload).
+            const upS = Date.now();
+            while (Date.now() - upS < 75000 && trayUploads() > 0) {
+              if (!stillOnThread(id)) break;
+              await sleep(1000);
+            }
+            if (!stillOnThread(id)) {
+              await parkTail(i + 1, `video set paused at ${i}/${files.length} (chat switched) — finishing later`);
+              return;
+            }
+            setStatus({ lastAction: `sending video ${i + 1}/${files.length}…`, currentThread: name });
+            await sendAttachedVideos();
+            streamedCount++;
+            knownCount = trayRemoveBtns().length; // normally 0 now; a stuck preview simply rides the next Enter
+            refreshThreadLock(sidebarKey || id); // uploads outlive the cross-tab lease
+            if (hooks && typeof hooks.onClipSent === "function") {
+              // Interleave the TEXT reply right after the first clip (the reply
+              // path honors its own delay clock and reports its own errors).
+              try { await hooks.onClipSent(i); } catch (e) { /* never break the set */ }
+              if (!stillOnThread(id)) {
+                await parkTail(i + 1, `video set paused at ${i + 1}/${files.length} (chat switched) — finishing later`);
+                return;
+              }
+            }
+            if (i + 1 < files.length && buyersWaitingNow(id, sidebarKey)) {
+              // YIELD: someone else is waiting for a reply. Their answer outranks
+              // this chat's remaining clips — the tail is queued (pending lane,
+              // guaranteed delivery), not dropped, and no failure is recorded.
+              await parkTail(i + 1, `${okCount + startAt}/${files.length} videos sent — pausing for a waiting buyer, finishing later`);
+              vstat("sent " + (okCount + startAt) + "/" + files.length + " — yielded to a waiting buyer, finishing later (" + (name || id) + ")");
+              ask({ type: "LOG_EVENT", entry: { thread: name, threadId: id, buyer: "(demo video)", action: "video", reply: (okCount + startAt) + "/" + files.length + " demo videos sent — finishing the rest after a waiting buyer" } });
+              return;
+            }
+          }
         } else if (res === "dirty") {
           // Attach unconfirmed AND the tray couldn't be verified clean — treat the
           // clip as attempted (pre-attempt stamp already excludes it) and stop.
@@ -1863,7 +1979,8 @@
       // never received). The attached draft is adopted by the queued resume
       // visit if Messenger kept it.
       const attachedNow = trayRemoveBtns().length;
-      const wantSend = okCount > 0 || (startAt > 0 && attachedNow > 0);
+      // Streamed clips already went out one by one — nothing is held for a final Enter.
+      const wantSend = streamedCount > 0 ? false : (okCount > 0 || (startAt > 0 && attachedNow > 0));
       if (wantSend && !stillOnThread(id)) {
         const dmB = (await getLocal(["videoSentThreads"])).videoSentThreads || {};
         if (!(dmB[id] && dmB[id].owner && dmB[id].owner !== TAB_UID)) {
@@ -2244,6 +2361,22 @@
       if (sig === prevSig) break; // stable → safe to act
       prevSig = sig;
     }
+    // SIDEBAR-CONFIRMED BUYER TURN (v0.21.34): the open-chat read defaults every
+    // inconclusive bubble to "me" (the anti-self-reply law), and on some chats
+    // (group-style threads, custom themes, media-heavy tails) that turned a REAL
+    // buyer message into "you spoke last" three times → 6h suppression (a
+    // diagnostic showed "Charles: How much? · 2h" and "Dreamliner: Le 13 pro ·
+    // 12h" sitting unanswered exactly like that). When the sidebar row itself
+    // attributes the last message to the buyer BY NAME and that same text is the
+    // last bubble in the open chat, that bubble is the buyer's — answer it.
+    if (!turn && sidebarSaysBuyer) {
+      const hint = safe(() => sidebarSnippetBody(anchor), null);
+      const confirmed = hint ? buyerSpokeLastConfirmed(hint) : null;
+      if (confirmed) {
+        turn = confirmed;
+        setStatus({ lastAction: "buyer message confirmed via sidebar attribution", currentThread: name });
+      }
+    }
     if (!turn) {
       // SUSPICIOUS READ: the sidebar said a buyer message was waiting, but the open
       // chat reads as "you spoke last". On slow loads (Remote Desktop) the buyer's
@@ -2374,212 +2507,139 @@
     const memoOk = !!(memo && memo.buyerMessage === turn.buyerMessage && memo.transcript === turn.transcript && Date.now() - memo.at < 10 * 60 * 1000);
     if (memo && !memoOk) delete pendingReply[id];
 
-    // PARALLEL PIPELINE (v0.21.28, operator: "videos instantly AND start replying
-    // at the same time"): the Claude call is FIRED here (not awaited) so the reply
-    // is generated WHILE the clips attach; the video engine stages the set without
-    // sending (deferSend), the reply text is typed into the SAME composer, and ONE
-    // Enter delivers videos + answer as a single message. Total time ≈ the attach
-    // time alone; still exactly one API call per reply.
+    // PARALLEL PIPELINE (v0.21.28) + STREAMING DELIVERY (v0.21.34):
+    // The Claude call is FIRED here (not awaited) so the reply is generated
+    // while clip 1 attaches. Then — instead of holding EVERYTHING until the
+    // whole set is attached and shipping it with one Enter at the very end (on
+    // this fleet's FB build a paste is rejected mid-upload, so that meant ~4
+    // minutes of "holding" per chat, with the text answer waiting just as long
+    // and every other buyer blocked) — clip 1 is sent the moment its upload
+    // finishes, the TEXT reply ships right behind it (still honoring the
+    // configured delay, counted from this instant), and the remaining clips
+    // stream out one by one, yielding whenever another buyer is waiting.
+    // Still exactly one API call per reply.
     const replyPromise = ask({ type: "GET_REPLY_SIMPLE", buyerMessage: turn.buyerMessage, context: turn.transcript, threadName: name, cachedText: memoOk ? memo.text : undefined });
-
-    // The configured response delay runs CONCURRENTLY with the video work from
-    // THIS moment (operator: "right away — just the time I set in the settings").
-    // Total time to the buyer = max(your delay, the actual upload time), never
-    // the sum: whatever the clips take is subtracted from the wait below.
     const replyClockStart = Date.now();
     const targetDelayMs = (settings.responseDelaySec || 15) * 1000 + rand(0, (settings.jitterSec || 15) * 1000);
 
-    let deferredAttach = false;
-    if (!videoLocked.has(id)) {
-      refreshThreadLock(sidebarId); // uploads can outlive the cross-tab lease
-      await maybeSendVideo(id, name, true, sidebarId, true);
-      deferredAttach = videoSendDeferred; // set is STAGED, unsent — we owe an Enter this visit
-      if (videoLocked.has(id)) clearVideoPending(sidebarId); // terminal → clear the sidebar-keyed pending too
-      if (!stillOnThread(id)) {
-        // Operator navigated. A staged set stays as this chat's draft — the
-        // queued pending visit adopts and ships it. The billed reply is
-        // MEMOIZED so the retry cycle replays it for free instead of
-        // re-billing an identical call.
-        const r0 = await replyPromise;
-        if (r0 && r0.ok && !r0.skip && !r0.human && r0.text && r0.text.trim() && !memoOk) {
-          pendingReply[id] = { buyerMessage: turn.buyerMessage, transcript: turn.transcript, text: r0.text, at: Date.now() };
-        }
-        if (deferredAttach) await demoteDraftMarker(id);
-        setStatus({ lastAction: "videos staged — reply postponed (you switched chats)", currentThread: name });
+    // Ships the text reply exactly once — called by the video engine right after
+    // the first clip goes out, or below when there are no clips to send.
+    const rs = { done: false };
+    const shipReply = async (afterClip) => {
+      if (rs.done) return;
+      rs.done = true;
+      const reply = await replyPromise; // usually already resolved while clip 1 attached
+      if (!reply || !reply.ok) {
+        setStatus({ lastError: "Claude error: " + (reply && reply.error) });
         return;
       }
-    }
-    const reply = await replyPromise; // usually already resolved while clips attached
-    // A staged, unsent set must NEVER be left silently — every early exit below
-    // ships it first (videos alone still beat nothing), then FINALIZES the mark
-    // (the "sent" stamp + Activity row only exist after a real Enter).
-    const flushStaged = async () => {
-      if (!deferredAttach) return;
-      deferredAttach = false;
-      if (stillOnThread(id)) {
-        await sendAttachedVideos();
-        await finalizeDeferredVideoSend(id, sidebarId, name);
-      } else {
-        await demoteDraftMarker(id); // draft ships via the queued pending visit
+      if (reply.skip) {
+        if (reply.reason === "empty reply") {
+          // Claude DELIBERATELY chose silence (system/meta message, nothing to answer).
+          // Mark handled so the same unanswerable message isn't re-billed every
+          // cooldown; a NEW buyer message (different text) still gets handled fresh.
+          lastHandled[id] = turn.dedupeKey;
+          clearWaiting(id, sidebarId);
+          persistDedup();
+        }
+        setStatus({ lastAction: "skip — " + reply.reason, currentThread: name });
+        return;
+      }
+      if (reply.human) {
+        lastHandled[id] = turn.dedupeKey;
+        clearWaiting(id, sidebarId); // handed to the human — resolved for the bot
+        setStatus({ lastAction: "needs you: " + reply.reason, currentThread: name });
+        return; // (the clips keep streaming — videos alone still help the human close)
+      }
+      if (!reply.text || !reply.text.trim()) {
+        setStatus({ lastAction: "skip — empty reply" });
+        return;
+      }
+      // Remember the billed text until it's actually delivered — an abort below used
+      // to throw it away and bill a fresh call on the retry.
+      if (!memoOk) pendingReply[id] = { buyerMessage: turn.buyerMessage, transcript: turn.transcript, text: reply.text, at: Date.now() };
+
+      // Only the REMAINDER of the configured delay — the clip-1 attach/upload time
+      // already counted toward it. Zero extra waiting is ever added on top.
+      const delayMs = Math.max(0, targetDelayMs - (Date.now() - replyClockStart));
+      if (delayMs > 0) {
+        setStatus({ lastAction: "waiting " + Math.round(delayMs / 1000) + "s before replying", currentThread: name });
+        await sleep(delayMs);
+      }
+      refreshThreadLock(sidebarId); // the delay is the longest window — re-stamp the lease
+
+      // ABORT if the operator navigated to a different chat during the wait — typing
+      // now would post this reply into the WRONG conversation. The chat is not marked
+      // handled, so it's retried cleanly on a later cycle (the billed reply is
+      // already memoized above).
+      if (!stillOnThread(id)) {
+        setStatus({ lastAction: "aborted — you switched chats during the wait (will retry)", currentThread: name });
+        return;
+      }
+      // Make sure the chat didn't move on while we waited (buyer sent more) — better
+      // to re-read next cycle than answer a stale message. NOT enforced right after
+      // a clip went out: the chat's tail is ours by construction then, and a human
+      // answers sequentially anyway (a newer buyer message gets its own reply next
+      // cycle).
+      if (!afterClip) {
+        const recheck = buyerSpokeLast();
+        if (!recheck || recheck.buyerMessage !== turn.buyerMessage) {
+          setStatus({ lastAction: "aborted — conversation changed during the wait (will retry)", currentThread: name });
+          return;
+        }
+      }
+
+      // The composer node may have been re-rendered by the attach work — re-find it.
+      const composerNow = findComposer() || composer;
+      const sent = await typeAndSend(composerNow, reply.text);
+      if (!sent) {
+        // NO blind re-fire: typeAndSend's false covers ambiguous outcomes (its
+        // compose-mismatch guard may have CLEARED the text, or the Enter may have
+        // actually taken) — a second Enter here could ship a garbled fragment or a
+        // duplicate. The billed reply stays memoized (replayed free next cycle).
+        setStatus({ lastError: "typed the reply but couldn't send it (will retry)" });
+        return;
+      }
+      rememberSent(reply.text); // so we never mistake this for a buyer message later
+      lastHandled[id] = turn.dedupeKey;
+      delete pendingReply[id]; // delivered — the billed-reply memo is no longer needed
+      replyCounts[id] = repliesSoFar + 1; // count this text reply toward the per-convo cap
+      clearWaiting(id, sidebarId); // ANSWERED — off the never-miss ledger
+      cooldowns[id] = Date.now() + COOLDOWN_MS;
+      persistDedup(); // survive a content-script reload — don't re-reply the same message (and keep the cap count)
+      setStatus({
+        lastAction: "replied ✓" + (replyCap > 0 ? " (" + replyCounts[id] + "/" + replyCap + ")" : ""),
+        lastReplySent: trunc(reply.text, 200),
+        currentThread: name,
+      });
+
+      // Schedule a follow-up (background handles the timing). Re-armed on every
+      // reply, so it only fires after the conversation has gone quiet. Fire-and-forget.
+      ask({ type: "BOT_REPLIED", threadId: id });
+
+      // Buyer re-engaged and we replied — restart the smart follow-up clock for this
+      // chat (the per-chat cap itself is read live from the conversation tail).
+      try {
+        const fs = (await getLocal(["followUpState"])).followUpState || {};
+        fs[id] = { lastAt: Date.now() };
+        await setLocal({ followUpState: fs });
+      } catch (e) {
+        /* non-fatal */
       }
     };
-    if (!reply || !reply.ok) {
-      await flushStaged();
-      setStatus({ lastError: "Claude error: " + (reply && reply.error) });
-      return;
-    }
-    if (reply.skip) {
-      await flushStaged();
-      if (reply.reason === "empty reply") {
-        // Claude DELIBERATELY chose silence (system/meta message, nothing to answer).
-        // Mark handled so the same unanswerable message isn't re-billed every
-        // cooldown; a NEW buyer message (different text) still gets handled fresh.
-        lastHandled[id] = turn.dedupeKey;
-        clearWaiting(id, sidebarId);
-        persistDedup();
-      }
-      setStatus({ lastAction: "skip — " + reply.reason, currentThread: name });
-      return;
-    }
-    if (reply.human) {
-      await flushStaged(); // videos alone still help the human close
-      lastHandled[id] = turn.dedupeKey;
-      clearWaiting(id, sidebarId); // handed to the human — resolved for the bot
-      await maybeSendVideo(id, name, true, sidebarId); // no-op when already handled above
-      setStatus({ lastAction: "needs you: " + reply.reason, currentThread: name });
-      return;
-    }
-    if (!reply.text || !reply.text.trim()) {
-      await flushStaged();
-      setStatus({ lastAction: "skip — empty reply" });
-      return;
-    }
-    // Remember the billed text until it's actually delivered — an abort below used
-    // to throw it away and bill a fresh call on the retry.
-    if (!memoOk) pendingReply[id] = { buyerMessage: turn.buyerMessage, transcript: turn.transcript, text: reply.text, at: Date.now() };
 
-    // No human-ish delay when a set is staged or just went out — the attach time
-    // WAS the human pause, and a staged draft must not sit exposed to operator
-    // clicks. Only a plain text-only reply (no video activity) keeps the
-    // configured delay.
-    // Only the REMAINDER of the configured delay — the attach time already
-    // counted toward it. Zero extra waiting is ever added on top.
-    const delayMs = Math.max(0, targetDelayMs - (Date.now() - replyClockStart));
-    if (delayMs > 0) {
-      setStatus({ lastAction: "waiting " + Math.round(delayMs / 1000) + "s before replying", currentThread: name });
-      await sleep(delayMs);
+    // VIDEOS FIRST, streamed: clip 1 → (reply) → clip 2 → clip 3, each sent as
+    // soon as it is ready. All one-set-per-chat guards live inside the engine,
+    // so for an already-served chat this returns in milliseconds and the reply
+    // simply goes out below.
+    if (!videoLocked.has(id)) {
+      refreshThreadLock(sidebarId); // uploads can outlive the cross-tab lease
+      await maybeSendVideo(id, name, true, sidebarId, false, { onClipSent: () => shipReply(true) });
+      if (videoLocked.has(id)) clearVideoPending(sidebarId); // terminal → clear the sidebar-keyed pending too
     }
-    refreshThreadLock(sidebarId); // the delay is the longest window — re-stamp the lease
-
-    // ABORT if the operator navigated to a different chat during the wait — typing
-    // now would post this reply into the WRONG conversation. The chat is not marked
-    // handled, so it's retried cleanly on a later cycle. (A staged set stays as
-    // this chat's draft — the queued pending visit adopts and ships it; the billed
-    // reply is already memoized above.)
-    if (!stillOnThread(id)) {
-      if (deferredAttach) await demoteDraftMarker(id);
-      setStatus({ lastAction: "aborted — you switched chats during the wait (will retry)", currentThread: name });
-      return;
-    }
-    // Make sure the chat didn't move on while we waited (buyer sent more) — better
-    // to re-read next cycle than answer a stale message. NOT enforced when a set
-    // is staged: the bundle must ship now (a human answers sequentially anyway —
-    // the buyer's newer message gets its own reply next cycle).
-    if (!deferredAttach) {
-      const recheck = buyerSpokeLast();
-      if (!recheck || recheck.buyerMessage !== turn.buyerMessage) {
-        setStatus({ lastAction: "aborted — conversation changed during the wait (will retry)", currentThread: name });
-        return;
-      }
-    }
-
-    // The composer node may have been re-rendered by the attach work — re-find it.
-    const composerNow = findComposer() || composer;
-    const sent = await typeAndSend(composerNow, reply.text);
-    if (!sent) {
-      // NO blind re-fire: typeAndSend's false covers ambiguous outcomes (its
-      // compose-mismatch guard may have CLEARED the text, or the Enter may have
-      // actually taken) — a second Enter here could ship a garbled fragment or a
-      // duplicate. The billed reply stays memoized (replayed free next cycle)
-      // and a staged draft is demoted so the pending visit ships the videos.
-      if (deferredAttach) await demoteDraftMarker(id);
-      setStatus({ lastError: "typed the reply but couldn't send it (will retry)" });
-      return;
-    }
-    if (deferredAttach) await finalizeDeferredVideoSend(id, sidebarId, name); // bundle shipped — now the mark says sent
-    rememberSent(reply.text); // so we never mistake this for a buyer message later
-    lastHandled[id] = turn.dedupeKey;
-    delete pendingReply[id]; // delivered — the billed-reply memo is no longer needed
-    replyCounts[id] = repliesSoFar + 1; // count this text reply toward the per-convo cap
-    clearWaiting(id, sidebarId); // ANSWERED — off the never-miss ledger
-    cooldowns[id] = Date.now() + COOLDOWN_MS;
-    persistDedup(); // survive a content-script reload — don't re-reply the same message (and keep the cap count)
-    setStatus({
-      lastAction: "replied ✓" + (replyCap > 0 ? " (" + replyCounts[id] + "/" + replyCap + ")" : ""),
-      lastReplySent: trunc(reply.text, 200),
-      currentThread: name,
-    });
-
-    // Schedule a follow-up (background handles the timing). Re-armed on every
-    // reply, so it only fires after the conversation has gone quiet. Fire-and-forget.
-    ask({ type: "BOT_REPLIED", threadId: id });
-
-    // Buyer re-engaged and we replied — restart the smart follow-up clock for this
-    // chat (the per-chat cap itself is read live from the conversation tail).
-    try {
-      const fs = (await getLocal(["followUpState"])).followUpState || {};
-      fs[id] = { lastAt: Date.now() };
-      await setLocal({ followUpState: fs });
-    } catch (e) {
-      /* non-fatal */
-    }
-
-    // After the text reply, send the demo video once per chat (optional, isolated).
-    // BACKLOG-FIRST SCHEDULING: a 3-clip video set with pauses costs 1–2 minutes —
-    // during a morning burst (business hours just opened, many unread) that turned a
-    // 15-buyer queue into an hour of waiting. When other buyers are waiting, their
-    // REPLIES outrank this chat's videos: defer the set — the existing quiet-chat
-    // revisit path delivers it (guaranteed, once per chat) as soon as the queue is
-    // clear. Nobody loses their video; everybody gets their answer fast.
-    // FORCE-VIDEO MODE (operator directive: every convo gets its set, video-first).
-    // The set goes out INLINE, right after this reply, at the configured delay.
-    // Row-count proxies (waitingNow) are GONE — sidebar rows can never postpone a
-    // video again. The one precise exception: a buyer is ALREADY overdue (on the
-    // never-miss ledger for > OVERDUE_MS) at this instant — then this chat's set is
-    // queued (pending lanes deliver it minutes later) and the overdue buyer's
-    // reply goes first. That's the only case where a video ever waits.
-    // Already handled this visit (combined-message send or a normal terminal) —
-    // don't re-queue or re-enter the engine for a chat whose set just shipped.
-    if (videoLocked.has(id)) {
-      clearVideoPending(sidebarId);
-      return;
-    }
-    let overdueNow = false;
-    {
-      // LIVENESS-CHECKED (audit 2026-08-10): defer ONLY when LANE 0 can actually
-      // serve someone next scan — the ledger entry must belong to a RENDERED row
-      // whose snippet still reads buyer-last (same gates as lane 0). Scanning raw
-      // ledger keys made ONE immortal ghost entry silently queue EVERY video
-      // forever while the popup looked perfectly healthy — the "no videos, no
-      // errors" fleet mystery.
-      const nowD = Date.now();
-      for (const a of safe(() => conversationAnchors(), [])) {
-        const k = threadId(a);
-        const ws = waitingSince[k];
-        if (ws && nowD - ws > OVERDUE_MS && safe(() => snippetSuggestsBuyerLast(a), false)) { overdueNow = true; break; }
-      }
-    }
-    if (overdueNow) {
-      // KEY = SIDEBAR id: the picker lanes look chats up by their sidebar anchor id.
-      if (videoPending[sidebarId] == null && videoPending[id] == null) videoPending[sidebarId] = Date.now(); // keep the ORIGINAL deferral time
-      persistDedup();
-      vstat("queued behind overdue buyer — delivering via pending lane");
-      setStatus({ lastAction: "video queued — an overdue buyer needs their reply first", currentThread: name });
-      return;
-    }
-    refreshThreadLock(sidebarId); // video delay + uploads can outlive the lease too
-    await maybeSendVideo(id, name, false, sidebarId);
-    if (videoLocked.has(id)) clearVideoPending(sidebarId); // terminal → clear the sidebar-keyed pending too
+    // No clips configured / set already delivered / engine exited before a clip
+    // went out — the reply goes now (text-only path keeps the full delay).
+    await shipReply(false);
   }
 
   /* ---------------- main loop ---------------- */
@@ -2643,6 +2703,23 @@
     };
     return one(id) || (adoptedAlias[id] != null && one(adoptedAlias[id]));
   };
+  // Is any OTHER buyer waiting for a reply right now? Same evidence lane 0/1 use
+  // (overdue ledger, or unread + buyer-attributed snippet). The streaming video
+  // engine consults this between clips so a long set never makes a new buyer
+  // wait for an old chat's remaining videos.
+  function buyersWaitingNow(excludeId, excludeSidebarId) {
+    const now = Date.now();
+    for (const a of safe(() => conversationAnchors(), [])) {
+      const id = threadId(a);
+      if (id === excludeId || id === excludeSidebarId || adoptedAlias[id] === excludeId) continue;
+      if (openFailCount(id) >= 3 && now <= (cooldowns[id] || 0)) continue; // won't-open park
+      if (!safe(() => snippetSuggestsBuyerLast(a), false)) continue;
+      const ws = waitingSince[id];
+      if (ws && now - ws > OVERDUE_MS) return true;
+      if (safe(() => isUnreadAnchor(a), false)) return true;
+    }
+    return false;
+  }
   function pickTarget(anchors, now, exclude, videoAtt) {
     // LANE 0 — OVERDUE (the never-miss guarantee): any chat on the waiting ledger
     // longer than OVERDUE_MS is served BEFORE everything else, oldest first. So the

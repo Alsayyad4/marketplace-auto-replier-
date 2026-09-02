@@ -6,6 +6,26 @@ French), built for used-iPhone sales in Montréal. Runs locally per Chrome profi
 by default; **optional cloud sync** turns it into a web app so one change reaches
 every computer.
 
+> ⚡ **v0.21.34 — stream videos as they're ready; reply right after clip 1; rescue misread buyers.**
+> Diagnosed from a live machine report (`bulk:0` on every set, ~60s per clip, 41 pending
+> video chats, buyers waiting 2–12h while "suppressed"):
+> - **Send whatever can send.** On this Facebook build a multi-file paste is rejected and a
+>   new paste is refused while a clip is still uploading, so the old "attach everything, one
+>   Enter at the end" design held all 3 clips (and the text answer) for ~4 minutes per chat.
+>   Now each clip is **sent the moment its own upload finishes**, the **text reply ships right
+>   after clip 1** (still honoring your response delay), and the remaining clips stream one
+>   by one — each next paste lands on an empty, settled tray, so it attaches on the first try.
+> - **Nobody waits for an old chat's videos.** Between clips the engine checks whether
+>   another buyer is waiting for a reply; if so it parks the remaining clips on the
+>   pending lane (guaranteed later delivery, no failure strike) and lets the reply go first.
+> - **Sidebar-confirmed buyer turns.** When Messenger's own row reads "Charles: How much? ·
+>   2h" but the open-chat paint/geometry read defaulted that bubble to "me" (it was being
+>   suppressed for 6h after 3 such reads), the sidebar attribution now confirms it as the
+>   buyer's message and it gets answered.
+> - One-shot: attach-paused chats (3 strikes under the old hold-then-send path) retry
+>   immediately under the streaming engine. Busy watchdog widened to 9 min to cover a fully
+>   streamed 3-clip set.
+>
 > 🩹 **v0.21.33 — reply-reliability fixes ported from the review branch.**
 > Four classes of "this convo never got a reply" fixed, plus one message-loss fix:
 > - **Noise filter regressions:** the price/spec/date-header rules matched real buyer
