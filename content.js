@@ -920,13 +920,42 @@
   // per-clip settle waits entirely. Returns the number of NEW previews verified
   // (0 = nothing landed, caller falls back to the one-by-one path), or
   // "navigated" when the operator switched chats mid-attach.
-  async function attachVideosBulk(filesArr, tid) {
+  async function attachVideosBulk(filesArr, tid, pathsArr) {
     const composer = findComposer();
     if (!composer) return 0;
     composer.focus();
     if (tid && !stillOnThread(tid)) return "navigated";
     const before = new Set(trayEls());
     const beforeBtns = new Set(trayRemoveBtns());
+    // CHROME FILE API FIRST (v0.21.35): hand the real on-disk files to the
+    // composer's <input type=file> through the debugger protocol — Chrome then
+    // stages them exactly as if the operator picked them in the file dialog
+    // (trusted change event), which this build honors where synthetic pastes
+    // are hit-and-miss. Verified the same way (new tray previews); any failure
+    // falls through to the synthetic multi-paste below, nothing sent either way.
+    if (cdpAvailable() && Array.isArray(pathsArr) && pathsArr.length === filesArr.length && pathsArr.every(Boolean)) {
+      setStatus({ lastAction: `attaching ${filesArr.length} video(s) via Chrome file API…` });
+      const r = await ask({ type: "CDP_SET_FILES", paths: pathsArr });
+      if (r && r.ok) {
+        const want = filesArr.length;
+        const start = Date.now();
+        while (Date.now() - start < 45000) {
+          await sleep(700);
+          if (tid && !stillOnThread(tid)) {
+            for (const b of trayRemoveBtns()) if (!beforeBtns.has(b)) safe(() => b.click());
+            return "navigated";
+          }
+          const seen = trayEls().filter((el) => !before.has(el)).length;
+          if (seen >= want) return want;
+        }
+        await sleep(6000); // late-render grace
+        const seenLate = trayEls().filter((el) => !before.has(el)).length;
+        if (seenLate > 0) return Math.min(seenLate, want); // partial → caller sweeps + goes one-by-one
+        noteCdpFail({ error: "file API set the files but no preview appeared" });
+      } else {
+        noteCdpFail(r);
+      }
+    }
     const dtAll = () => {
       const dt = new DataTransfer();
       for (const f of filesArr) dt.items.add(f);
@@ -963,10 +992,15 @@
     seen = trayEls().filter((el) => !before.has(el)).length;
     return Math.min(seen, want);
   }
-  async function attachVideo(file, knownCount, tid) {
+  async function attachVideo(file, knownCount, tid, diskPath) {
     const composer = findComposer();
     if (composer) composer.focus();
     if (tid && !stillOnThread(tid)) return "navigated";
+    // CHROME FILE API FIRST (v0.21.35) when the clip is on disk — see
+    // attachVideosBulk. Runs as strategy 0 with the long window; the synthetic
+    // strategies keep their exact old order/windows behind it.
+    const useCdp = !!diskPath && cdpAvailable();
+    const firstPasteIdx = useCdp ? 1 : 0;
     // OPTIMISTIC PIPELINING (v0.21.32): the next clip is pasted immediately,
     // WHILE the previous clip is still uploading — most FB builds accept it,
     // which makes the uploads overlap instead of running one after another
@@ -980,6 +1014,17 @@
       return dt;
     };
     const attempts = [];
+    if (useCdp) {
+      const cdpFn = async () => {
+        setStatus({ lastAction: "attaching video via Chrome file API…" });
+        const r = await ask({ type: "CDP_SET_FILES", paths: [diskPath] });
+        if (r && r.ok) return true;
+        noteCdpFail(r);
+        return false;
+      };
+      cdpFn.isCdp = true;
+      attempts.push(cdpFn);
+    }
     if (composer) {
       const pasteFn = () => {
         const ev = new ClipboardEvent("paste", { bubbles: true, cancelable: true });
@@ -1043,14 +1088,18 @@
       const beforeEls = new Set(trayEls());
       lastBeforeEls = beforeEls;
       const uploadsAtDispatch = trayUploads();
-      if (!safe(attempt, false)) { strategyIdx++; continue; }
+      // (the Chrome file API strategy is async; the synthetic ones are sync)
+      let fired = false;
+      try { fired = !!(await Promise.resolve(safe(attempt, false))); } catch (e) { fired = false; }
+      if (!fired) { strategyIdx++; continue; }
       // Window sizing: the OPTIMISTIC paste fails fast (12s) when uploads were
       // running at dispatch — if this build rejects mid-upload pastes we want to
       // move to the settle-and-retry quickly, not burn 30s. The settled retry
       // keeps the LONG 30s window (throttled/RDP machines render previews
       // 20-30s late; a short window there judged good attaches "failed", swept
-      // them away and struck the chat — the v0.21.29 lockout bug).
-      const windowMs = strategyIdx === 0 ? (uploadsAtDispatch > 0 ? 12000 : 30000) : strategyIdx === 1 ? 30000 : 12000;
+      // them away and struck the chat — the v0.21.29 lockout bug). The file API
+      // strategy (a real chooser-equivalent) always gets the long window.
+      const windowMs = attempt.isCdp ? 30000 : strategyIdx === firstPasteIdx ? (uploadsAtDispatch > 0 ? 12000 : 30000) : strategyIdx === firstPasteIdx + 1 ? 30000 : 12000;
       const start = Date.now();
       let navigated = false;
       while (Date.now() - start < windowMs) {
@@ -1254,6 +1303,39 @@
   // (with the first-video delay + the between-videos delay), CONFIRM they actually
   // landed, RETRY later if a send genuinely failed (backoff, capped — no spam), and
   // NEVER resend once a video is confirmed in the chat.
+  // ---- Chrome FILE API attach (v0.21.35): real files via the debugger protocol ----
+  // See background.js cdpSetFiles(). A hard failure parks the path for a while so a
+  // machine without the permission/file access doesn't burn seconds on every clip.
+  let cdpDisabledUntil = 0;
+  const cdpAvailable = () => Date.now() > cdpDisabledUntil;
+  function noteCdpFail(r) {
+    const err = (r && r.error) || "no response";
+    if (r && r.fileAccess === "denied") {
+      cdpDisabledUntil = Date.now() + 6 * 3600 * 1000;
+      vstat("file API blocked: turn ON 'Allow access to file URLs' for SubSell in chrome://extensions — using fallback attach");
+      return;
+    }
+    cdpDisabledUntil = Date.now() + (/unavailable|permission/i.test(err) ? 30 * 60 * 1000 : 5 * 60 * 1000);
+    setStatus({ videoLast: "file API attach failed: " + trunc(err, 80) + " — falling back to paste" });
+  }
+  // Absolute on-disk path for a clip (background downloads it once per machine).
+  // null = no path → that clip uses the synthetic strategies. Memoized for 30 min.
+  const diskPathMem = {};
+  async function diskPathFor(req) {
+    if (!cdpAvailable()) return null;
+    const key = req.url || "local:" + (req.name || "") + ":" + ((req.dataUrl && req.dataUrl.length) || 0);
+    const m = diskPathMem[key];
+    if (m && Date.now() - m.at < 30 * 60 * 1000) return m.path;
+    try {
+      const r = await ask(Object.assign({ type: "VIDEO_DISK_PATH" }, req));
+      if (r && r.ok && r.path) {
+        diskPathMem[key] = { path: r.path, at: Date.now() };
+        return r.path;
+      }
+      setStatus({ videoLast: "clip not on disk yet: " + trunc((r && r.error) || "?", 60) + " — paste attach this time" });
+    } catch (e) { /* fall back */ }
+    return null;
+  }
   const VIDEO_CLAIM_TTL = 3 * 60 * 1000; // an in-flight claim older than this is stale
   const VIDEO_RETRY_BACKOFF = 20 * 60 * 1000; // wait this long before retrying a failed send
   const VIDEO_MAX_TRIES = 3; // give up after this many failed attempts
@@ -1286,6 +1368,7 @@
     [/^skip — detected an existing video/, "dom-marked"],
     [/can't load/, "clips-excluded"],
     [/^paused 24h/, "chat-paused-24h"],
+    [/^file API blocked/, "file-access-off"],
     [/^error:/, "engine-error"],
   ];
   // Machine-wide blockers: only these trigger the one-time "OK again" recovery row.
@@ -1628,11 +1711,14 @@
       const excluded = central.length - activeCentral.length;
       if (excluded > 0 && activeCentral.length) vstat("⚠ " + excluded + " dashboard clip(s) can't load (too big/broken?) — sending the rest");
 
-      // Build the ordered File list (local first, then central downloaded via background).
+      // Build the ordered File list (local first, then central downloaded via background),
+      // plus the parallel list of on-disk paths for the Chrome file API (null = none).
       const files = [];
+      const paths = [];
       for (const v of local) {
         try {
           files.push(dataUrlToFile(v.dataUrl, v.name, v.type));
+          paths.push(await diskPathFor({ dataUrl: v.dataUrl, name: v.name }));
         } catch (e) {
           /* skip a bad local video */
         }
@@ -1644,6 +1730,7 @@
           if (r && r.ok && r.base64) {
             const mime = r.mime || "video/mp4";
             files.push(dataUrlToFile(`data:${mime};base64,${r.base64}`, v.name || "video.mp4", mime));
+            paths.push(await diskPathFor({ url: v.url, name: v.name }));
             ok = true;
           }
         } catch (e) {
@@ -1800,7 +1887,7 @@
       let bulkDone = false;
       if (files.length - startAt > 1) {
         const rest = files.slice(startAt);
-        const bulk = await attachVideosBulk(rest, id);
+        const bulk = await attachVideosBulk(rest, id, paths.slice(startAt));
         safe(() => chrome.storage.local.get(["videoAttachTrace"], (rB) => {
           if (chrome.runtime.lastError) return;
           const tr = (rB && rB.videoAttachTrace) || [];
@@ -1878,7 +1965,7 @@
           await setLocal({ videoSentThreads: dmA });
         }
         setStatus({ lastAction: `attaching video ${i + 1}/${files.length}…`, currentThread: name });
-        const res = await attachVideo(files[i], knownCount, id);
+        const res = await attachVideo(files[i], knownCount, id, paths[i]);
         // ATTACH TRACE (ring of 12, shown in 🩺): which clip, what verdict, how
         // the tray looked — ends the guessing when a machine's attaches fail.
         safe(() => chrome.storage.local.get(["videoAttachTrace"], (rT) => {

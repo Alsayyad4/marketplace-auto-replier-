@@ -6,6 +6,22 @@ French), built for used-iPhone sales in Montréal. Runs locally per Chrome profi
 by default; **optional cloud sync** turns it into a web app so one change reaches
 every computer.
 
+> 🎯 **v0.21.35 — videos attached through Chrome's own file API (the permanent fix).**
+> Field evidence (screenshot + diagnostic): the bot replied but no video went out because
+> the *attach* step — faking a paste/drag/file-input event into Facebook's composer — is
+> accepted only some of the time on this Facebook build. Now the primary path is the one
+> Playwright uses: the extension puts the clips on disk once per machine
+> (`Downloads/SubSell-videos/`) and hands them to the composer's hidden file input
+> through Chrome's debugger protocol (`DOM.setFileInputFiles`) — Chrome stages them
+> exactly as if you picked them in the file dialog (trusted events), all clips at once.
+> Needs the new `debugger` permission (granted automatically on reload for Load-unpacked
+> installs). Chrome shows a small "SubSell started debugging this browser" bar for a
+> second or two per attach; add `--silent-debugger-extension-api` to the Chrome shortcut
+> to hide it. If a machine has the extension's **"Allow access to file URLs"** switch off,
+> the popup diagnostic says so (`fileapi:` line) and the old paste path is used meanwhile.
+> Every failure falls back to the previous strategies — never worse than before.
+> Also: chats where zero clips attached are now queued for an explicit retry visit.
+>
 > ⚡ **v0.21.34 — stream videos as they're ready; reply right after clip 1; rescue misread buyers.**
 > Diagnosed from a live machine report (`bulk:0` on every set, ~60s per clip, 41 pending
 > video chats, buyers waiting 2–12h while "suppressed"):

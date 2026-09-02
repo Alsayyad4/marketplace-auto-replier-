@@ -1212,6 +1212,172 @@ async function fetchVideo(url) {
   }
 }
 
+/* ---------------- ON-DISK clips + Chrome FILE API attach (v0.21.35) ----------------
+ * Synthetic paste/drop/change events into Facebook's composer are accepted only
+ * SOME of the time on some builds — the direct cause of "replied but no video"
+ * chats. The robust way (what Playwright does) is Chrome's own debugger protocol:
+ * DOM.setFileInputFiles on the composer's hidden <input type=file> makes Chrome
+ * stage the clips exactly as if the operator picked them in the file dialog —
+ * trusted input/change events, no synthetic anything. It needs (a) the clips as
+ * real files on disk (chrome.downloads → Downloads/SubSell-videos/, once per
+ * machine) and (b) the "debugger" permission (granted silently to unpacked
+ * extensions on reload). Chrome shows a "SubSell started debugging this browser"
+ * bar while attached (a second or two per attach; --silent-debugger-extension-api
+ * hides it). Every failure falls back to the old strategies in content.js. */
+const VIDEO_DISK_DIR = "SubSell-videos";
+function hashStr(str) {
+  let h = 5381;
+  for (let i = 0; i < str.length; i++) h = ((h << 5) + h + str.charCodeAt(i)) | 0;
+  return (h >>> 0).toString(16).padStart(8, "0");
+}
+function safeFileStem(name) {
+  const stem = String(name || "clip").replace(/\.[a-z0-9]{1,5}$/i, "").replace(/[^A-Za-z0-9._-]+/g, "_").replace(/^[._~\s]+|[.\s~]+$/g, "");
+  return (stem || "clip").slice(0, 40);
+}
+function dlSearch(q) {
+  return new Promise((r) => {
+    try { chrome.downloads.search(q, (items) => { void chrome.runtime.lastError; r(items || []); }); }
+    catch (e) { r([]); }
+  });
+}
+// Download to Downloads/<filename> and resolve the DownloadItem once complete
+// (history entry KEPT so the absolute path + `exists` can be re-checked later).
+function dlAndWait(url, filename, timeoutMs) {
+  return new Promise((resolve) => {
+    try {
+      chrome.downloads.download({ url, filename, conflictAction: "overwrite", saveAs: false }, (id) => {
+        if (chrome.runtime.lastError || id == null) {
+          return resolve({ error: (chrome.runtime.lastError && chrome.runtime.lastError.message) || "download rejected" });
+        }
+        const started = Date.now();
+        const poll = () => {
+          chrome.downloads.search({ id }, (items) => {
+            const it = items && items[0];
+            if (it && it.state === "complete") return resolve({ item: it });
+            if (it && it.danger && it.danger !== "safe" && it.danger !== "accepted") {
+              chrome.downloads.cancel(id, () => void chrome.runtime.lastError);
+              return resolve({ error: "blocked as dangerous (" + it.danger + ")" });
+            }
+            if (!it || it.state === "interrupted" || Date.now() - started > (timeoutMs || 180000)) {
+              return resolve({ error: (it && it.error) ? String(it.error) : "download did not finish" });
+            }
+            setTimeout(poll, 500);
+          });
+        };
+        poll();
+      });
+    } catch (e) {
+      resolve({ error: String(e && e.message) });
+    }
+  });
+}
+// { url } (https clip) or { dataUrl, name } (legacy per-machine clip) → absolute
+// on-disk path, downloading once per machine and re-verifying the file exists.
+async function ensureVideoOnDisk(req) {
+  try {
+    if (!chrome.downloads) return { ok: false, error: "downloads API unavailable" };
+    const src = req.url || req.dataUrl;
+    if (!src) return { ok: false, error: "no source" };
+    const key = req.url || "data:" + hashStr(src.slice(0, 4096) + ":" + src.length);
+    const st = await new Promise((r) => chrome.storage.local.get(["videoDisk"], (x) => r((x && x.videoDisk) || {})));
+    const hit = st[key];
+    if (hit && hit.id != null) {
+      const it = (await dlSearch({ id: hit.id }))[0];
+      if (it && it.state === "complete" && it.exists !== false && it.filename) return { ok: true, path: it.filename, cached: true };
+    }
+    const fname = VIDEO_DISK_DIR + "/" + hashStr(key).slice(0, 8) + "-" + safeFileStem(req.name) + ".mp4";
+    const r = await dlAndWait(src, fname);
+    if (r.error || !r.item || !r.item.filename) return { ok: false, error: r.error || "no path after download" };
+    const next = {};
+    next[key] = { id: r.item.id, path: r.item.filename, size: r.item.fileSize || 0, at: Date.now() };
+    for (const k of Object.keys(st).slice(0, 8)) if (k !== key) next[k] = st[k];
+    chrome.storage.local.set({ videoDisk: next }, () => void chrome.runtime.lastError);
+    return { ok: true, path: r.item.filename };
+  } catch (e) {
+    return { ok: false, error: "disk cache: " + (e && e.message) };
+  }
+}
+function cdpCmd(target, method, params, ms) {
+  return new Promise((resolve, reject) => {
+    let done = false;
+    const t = setTimeout(() => { if (!done) { done = true; reject(new Error(method + " timed out")); } }, ms || 10000);
+    try {
+      chrome.debugger.sendCommand(target, method, params || {}, (res) => {
+        if (done) return;
+        done = true;
+        clearTimeout(t);
+        if (chrome.runtime.lastError) reject(new Error(chrome.runtime.lastError.message));
+        else resolve(res || {});
+      });
+    } catch (e) {
+      if (!done) { done = true; clearTimeout(t); reject(e); }
+    }
+  });
+}
+// Runs INSIDE the page (main world, via Runtime.evaluate): find the composer's own
+// file input — never the listing card's "Add video to listing" uploader.
+function pageFindComposerFileInput() {
+  const main = document.querySelector('[role="main"]') || document;
+  const composer = main.querySelector('[contenteditable="true"][role="textbox"]') || main.querySelector('[contenteditable="true"]');
+  const bad = /add (a |your )?videos? to( your| the)? listing|update( your)? listing|mettre à jour|modifier (l|votre annonce)|ajoute[rz]? (une |la |des )?vid/i;
+  const inputs = Array.from(main.querySelectorAll('input[type="file"]')).filter((inp) => {
+    const wrap = inp.closest("div,form,section");
+    const t = ((wrap && wrap.innerText) || "").slice(0, 400);
+    return !bad.test(t);
+  });
+  if (!inputs.length) return null;
+  const cr = composer ? composer.getBoundingClientRect() : null;
+  const score = (inp) => {
+    let sc = 0;
+    const acc = (inp.getAttribute("accept") || "").toLowerCase();
+    if (!acc || acc.indexOf("*/*") !== -1 || acc.indexOf("video") !== -1) sc += 4; // Messenger's composer input: no accept / */*
+    if (inp.multiple) sc += 2;
+    if (cr) {
+      const p = inp.parentElement; // the input itself is display:none (zero rect)
+      const pr = p ? p.getBoundingClientRect() : null;
+      if (pr && pr.height > 0 && Math.abs(pr.top - cr.top) < 160) sc += 3; // sits in the composer bar
+    }
+    return sc;
+  };
+  inputs.sort((a, b) => score(b) - score(a));
+  return inputs[0];
+}
+async function recordCdp(ok, err) {
+  try {
+    const st = await new Promise((r) => chrome.storage.local.get(["cdpStats"], (x) => r((x && x.cdpStats) || {})));
+    if (ok) { st.okN = (st.okN || 0) + 1; st.lastOkAt = Date.now(); }
+    else { st.errN = (st.errN || 0) + 1; st.lastErr = String(err || "").slice(0, 120); st.lastErrAt = Date.now(); }
+    chrome.storage.local.set({ cdpStats: st }, () => void chrome.runtime.lastError);
+  } catch (e) { /* telemetry only */ }
+}
+// Attach `paths` to the composer's file input of `tabId` through the debugger
+// protocol. Attached for ~1-3s only; always detaches. Never throws.
+async function cdpSetFiles(tabId, paths) {
+  if (!chrome.debugger) { await recordCdp(false, "debugger API unavailable"); return { ok: false, error: "debugger API unavailable (permission not granted yet — reload the extension)" }; }
+  if (!tabId || !Array.isArray(paths) || !paths.length) return { ok: false, error: "bad request" };
+  const target = { tabId };
+  let attached = false;
+  try {
+    await new Promise((res, rej) => chrome.debugger.attach(target, "1.3", () => (chrome.runtime.lastError ? rej(new Error(chrome.runtime.lastError.message)) : res())));
+    attached = true;
+    const ev = await cdpCmd(target, "Runtime.evaluate", { expression: "(" + pageFindComposerFileInput.toString() + ")()", returnByValue: false }, 8000);
+    const obj = ev && ev.result;
+    if (!obj || !obj.objectId) { await recordCdp(false, "composer file input not found"); return { ok: false, error: "composer file input not found" }; }
+    // Clear first: Chrome skips the change event when the same file list is set twice.
+    await cdpCmd(target, "Runtime.callFunctionOn", { objectId: obj.objectId, functionDeclaration: "function(){ try { this.value = ''; } catch (e) {} return true; }" }, 5000);
+    await cdpCmd(target, "DOM.setFileInputFiles", { objectId: obj.objectId, files: paths }, 15000);
+    await recordCdp(true);
+    return { ok: true };
+  } catch (e) {
+    const m = String((e && e.message) || e);
+    await recordCdp(false, m);
+    // "Not allowed" = the extension's "Allow access to file URLs" toggle is OFF on this machine.
+    return { ok: false, error: m, fileAccess: /not allowed/i.test(m) ? "denied" : undefined };
+  } finally {
+    if (attached) { try { chrome.debugger.detach(target, () => void chrome.runtime.lastError); } catch (e) { /* already gone */ } }
+  }
+}
+
 /* ---------------- follow-ups (alarms) ---------------- */
 
 const ALARM_PREFIX = "followup:";
@@ -1386,7 +1552,7 @@ async function buildDiagnostic() {
         "cloudConfig", "cloudConfigAt", "cloudAuth", "cloudStale", "lastMirror", "debugTick",
         "videoSentThreads", "videoAttempts", "videoUrlFails", "waitingSince", "videoPending",
         "videoCatchUp", "autoCatchUp01213", "autoCatchUp01217", "videoEnabled", "demoVideos",
-        "videoCache", "replyLog", "sudBase", "sudDirName", "sudLastCheck",
+        "videoCache", "replyLog", "sudBase", "sudDirName", "sudLastCheck", "cdpStats", "videoDisk",
         "cooldowns", "replyCounts", "lastHandled", "videoAttachTrace",
       ],
       (x) => r(x || {})
@@ -1426,6 +1592,17 @@ async function buildDiagnostic() {
     " localToggle=" + (st.videoEnabled ? "Y" : "n") + " localClips=" + localVids +
     " firstDelay=" + (settings.demoVideoDelaySec != null ? settings.demoVideoDelaySec : "?") + "s between=" + (settings.demoVideoBetweenSec != null ? settings.demoVideoBetweenSec : "?") + "s"
   );
+  {
+    const cs = st.cdpStats || {};
+    const vd = st.videoDisk || {};
+    L.push(
+      "fileapi: debugger=" + (chrome.debugger ? "granted" : "MISSING") +
+      " ok=" + (cs.okN || 0) + "(" + ageM(cs.lastOkAt) + ") err=" + (cs.errN || 0) + "(" + ageM(cs.lastErrAt) + ")" +
+      (cs.lastErr ? " lastErr=\"" + cut(cs.lastErr, 70) + "\"" : "") +
+      (/not allowed/i.test(cs.lastErr || "") && (cs.lastErrAt || 0) > (cs.lastOkAt || 0) ? " ⚠ turn ON 'Allow access to file URLs' for SubSell in chrome://extensions" : "") +
+      " | disk=" + Object.keys(vd).length + " clip(s)"
+    );
+  }
   const c = rollWindows(await getCounters(), now);
   const tickd = st.debugTick || {};
   L.push(
@@ -1711,6 +1888,17 @@ chrome.runtime.onMessage.addListener((msg, _sender, sendResponse) => {
           const result = await callClaude(settings, msg.buyerMessage, msg.context);
           if (result.error) sendResponse({ ok: false, error: result.error });
           else sendResponse({ ok: true, raw: result.text, parsed: parseReply(result.text) });
+          break;
+        }
+        case "VIDEO_DISK_PATH": {
+          // Content asks for a clip's absolute on-disk path (downloaded once per machine).
+          sendResponse(await ensureVideoOnDisk({ url: msg.url, dataUrl: msg.dataUrl, name: msg.name }));
+          break;
+        }
+        case "CDP_SET_FILES": {
+          // Content asks to attach real files to ITS tab's composer via the debugger protocol.
+          const tabId = _sender && _sender.tab && _sender.tab.id;
+          sendResponse(await cdpSetFiles(tabId, msg.paths));
           break;
         }
         case "FETCH_VIDEO": {
