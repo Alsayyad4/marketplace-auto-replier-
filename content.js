@@ -933,28 +933,39 @@
     // (trusted change event), which this build honors where synthetic pastes
     // are hit-and-miss. Verified the same way (new tray previews); any failure
     // falls through to the synthetic multi-paste below, nothing sent either way.
-    if (cdpAvailable() && Array.isArray(pathsArr) && pathsArr.length === filesArr.length && pathsArr.every(Boolean)) {
+    // Only on an EMPTY composer: with a draft/staged content the MWX composer moves
+    // the attach control (and its input) into "Open more actions"; the synthetic
+    // paste below stages alongside text just like before in that case.
+    if (cdpUsableNow() && !composerText(composer) && Array.isArray(pathsArr) && pathsArr.length === filesArr.length && pathsArr.every(Boolean)) {
       setStatus({ lastAction: `attaching ${filesArr.length} video(s) via Chrome file API…` });
       const r = await ask({ type: "CDP_SET_FILES", paths: pathsArr });
       if (r && r.ok) {
         const want = filesArr.length;
         const start = Date.now();
+        let seen = 0;
         while (Date.now() - start < 45000) {
           await sleep(700);
           if (tid && !stillOnThread(tid)) {
             for (const b of trayRemoveBtns()) if (!beforeBtns.has(b)) safe(() => b.click());
             return "navigated";
           }
-          const seen = trayEls().filter((el) => !before.has(el)).length;
-          if (seen >= want) return want;
+          seen = trayEls().filter((el) => !before.has(el)).length;
+          if (seen >= want) { noteCdpVerified(); return want; }
+          if (seen === 0 && Date.now() - start > 12000) break; // FAIL FAST: nothing staged by now → not coming
         }
         await sleep(6000); // late-render grace
-        const seenLate = trayEls().filter((el) => !before.has(el)).length;
-        if (seenLate > 0) return Math.min(seenLate, want); // partial → caller sweeps + goes one-by-one
+        seen = trayEls().filter((el) => !before.has(el)).length;
+        if (seen > 0) { noteCdpVerified(); return Math.min(seen, want); } // partial → caller sweeps + goes one-by-one
+        forgetDiskPaths(pathsArr); // a dead/deleted file? re-validate with the background next time
         noteCdpFail({ error: "file API set the files but no preview appeared" });
       } else {
         noteCdpFail(r);
       }
+      // A file-API attempt was ISSUED for this tray: never stack the synthetic
+      // multi-paste on top of it (a late-rendering file-API preview plus a paste
+      // would make ONE Enter send the set twice). 0 → the caller sweeps the tray
+      // and goes one-by-one, whose between-strategy sweeps keep it duplicate-safe.
+      return 0;
     }
     const dtAll = () => {
       const dt = new DataTransfer();
@@ -999,7 +1010,7 @@
     // CHROME FILE API FIRST (v0.21.35) when the clip is on disk — see
     // attachVideosBulk. Runs as strategy 0 with the long window; the synthetic
     // strategies keep their exact old order/windows behind it.
-    const useCdp = !!diskPath && cdpAvailable();
+    const useCdp = !!diskPath && cdpUsableNow() && !!composer && !composerText(composer);
     const firstPasteIdx = useCdp ? 1 : 0;
     // OPTIMISTIC PIPELINING (v0.21.32): the next clip is pasted immediately,
     // WHILE the previous clip is still uploading — most FB builds accept it,
@@ -1114,7 +1125,17 @@
         for (const b of trayRemoveBtns()) if (!beforeBtns.has(b)) safe(() => b.click()); // de-stray the wrong chat
         return "navigated";
       }
-      if (attached) break; // this strategy worked — stop trying others
+      if (attached) {
+        if (attempt.isCdp) noteCdpVerified();
+        break; // this strategy worked — stop trying others
+      }
+      if (attempt.isCdp) {
+        // Protocol said ok but Messenger staged nothing (dead file / composer
+        // state): re-validate the path next time and skip the file API for the
+        // rest of this set instead of paying 30s per clip.
+        forgetDiskPaths([diskPath]);
+        noteCdpFail({ error: "file API set the file but no preview appeared" });
+      }
       strategyIdx++;
     }
     if (!attached) {
@@ -1307,7 +1328,11 @@
   // See background.js cdpSetFiles(). A hard failure parks the path for a while so a
   // machine without the permission/file access doesn't burn seconds on every clip.
   let cdpDisabledUntil = 0;
+  let cdpStrikes = 0; // consecutive TRANSIENT misses (input not found / no preview)
+  let cdpSetToken = 0; // bumped per video set; a miss skips the file API for the REST of that set only
+  let cdpFailedSetToken = -1;
   const cdpAvailable = () => Date.now() > cdpDisabledUntil;
+  const cdpUsableNow = () => cdpAvailable() && cdpFailedSetToken !== cdpSetToken;
   function noteCdpFail(r) {
     const err = (r && r.error) || "no response";
     if (r && r.fileAccess === "denied") {
@@ -1315,23 +1340,54 @@
       vstat("file API blocked: turn ON 'Allow access to file URLs' for SubSell in chrome://extensions — using fallback attach");
       return;
     }
-    cdpDisabledUntil = Date.now() + (/unavailable|permission/i.test(err) ? 30 * 60 * 1000 : 5 * 60 * 1000);
+    if (/unavailable|permission/i.test(err)) {
+      cdpDisabledUntil = Date.now() + 30 * 60 * 1000; // API not granted yet (reload pending)
+    } else if (/input not found|no preview/i.test(err)) {
+      // Transient CHAT state (composer holding a draft, stuck preview, dead file):
+      // skip the file API for the rest of this set, but never black it out for
+      // the next chats on a single miss — three in a row park it 5 min.
+      cdpFailedSetToken = cdpSetToken;
+      if (++cdpStrikes >= 3) { cdpStrikes = 0; cdpDisabledUntil = Date.now() + 5 * 60 * 1000; }
+    } else {
+      cdpDisabledUntil = Date.now() + 5 * 60 * 1000; // attach/detach/timeout/protocol errors
+    }
     setStatus({ videoLast: "file API attach failed: " + trunc(err, 80) + " — falling back to paste" });
   }
+  function noteCdpVerified() {
+    cdpStrikes = 0;
+    ask({ type: "CDP_VERIFIED" }); // fire-and-forget telemetry ("protocol ok" ≠ "clip staged")
+  }
   // Absolute on-disk path for a clip (background downloads it once per machine).
-  // null = no path → that clip uses the synthetic strategies. Memoized for 30 min.
+  // null = no path → that clip uses the synthetic strategies. Successes are memoized
+  // only briefly (2 min) so a deleted file is re-validated by the background (it
+  // re-checks `exists`); failures are remembered 15 min so we don't re-ask per clip.
   const diskPathMem = {};
+  let diskFailStreak = 0;
+  function forgetDiskPaths(paths) {
+    for (const k of Object.keys(diskPathMem)) {
+      const e = diskPathMem[k];
+      if (!paths || (e && e.path && paths.includes(e.path))) delete diskPathMem[k];
+    }
+  }
   async function diskPathFor(req) {
     if (!cdpAvailable()) return null;
     const key = req.url || "local:" + (req.name || "") + ":" + ((req.dataUrl && req.dataUrl.length) || 0);
     const m = diskPathMem[key];
-    if (m && Date.now() - m.at < 30 * 60 * 1000) return m.path;
+    if (m && Date.now() - m.at < (m.path ? 2 * 60 * 1000 : 15 * 60 * 1000)) return m.path;
     try {
-      const r = await ask(Object.assign({ type: "VIDEO_DISK_PATH" }, req));
+      // Per-clip time budget: the background keeps the download running past it
+      // and persists the id, so the NEXT visit adopts the file — this visit falls back.
+      const r = await Promise.race([
+        ask(Object.assign({ type: "VIDEO_DISK_PATH" }, req)),
+        sleep(60000).then(() => ({ ok: false, error: "disk path lookup timed out (download still running)" })),
+      ]);
       if (r && r.ok && r.path) {
+        diskFailStreak = 0;
         diskPathMem[key] = { path: r.path, at: Date.now() };
         return r.path;
       }
+      diskPathMem[key] = { path: null, at: Date.now() };
+      if (++diskFailStreak >= 6) { diskFailStreak = 0; cdpDisabledUntil = Date.now() + 15 * 60 * 1000; } // this machine can't stage clips on disk right now
       setStatus({ videoLast: "clip not on disk yet: " + trunc((r && r.error) || "?", 60) + " — paste attach this time" });
     } catch (e) { /* fall back */ }
     return null;
@@ -1885,6 +1941,7 @@
       // paste lands only partially we can simply clear the tray and fall back
       // to the verified one-by-one path: zero duplicate risk either way.
       let bulkDone = false;
+      cdpSetToken++; // new set: a file-API miss inside it skips the file API for its remaining clips only
       if (files.length - startAt > 1) {
         const rest = files.slice(startAt);
         const bulk = await attachVideosBulk(rest, id, paths.slice(startAt));
@@ -1910,6 +1967,12 @@
         }
         if (typeof bulk === "number" && bulk >= rest.length) {
           okCount = rest.length;
+          // Belt-and-suspenders: never let a surplus preview (any source) ride the
+          // single Enter — extras always append at the TAIL, same rule as sweepTrayExtras.
+          {
+            const expect = knownCount + rest.length;
+            if (trayRemoveBtns().length > expect) await sweepTrayExtras(expect);
+          }
           knownCount = trayRemoveBtns().length;
           bulkDone = true;
           const dmB = (await getLocal(["videoSentThreads"])).videoSentThreads || {};
