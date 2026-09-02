@@ -2056,6 +2056,13 @@
           await setLocal({ videoAttachFailLoggedAt: Date.now() }); // written BEFORE posting so two tabs can't double-log
           ask({ type: "LOG_EVENT", entry: { thread: name, threadId: id, buyer: "(video attach failure)", action: "video-status", reply: "0/" + files.length + " attached — all 3 attach strategies failed; FB upload UI may have changed on this machine" } });
         }
+        // Queue the retry EXPLICITLY (pending lane, honored after the 20-min
+        // backoff) — waiting for an organic idle revisit left "0 attached" chats
+        // without their videos for days on busy machines.
+        {
+          const qk0 = sidebarKey || id;
+          if (qk0 && videoPending[qk0] == null && videoPending[id] == null) { videoPending[qk0] = Date.now(); persistDedup(); }
+        }
         vstat("⚠ 0/" + files.length + " attached in " + (name || id) + " — unlocked for retry (FB upload UI may have changed)");
         setStatus({ lastError: "video: nothing attached — will retry later", currentThread: name });
         return;
