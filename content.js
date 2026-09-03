@@ -622,6 +622,19 @@
     // evidence (neutral-gray bubble, or — if color is unknown — clearly hugging the
     // left). Everything ambiguous is treated as "me" so the bot can never reply to
     // its own message. This is the core anti-self-reply rule.
+    // SYSTEM rows (v0.21.37): Facebook injects unpainted, CENTERED blocks into
+    // the thread — "X started this chat", "X is waiting for your response", the
+    // Marketplace "automated suggestion" cards, date dividers. The known ones
+    // are filtered by text; the unknown ones used to fall through the
+    // ambiguous⇒"me" rule and made a chat read "you spoke last" right after a
+    // real buyer message ("Mohand: Bonjour · 1h" sat unanswered + suppressed).
+    // A block that is unpainted AND centered AND narrower than the column is
+    // never one of OUR bubbles (ours hug the right edge, and are painted) nor
+    // the buyer's (they hug the left) — drop it. Every entry also records its
+    // `paint` so the sidebar rescue below can tell a CONFIRMED own bubble from
+    // an ambiguous one.
+    const colW = Math.max(1, colRight - colLeft);
+    const centered = (r) => Math.abs((colRight - r.right) - (r.left - colLeft)) <= 30 && r.width < colW * 0.6;
     const out = [];
     for (const { el, text, r } of cands) {
       const ours = looksLikeOurBubble(el); // true | false | null
@@ -630,21 +643,25 @@
         role = "me"; // our own message
       } else if (ours === false) {
         role = "buyer"; // neutral-gray bubble = the buyer's (ours are blue/gradient)
+      } else if (centered(r)) {
+        continue; // unpainted centered block = Facebook system row / card, not a message
       } else {
         // color inconclusive → only call it the buyer when it CLEARLY hugs the left
         role = (colRight - r.right) - (r.left - colLeft) > 30 ? "buyer" : "me";
       }
-      out.push({ role, text, top: r.top });
+      out.push({ role, text, top: r.top, paint: ours === true || isOwnEcho(text) ? true : ours });
     }
     // Media bubbles carry no paint to read, so the SAME rule applies: buyer only
-    // with positive evidence (clearly hugging the left); ambiguous = "me".
+    // with positive evidence (clearly hugging the left); centered = system card
+    // (listing thumbnails in suggestion cards); ambiguous = "me".
     for (const { el, r } of mediaCands) {
       const ours = looksLikeOurBubble(el); // usually null for media
       let role;
       if (ours === true) role = "me";
       else if (ours === false) role = "buyer";
+      else if (centered(r)) continue;
       else role = (colRight - r.right) - (r.left - colLeft) > 30 ? "buyer" : "me";
-      out.push({ role, text: "[attachment]", top: r.top });
+      out.push({ role, text: "[attachment]", top: r.top, paint: ours });
     }
     out.sort((a, b) => a.top - b.top);
     return out;
@@ -657,21 +674,41 @@
   function turnFromConvo(convo, hint) {
     // Our own demo clips render as trailing "me [attachment]" bubbles — never
     // let them hide a buyer message whose TEXT reply still needs to go out.
-    while (
-      convo.length &&
-      convo[convo.length - 1].role === "me" &&
-      convo[convo.length - 1].text === "[attachment]"
-    )
-      convo.pop();
+    // (Kept when the sidebar says the buyer's LATEST message is media: then the
+    // last attachment is theirs and the rescue below adopts it.)
+    if (!(hint && hint.media)) {
+      while (
+        convo.length &&
+        convo[convo.length - 1].role === "me" &&
+        convo[convo.length - 1].text === "[attachment]"
+      )
+        convo.pop();
+    }
     if (!convo.length) return null;
-    const last = convo[convo.length - 1];
+    let last = convo[convo.length - 1];
     if (last.role !== "buyer") {
       if (!hint) return null;
-      const lt = normMsg(last.text);
+      // SIDEBAR-CONFIRMED rescue (v0.21.37, generalized): Messenger's own row says
+      // the buyer wrote `hint.body` last. Walk back over the trailing entries that
+      // are NOT a confirmed own bubble (paint !== true — i.e. ambiguous/system-ish
+      // blocks Facebook rendered after the buyer's message) looking for that
+      // text; stop the moment a PAINTED own bubble is met (then we truly spoke
+      // last). A match is the buyer's latest message: adopt it and drop what
+      // follows it, so the transcript/dedupe key see the real conversation.
       const hb = normMsg(hint.body || "");
-      const textMatch = last.text !== "[attachment]" && hb.length >= 2 && (lt === hb || lt.startsWith(hb));
-      const mediaMatch = !!hint.media && last.text === "[attachment]";
-      if (!textMatch && !mediaMatch) return null;
+      const matches = (e) =>
+        (e.text !== "[attachment]" && hb.length >= 2 && (normMsg(e.text) === hb || normMsg(e.text).startsWith(hb))) ||
+        (!!hint.media && e.text === "[attachment]");
+      let found = -1;
+      for (let i = convo.length - 1, steps = 0; i >= 0 && steps < 6; i--, steps++) {
+        const e = convo[i];
+        if (e.role === "buyer") { found = i; break; } // a real buyer bubble with only unconfirmed blocks after it = the buyer spoke last
+        if (e.paint === true) break; // confirmed OUR bubble → we spoke last, no rescue
+        if (matches(e)) { found = i; break; }
+      }
+      if (found < 0) return null;
+      convo.length = found + 1; // drop the unconfirmed blocks after the buyer's message
+      last = convo[found];
       last.role = "buyer"; // sidebar-confirmed: Messenger attributes this message to the buyer
     }
     // Dedupe key = what WE last said + how many buyer TEXT bubbles followed + the
@@ -1353,8 +1390,19 @@
     }
     setStatus({ videoLast: "file API attach failed: " + trunc(err, 80) + " — falling back to paste" });
   }
+  let lastCdpVerifiedAt = 0;
+  // Seed from the persisted stats so a content-script reload on a healthy machine
+  // doesn't start in "unproven" mode (rush mode would queue videos needlessly).
+  getLocal(["cdpStats"]).then((r) => {
+    const t = r && r.cdpStats && r.cdpStats.lastVerifiedAt;
+    if (t && t > lastCdpVerifiedAt) lastCdpVerifiedAt = t;
+  });
+  // "Healthy" = a file-API attach was VERIFIED (preview appeared) within the last
+  // 2 h on this machine — the signal that an attach will cost seconds, not minutes.
+  const cdpRecentlyHealthy = () => cdpUsableNow() && Date.now() - lastCdpVerifiedAt < 2 * 3600 * 1000;
   function noteCdpVerified() {
     cdpStrikes = 0;
+    lastCdpVerifiedAt = Date.now();
     ask({ type: "CDP_VERIFIED" }); // fire-and-forget telemetry ("protocol ok" ≠ "clip staged")
   }
   // Absolute on-disk path for a clip (background downloads it once per machine).
@@ -2789,7 +2837,18 @@
     // soon as it is ready. All one-set-per-chat guards live inside the engine,
     // so for an already-served chat this returns in milliseconds and the reply
     // simply goes out below.
-    if (!videoLocked.has(id)) {
+    // RUSH MODE (v0.21.37): when several OTHER buyers are already waiting and the
+    // Chrome file API has not proven itself on this machine recently (i.e. an
+    // attach would go through the slow synthetic path — minutes per set), the
+    // buyer's ANSWER outranks this chat's clips: reply now, queue the set on the
+    // pending lane (guaranteed later delivery). A machine with a healthy file
+    // API keeps videos-first — its attach costs seconds, not minutes.
+    const rush = !videoLocked.has(id) && buyersWaitingCount(id, sidebarId) >= 3 && !cdpRecentlyHealthy();
+    if (rush) {
+      const qkR = sidebarId || id;
+      if (qkR && videoPending[qkR] == null && videoPending[id] == null) { videoPending[qkR] = Date.now(); persistDedup(); }
+      setStatus({ lastAction: "rush: " + buyersWaitingCount(id, sidebarId) + " buyers waiting — replying first, videos queued", currentThread: name });
+    } else if (!videoLocked.has(id)) {
       refreshThreadLock(sidebarId); // uploads can outlive the cross-tab lease
       await maybeSendVideo(id, name, true, sidebarId, false, { onClipSent: () => shipReply(true) });
       if (videoLocked.has(id)) clearVideoPending(sidebarId); // terminal → clear the sidebar-keyed pending too
@@ -2864,18 +2923,21 @@
   // (overdue ledger, or unread + buyer-attributed snippet). The streaming video
   // engine consults this between clips so a long set never makes a new buyer
   // wait for an old chat's remaining videos.
-  function buyersWaitingNow(excludeId, excludeSidebarId) {
+  function buyersWaitingCount(excludeId, excludeSidebarId) {
     const now = Date.now();
+    let n = 0;
     for (const a of safe(() => conversationAnchors(), [])) {
       const id = threadId(a);
       if (id === excludeId || id === excludeSidebarId || adoptedAlias[id] === excludeId) continue;
       if (openFailCount(id) >= 3 && now <= (cooldowns[id] || 0)) continue; // won't-open park
       if (!safe(() => snippetSuggestsBuyerLast(a), false)) continue;
       const ws = waitingSince[id];
-      if (ws && now - ws > OVERDUE_MS) return true;
-      if (safe(() => isUnreadAnchor(a), false)) return true;
+      if ((ws && now - ws > OVERDUE_MS) || safe(() => isUnreadAnchor(a), false)) n++;
     }
-    return false;
+    return n;
+  }
+  function buyersWaitingNow(excludeId, excludeSidebarId) {
+    return buyersWaitingCount(excludeId, excludeSidebarId) > 0;
   }
   function pickTarget(anchors, now, exclude, videoAtt) {
     // LANE 0 — OVERDUE (the never-miss guarantee): any chat on the waiting ledger

@@ -6,6 +6,21 @@ French), built for used-iPhone sales in Montréal. Runs locally per Chrome profi
 by default; **optional cloud sync** turns it into a web app so one change reaches
 every computer.
 
+> 🧭 **v0.21.37 — answer the buyer even when Facebook clutters the thread; rush mode; stale-machine alerts.**
+> From two live diagnostics: on the v0.21.36 machine videos are now 100% consistent
+> (`fileapi ok=33 verified=33`, every set `bulk:3`), but "Mohand: Bonjour · 1h" and
+> "Touty: Ça dépend · 10h" still sat unanswered — Facebook's unpainted, centered
+> system blocks (automated-suggestion cards, "X is waiting for your response", dividers)
+> rendered *after* the buyer's bubble were counted as our message. Now: unpainted
+> **centered** blocks are treated as system rows (never "ours"), and the sidebar rescue
+> walks back over such blocks to find the text Messenger itself attributes to the buyer.
+> **Rush mode:** when 3+ other buyers are waiting and the file API hasn't proven itself
+> on the machine recently, the reply goes out first and the clips are queued (pending
+> lane) instead of spending minutes on synthetic attaches. **Stale machines** (self-update
+> can't find the extension folder, e.g. the machine still on v0.21.33 in the second
+> diagnostic) now post a once-a-day "STALE BUILD … cannot self-update" row to the
+> dashboard Activity feed naming the cure — update those by hand with the zip link.
+>
 > 🎯 **v0.21.36 — videos attached through Chrome's own file API (the permanent fix).**
 > Field evidence (screenshot + diagnostic): the bot replied but no video went out because
 > the *attach* step — faking a paste/drag/file-input event into Facebook's composer — is

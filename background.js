@@ -2310,7 +2310,7 @@ async function cloudSelfUpdate(force) {
   if (sudBusy) return { ok: false, reason: "already running" };
   sudBusy = true;
   try {
-    const st = await new Promise((r) => chrome.storage.local.get(["sudLastCheck", "sudBase"], (x) => r(x || {})));
+    const st = await new Promise((r) => chrome.storage.local.get(["sudLastCheck", "sudBase", "sudStaleLoggedAt"], (x) => r(x || {})));
     if (!force && st.sudLastCheck && Date.now() - st.sudLastCheck < 55 * 60 * 1000) return { ok: true, reason: "checked recently" };
     chrome.storage.local.set({ sudLastCheck: Date.now() });
 
@@ -2348,6 +2348,19 @@ async function cloudSelfUpdate(force) {
                 " — move the loaded folder there. Folder names tried: " + tried.slice(0, 5).join(", ");
         }
         chrome.storage.local.set({ sudStatus: "auto-update OFF — " + why });
+        // FLEET VISIBILITY (v0.21.37): a machine that cannot self-update stays on
+        // an old build silently ("some machines fixed, some not"). Say so in the
+        // central Activity feed once a day, naming the version gap and the cure.
+        try {
+          const lastAt = st.sudStaleLoggedAt || 0;
+          if (Date.now() - lastAt > 24 * 3600 * 1000) {
+            chrome.storage.local.set({ sudStaleLoggedAt: Date.now() });
+            appendLog({
+              action: "video-status", thread: "(system)", threadId: "", buyer: "(system)",
+              reply: "STALE BUILD: this machine runs v" + loaded + " but v" + remote.version + " is available and it cannot self-update — " + why,
+            });
+          }
+        } catch (e) { /* telemetry only */ }
         return { ok: false, reason: why };
       }
       chrome.storage.local.set({ sudBase: base });
