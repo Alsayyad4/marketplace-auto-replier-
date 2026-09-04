@@ -386,7 +386,12 @@
     if (lines.length < 2) return null;
     let s = lines.slice(1).join(" ").replace(/^(?:unread messages?|messages? non lus?)\s*[:.,]?\s*/i, "");
     const m = s.match(/^([^:]{1,60}?):\s*(.+)$/);
-    if (!m) return null;
+    if (!m) {
+      // Colon-less MEDIA rows: "Mohand sent a photo." / "Mohand a envoyé une vidéo."
+      // (our own "You sent…"/"Vous avez envoyé…" rows are excluded up front).
+      const mm = s.match(/^(?!you\b|vous\b|toi\b|moi\b)([^:]{1,60}?)\s+(sent|a envoyé|vous a envoyé|t'a envoyé)\b.*\b(photo|video|vidéo|attachment|pièce jointe|voice|vocal|audio|gif|sticker|autocollant)/i);
+      return mm ? { body: "", media: true } : null;
+    }
     if (/^(you|vous|toi|moi)$/i.test(m[1].trim())) return null;
     let body = m[2].replace(/\s*[·•]\s*\d{1,3}\s?(min|m|h|hr|j|d|sem|w)\b.*$/i, "").replace(/(\.\.\.|…)\s*$/, "").trim();
     if (!body) return null;
@@ -550,7 +555,7 @@
   }
 
   // Returns the conversation as [{ role:"buyer"|"me", text }] oldest→newest, or [].
-  function readConversation() {
+  function readConversation(hint) {
     const main = getMain();
     const composer = findComposer();
     if (!main || !composer) return []; // not a loaded thread → read nothing
@@ -634,34 +639,57 @@
     // `paint` so the sidebar rescue below can tell a CONFIRMED own bubble from
     // an ambiguous one.
     const colW = Math.max(1, colRight - colLeft);
-    const centered = (r) => Math.abs((colRight - r.right) - (r.left - colLeft)) <= 30 && r.width < colW * 0.6;
+    // Centering is judged against the block's OWN [role="row"] box — Facebook's
+    // rows span the whole column for every author. The candidate span above
+    // collapses onto the system block itself in a first-contact chat (no own
+    // bubble rendered yet), where the rightmost block could never read as
+    // centered; the row box has no such blind spot. No trustworthy row box →
+    // hug = null → the old rules apply unchanged.
+    const rowBox = (el) => {
+      const row = safe(() => el.closest('[role="row"]'), null);
+      const b = row && safe(() => row.getBoundingClientRect(), null);
+      return b && b.width > 100 && b.width >= colW ? b : null;
+    };
+    const hugOf = (r, el) => {
+      const b = rowBox(el);
+      if (!b) return null;
+      const L = b.left, R = b.right, W = Math.max(1, R - L);
+      const gap = (R - r.right) - (r.left - L); // > 0 hugs left (buyer), < 0 hugs right (ours)
+      if (Math.abs(gap) <= 30 && r.width < W * 0.6) return "center";
+      return gap > 30 ? "left" : gap < -30 ? "right" : null;
+    };
+    // Never drop the very text the sidebar attributes to the buyer (confirmed path).
+    const hb = hint && !hint.media ? normMsg(hint.body || "") : "";
+    const namedBySidebar = (t) => hb.length >= 2 && (normMsg(t) === hb || normMsg(t).startsWith(hb));
     const out = [];
     for (const { el, text, r } of cands) {
       const ours = looksLikeOurBubble(el); // true | false | null
+      const hug = hugOf(r, el);
       let role;
       if (isOwnEcho(text) || ours === true) {
         role = "me"; // our own message
       } else if (ours === false) {
         role = "buyer"; // neutral-gray bubble = the buyer's (ours are blue/gradient)
-      } else if (centered(r)) {
+      } else if (hug === "center" && !namedBySidebar(text)) {
         continue; // unpainted centered block = Facebook system row / card, not a message
       } else {
         // color inconclusive → only call it the buyer when it CLEARLY hugs the left
         role = (colRight - r.right) - (r.left - colLeft) > 30 ? "buyer" : "me";
       }
-      out.push({ role, text, top: r.top, paint: ours === true || isOwnEcho(text) ? true : ours });
+      out.push({ role, text, top: r.top, paint: ours === true || isOwnEcho(text) ? true : ours, hug });
     }
     // Media bubbles carry no paint to read, so the SAME rule applies: buyer only
     // with positive evidence (clearly hugging the left); centered = system card
     // (listing thumbnails in suggestion cards); ambiguous = "me".
     for (const { el, r } of mediaCands) {
       const ours = looksLikeOurBubble(el); // usually null for media
+      const hug = hugOf(r, el);
       let role;
       if (ours === true) role = "me";
       else if (ours === false) role = "buyer";
-      else if (centered(r)) continue;
+      else if (hug === "center") continue;
       else role = (colRight - r.right) - (r.left - colLeft) > 30 ? "buyer" : "me";
-      out.push({ role, text: "[attachment]", top: r.top, paint: ours });
+      out.push({ role, text: "[attachment]", top: r.top, paint: ours, hug });
     }
     out.sort((a, b) => a.top - b.top);
     return out;
@@ -702,8 +730,15 @@
       let found = -1;
       for (let i = convo.length - 1, steps = 0; i >= 0 && steps < 6; i--, steps++) {
         const e = convo[i];
-        if (e.role === "buyer") { found = i; break; } // a real buyer bubble with only unconfirmed blocks after it = the buyer spoke last
+        // A real buyer bubble: adopt it ONLY if it is the message the sidebar names.
+        // A different one means the named (newer) message isn't rendered/readable
+        // yet → null, and the 2-min suspicious re-check handles the slow load.
+        if (e.role === "buyer") { if (matches(e)) found = i; break; }
         if (e.paint === true) break; // confirmed OUR bubble → we spoke last, no rescue
+        // A right-hugging TEXT bubble measured against its own row is ours by
+        // construction (buyers hug left) even when unpainted — never step over
+        // it, or our own "ok" could be adopted as the buyer's "ok".
+        if (e.text !== "[attachment]" && e.hug === "right") break;
         if (matches(e)) { found = i; break; }
       }
       if (found < 0) return null;
@@ -743,7 +778,7 @@
     return turnFromConvo(readConversation(), null);
   }
   function buyerSpokeLastConfirmed(hint) {
-    return turnFromConvo(readConversation(), hint);
+    return turnFromConvo(readConversation(hint), hint);
   }
   // Transcript regardless of who spoke last (used for smart follow-ups on quiet chats).
   function fullTranscript() {
@@ -1399,7 +1434,22 @@
   });
   // "Healthy" = a file-API attach was VERIFIED (preview appeared) within the last
   // 2 h on this machine — the signal that an attach will cost seconds, not minutes.
-  const cdpRecentlyHealthy = () => cdpUsableNow() && Date.now() - lastCdpVerifiedAt < 2 * 3600 * 1000;
+  // (Hard parks only — the per-set skip token is meaningless outside a set.)
+  const cdpRecentlyHealthy = () => cdpAvailable() && Date.now() - lastCdpVerifiedAt < 2 * 3600 * 1000;
+  // Rush must not starve its own health signal: noteCdpVerified() only fires inside
+  // the attach path, which rush skips — so once the 2 h window lapsed (overnight),
+  // a HEALTHY machine could never leave rush while ≥3 buyers wait. While unproven
+  // but usable, let ONE videos-first probe visit through every 10 min: a healthy
+  // attach verifies in seconds and restores videos-first for 2 h; an unhealthy
+  // machine pays at most one slow visit per 10 min.
+  let lastRushProbeAt = 0;
+  const RUSH_PROBE_EVERY_MS = 10 * 60 * 1000;
+  function rushProbeDue() {
+    if (!cdpUsableNow()) return false;
+    if (Date.now() - lastRushProbeAt <= RUSH_PROBE_EVERY_MS) return false;
+    lastRushProbeAt = Date.now();
+    return true;
+  }
   function noteCdpVerified() {
     cdpStrikes = 0;
     lastCdpVerifiedAt = Date.now();
@@ -2574,11 +2624,13 @@
     // 12h" sitting unanswered exactly like that). When the sidebar row itself
     // attributes the last message to the buyer BY NAME and that same text is the
     // last bubble in the open chat, that bubble is the buyer's — answer it.
+    let rescueHint = null; // the sidebar hint that produced `turn`, if any (the pre-send recheck re-runs it)
     if (!turn && sidebarSaysBuyer) {
       const hint = safe(() => sidebarSnippetBody(anchor), null);
       const confirmed = hint ? buyerSpokeLastConfirmed(hint) : null;
       if (confirmed) {
         turn = confirmed;
+        rescueHint = hint;
         setStatus({ lastAction: "buyer message confirmed via sidebar attribution", currentThread: name });
       }
     }
@@ -2787,7 +2839,11 @@
       // answers sequentially anyway (a newer buyer message gets its own reply next
       // cycle).
       if (!afterClip) {
-        const recheck = buyerSpokeLast();
+        // A sidebar-rescued turn is invisible to the hint-less read — re-run the
+        // same rescue. buyerSpokeLast() is tried FIRST so a NEW buyer bubble still
+        // aborts, and the rescue still stops at any painted/right-hugging own
+        // bubble, so a message WE sent during the wait aborts too.
+        const recheck = buyerSpokeLast() || (rescueHint ? buyerSpokeLastConfirmed(rescueHint) : null);
         if (!recheck || recheck.buyerMessage !== turn.buyerMessage) {
           setStatus({ lastAction: "aborted — conversation changed during the wait (will retry)", currentThread: name });
           return;
@@ -2843,7 +2899,16 @@
     // buyer's ANSWER outranks this chat's clips: reply now, queue the set on the
     // pending lane (guaranteed later delivery). A machine with a healthy file
     // API keeps videos-first — its attach costs seconds, not minutes.
-    const rush = !videoLocked.has(id) && buyersWaitingCount(id, sidebarId) >= 3 && !cdpRecentlyHealthy();
+    let rush = false;
+    if (!videoLocked.has(id) && buyersWaitingCount(id, sidebarId) >= 3 && !cdpRecentlyHealthy()) {
+      // Never queue a chat whose set is already CONFIRMED delivered (persisted
+      // mark — videoLocked is in-memory and empty after a reload): the engine
+      // exits in ms for it and latches videoLocked. And while the file API is
+      // usable-but-unproven, one probe visit per 10 min goes videos-first.
+      const dnR = ((await getLocal(["videoSentThreads"])).videoSentThreads || {})[id];
+      const served = !!(dnR && dnR.done && typeof dnR.resumeFrom !== "number");
+      rush = !served && !rushProbeDue();
+    }
     if (rush) {
       const qkR = sidebarId || id;
       if (qkR && videoPending[qkR] == null && videoPending[id] == null) { videoPending[qkR] = Date.now(); persistDedup(); }
