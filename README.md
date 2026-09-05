@@ -6,6 +6,28 @@ French), built for used-iPhone sales in Montréal. Runs locally per Chrome profi
 by default; **optional cloud sync** turns it into a web app so one change reaches
 every computer.
 
+> 🎬 **v0.21.38 — one clip in flight at a time; the composer itself confirms the attach; no more piles, no more 24h video pauses.**
+> A live diagnostic (machine PC-mnbbd) showed the failure behind "some chats get no
+> video at all": on that machine the file API handed the clips to Messenger correctly
+> (`ok=97`) but the preview tiles rendered far later than the bot's 12-30 s windows.
+> Each attempt was judged "nothing attached", swept, re-pasted, and the chat struck
+> (21 chats sat in 24h pauses); later all the tiles rendered at once (`tray7`) and one
+> Enter would have sent seven clips. Now: **(1)** with the file API the engine sends
+> **one clip at a time** — clip 1 is handed over within seconds of the chat opening,
+> sent the moment it is ready, the text reply rides right behind it, then clips 2 and 3
+> — so at most one clip is ever in flight per chat and nothing can pile up. **(2)** The
+> attach is confirmed by Messenger's **own send control** (the like button turning into
+> Send), which flips instantly even when the tile is slow, so slow machines no longer
+> fail on timing. **(3)** Before every Enter the tray must hold exactly one message's
+> worth; a surplus copy is removed, and if it won't go, nothing is sent. **(4)** A clip
+> the browser accepted but that never showed is counted as attempted and the next visit
+> adopts its late tile — never a second copy. **(5)** Clips are checked to still exist on
+> disk before every attach (a deleted file was another way to get "ok" with nothing
+> staged), and clips no longer travel as base64 before the first attach. **(6)** Existing
+> attach pauses are cleared once so those chats retry now. Machines that show
+> `sud: base=-` in the diagnostic (PC-mnbbd, PC-5u78q) cannot self-update and need the
+> zip link once, extracted inside Downloads.
+>
 > 🧭 **v0.21.37 — answer the buyer even when Facebook clutters the thread; rush mode; stale-machine alerts.**
 > From two live diagnostics: on the v0.21.36 machine videos are now 100% consistent
 > (`fileapi ok=33 verified=33`, every set `bulk:3`), but "Mohand: Bonjour · 1h" and

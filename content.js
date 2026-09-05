@@ -177,6 +177,23 @@
         chrome.storage.local.set({ videoAttempts: am, autoUnpause0134: true }, () => void chrome.runtime.lastError);
         if (n) console.debug("[SubSell] cleared", n, "attach strikes/pauses for the streaming engine");
       });
+      // v0.21.38 ONE-SHOT UNPAUSE: file-API sets whose tiles rendered late were
+      // judged "nothing attached" (12-30 s windows), swept, re-pasted and struck —
+      // a diagnostic showed 21 chats in 24h attach-pauses on one machine. The
+      // engine now streams one clip at a time, reads the composer's own staged
+      // signal and adopts late tiles; clear the pauses once so those chats retry
+      // under it now (same pattern as 0.21.29 / 0.21.34).
+      chrome.storage.local.get(["autoUnpause0138", "videoAttempts"], (r) => {
+        if (chrome.runtime.lastError || (r && r.autoUnpause0138)) return;
+        const am = (r && r.videoAttempts) || {};
+        let n = 0;
+        for (const k of Object.keys(am)) {
+          const e = am[k];
+          if (e && e.why === "attach" && (e.fails || 0) >= 1) { delete am[k]; n++; }
+        }
+        chrome.storage.local.set({ videoAttempts: am, autoUnpause0138: true }, () => void chrome.runtime.lastError);
+        if (n) console.debug("[SubSell] cleared", n, "attach strikes/pauses for the one-clip-in-flight engine");
+      });
       // ONE-TIME MIGRATION (v0.21.4): the "Add video to listing" card false-positive
       // marked chats {done:true} WITHOUT sending since the fleet reinstall. Un-mark
       // every done-flag younger than 7 days so those chats finally get their videos.
@@ -974,6 +991,63 @@
       await sleep(pass === 2 ? 1200 : 2500);
     }
   }
+  // PRE-ENTER EXACTNESS (v0.21.38): the tray must hold exactly `expected` tiles
+  // (the known head + the ONE clip just attached) before Enter. A surplus is a
+  // late-rendered copy from an earlier attempt (PC-mnbbd: SEVEN tiles piled up,
+  // one Enter would have sent them all). Attachments render in the order they
+  // entered the composer's state, so an older stray sits BEFORE the clip we just
+  // added: trim from the first non-known slot, keeping the newest (ours). Returns
+  // true when the tray is exact, false when a surplus would not go away — the
+  // caller must NOT send then.
+  async function trimTraySurplus(expected) {
+    for (let pass = 0; pass < 3; pass++) {
+      const btns = trayRemoveBtns();
+      if (btns.length <= expected) return true;
+      safe(() => btns[Math.max(0, expected - 1)].click());
+      await sleep(pass === 2 ? 1200 : 2000);
+    }
+    return trayRemoveBtns().length <= expected;
+  }
+  // RENDER-INDEPENDENT "something is staged" signal (v0.21.38). Messenger swaps
+  // the composer bar's rightmost control the instant its state holds content:
+  // empty → the like/thumb button, staged or typed → the Send button. That swap
+  // is a plain React commit (no file decode, no thumbnail), so it lands even on
+  // machines where the preview TILE renders 30-60 s late or not at all while the
+  // window is occluded (PC-mnbbd: every strategy judged "nothing attached", then
+  // all of them rendered at once). We compare the control's aria-label BEFORE
+  // and AFTER a dispatch — a change means staged, in any language.
+  function composerSendControl() {
+    const composer = findComposer();
+    if (!composer) return null;
+    const cr = safe(() => composer.getBoundingClientRect(), null);
+    if (!cr || !cr.height) return null;
+    const main = getMain() || document;
+    let best = null, bestLeft = -Infinity;
+    for (const b of safe(() => Array.from(main.querySelectorAll('[role="button"][aria-label], button[aria-label]')), [])) {
+      const r = safe(() => b.getBoundingClientRect(), null);
+      if (!r || !r.width || !r.height) continue;
+      if (r.bottom < cr.top - 8 || r.top > cr.bottom + 8) continue; // same band as the textbox
+      if (r.left < cr.right - 4) continue; // to its RIGHT (never the tray's remove buttons above)
+      if (r.left > bestLeft) { bestLeft = r.left; best = b; }
+    }
+    return best;
+  }
+  const sendControlLabel = () => {
+    const b = composerSendControl();
+    return b ? (safe(() => b.getAttribute("aria-label"), "") || "").trim().toLowerCase() : "";
+  };
+  // true = the control changed since the empty-composer baseline (staged),
+  // false = unchanged (nothing staged), null = signal unavailable right now.
+  function stagedPerControl(baseline) {
+    if (!baseline) return null;
+    const now = sendControlLabel();
+    if (!now) return null;
+    return now !== baseline;
+  }
+  // Which attach channel produced the last attachVideo verdict (for the 🩺 trace),
+  // and the empty-composer control label it started from (blind-send baseline).
+  let lastAttachVia = "-";
+  let lastAttachCtlBase = "";
   // Attach ONE clip (no send). knownCount = how many attachments are already
   // legitimately in the tray; tid = the thread this clip belongs to. Returns:
   // true (new preview verified), false (provably nothing new attached, extras
@@ -999,46 +1073,14 @@
     if (tid && !stillOnThread(tid)) return "navigated";
     const before = new Set(trayEls());
     const beforeBtns = new Set(trayRemoveBtns());
-    // CHROME FILE API FIRST (v0.21.36): hand the real on-disk files to the
-    // composer's <input type=file> through the debugger protocol — Chrome then
-    // stages them exactly as if the operator picked them in the file dialog
-    // (trusted change event), which this build honors where synthetic pastes
-    // are hit-and-miss. Verified the same way (new tray previews); any failure
-    // falls through to the synthetic multi-paste below, nothing sent either way.
-    // Only on an EMPTY composer: with a draft/staged content the MWX composer moves
-    // the attach control (and its input) into "Open more actions"; the synthetic
-    // paste below stages alongside text just like before in that case.
-    if (cdpUsableNow() && !composerText(composer) && Array.isArray(pathsArr) && pathsArr.length === filesArr.length && pathsArr.every(Boolean)) {
-      setStatus({ lastAction: `attaching ${filesArr.length} video(s) via Chrome file API…` });
-      const r = await ask({ type: "CDP_SET_FILES", paths: pathsArr });
-      if (r && r.ok) {
-        const want = filesArr.length;
-        const start = Date.now();
-        let seen = 0;
-        while (Date.now() - start < 45000) {
-          await sleep(700);
-          if (tid && !stillOnThread(tid)) {
-            for (const b of trayRemoveBtns()) if (!beforeBtns.has(b)) safe(() => b.click());
-            return "navigated";
-          }
-          seen = trayEls().filter((el) => !before.has(el)).length;
-          if (seen >= want) { noteCdpVerified(); return want; }
-          if (seen === 0 && Date.now() - start > 12000) break; // FAIL FAST: nothing staged by now → not coming
-        }
-        await sleep(6000); // late-render grace
-        seen = trayEls().filter((el) => !before.has(el)).length;
-        if (seen > 0) { noteCdpVerified(); return Math.min(seen, want); } // partial → caller sweeps + goes one-by-one
-        forgetDiskPaths(pathsArr); // a dead/deleted file? re-validate with the background next time
-        noteCdpFail({ error: "file API set the files but no preview appeared" });
-      } else {
-        noteCdpFail(r);
-      }
-      // A file-API attempt was ISSUED for this tray: never stack the synthetic
-      // multi-paste on top of it (a late-rendering file-API preview plus a paste
-      // would make ONE Enter send the set twice). 0 → the caller sweeps the tray
-      // and goes one-by-one, whose between-strategy sweeps keep it duplicate-safe.
-      return 0;
-    }
+    // (v0.21.38) The Chrome file API no longer runs here: a multi-file set whose
+    // tiles render late leaves up to N strays behind, and the per-clip fallback
+    // then stacked copies on top (the PC-mnbbd pile). With the file API usable
+    // the engine streams ONE clip at a time instead (attachVideo) — at most one
+    // clip in flight per chat, always the next one due, so any late tile is
+    // adopted or trimmed, never doubled. This synthetic multi-paste stays for
+    // machines without the file API. `pathsArr` is kept for signature stability.
+    void pathsArr;
     const dtAll = () => {
       const dt = new DataTransfer();
       for (const f of filesArr) dt.items.add(f);
@@ -1075,15 +1117,35 @@
     seen = trayEls().filter((el) => !before.has(el)).length;
     return Math.min(seen, want);
   }
+  // Verdicts (v0.21.38): true (tile verified), "blind" (Messenger's composer
+  // reports content staged — the send control flipped — but no tile rendered
+  // yet; send it, never dispatch another copy), "unverified" (the browser
+  // accepted the file-API set, no tile and no control signal — a late render
+  // can't be ruled out, so the clip is treated as attempted: skip-forward, the
+  // resume visit adopts its tile if it shows up), false / "dirty" / "navigated"
+  // as before. `file` may be a LAZY loader {lazy:true, load()} — on-disk clips
+  // no longer haul their base64 through the message channel unless a synthetic
+  // strategy actually needs the File.
   async function attachVideo(file, knownCount, tid, diskPath) {
+    lastAttachVia = "-";
     const composer = findComposer();
     if (composer) composer.focus();
     if (tid && !stillOnThread(tid)) return "navigated";
-    // CHROME FILE API FIRST (v0.21.36) when the clip is on disk — see
-    // attachVideosBulk. Runs as strategy 0 with the long window; the synthetic
-    // strategies keep their exact old order/windows behind it.
+    let fileObj = file && file.lazy ? null : file;
+    const ensureFile = async () => {
+      if (fileObj) return fileObj;
+      if (file && file.lazy) { try { fileObj = await file.load(); } catch (e) { fileObj = null; } }
+      return fileObj;
+    };
+    // CHROME FILE API FIRST (v0.21.36) when the clip is on disk. Runs as
+    // strategy 0; the synthetic strategies keep their old order/windows behind it.
     const useCdp = !!diskPath && cdpUsableNow() && !!composer && !composerText(composer);
     const firstPasteIdx = useCdp ? 1 : 0;
+    // The render-independent staged signal is trustworthy only from an EMPTY,
+    // draft-free composer: with a known head or typed text the control already
+    // shows Send and cannot flip again.
+    const ctlBase = knownCount === 0 && composer && !composerText(composer) ? sendControlLabel() : "";
+    lastAttachCtlBase = ctlBase; // the send path compares against it in blind mode
     // OPTIMISTIC PIPELINING (v0.21.32): the next clip is pasted immediately,
     // WHILE the previous clip is still uploading — most FB builds accept it,
     // which makes the uploads overlap instead of running one after another
@@ -1091,9 +1153,9 @@
     // fail the first short detection window; the loop then waits the uploads
     // out and pastes AGAIN (second attempt below) with the long window — the
     // proven v0.21.29 behavior, just demoted from "always" to "fallback".
-    const dtFor = () => {
+    const dtFor = (f) => {
       const dt = new DataTransfer();
-      dt.items.add(file);
+      dt.items.add(f);
       return dt;
     };
     const attempts = [];
@@ -1102,35 +1164,46 @@
         setStatus({ lastAction: "attaching video via Chrome file API…" });
         const r = await ask({ type: "CDP_SET_FILES", paths: [diskPath] });
         if (r && r.ok) return true;
+        if (r && r.missing) forgetDiskPaths([diskPath]); // deleted on disk — background re-downloads
         noteCdpFail(r);
-        return false;
+        return false; // nothing reached the composer's input → synthetic strategies are safe
       };
       cdpFn.isCdp = true;
+      cdpFn.via = "cdp";
       attempts.push(cdpFn);
     }
     if (composer) {
-      const pasteFn = () => {
+      const pasteFn = async () => {
+        const f = await ensureFile();
+        if (!f) return false;
         const ev = new ClipboardEvent("paste", { bubbles: true, cancelable: true });
-        Object.defineProperty(ev, "clipboardData", { value: dtFor() });
+        Object.defineProperty(ev, "clipboardData", { value: dtFor(f) });
         composer.dispatchEvent(ev);
         return true;
       };
+      pasteFn.via = "paste";
       attempts.push(pasteFn); // optimistic — fired even while a previous upload runs
       attempts.push(pasteFn); // retry after the loop settles the uploads (see below)
-      attempts.push(() => {
-        const dt = dtFor();
+      const dragFn = async () => {
+        const f = await ensureFile();
+        if (!f) return false;
+        const dt = dtFor(f);
         for (const t of ["dragenter", "dragover", "drop"]) {
           const ev = new DragEvent(t, { bubbles: true, cancelable: true });
           Object.defineProperty(ev, "dataTransfer", { value: dt });
           composer.dispatchEvent(ev);
         }
         return true;
-      });
+      };
+      dragFn.via = "drag";
+      attempts.push(dragFn);
     }
-    attempts.push(() => {
+    const inputFn = async () => {
       // Last resort: a file input — but ONLY one that is not part of the listing
       // card's own uploader (the input whose surrounding text says "add video to
       // listing"/"update listing" belongs to the LISTING, not the chat).
+      const f = await ensureFile();
+      if (!f) return false;
       const inputs = Array.from(document.querySelectorAll('input[type="file"]')).filter((inp) => {
         const wrap = safe(() => inp.closest("div,form,section"), null);
         const t = safe(() => ((wrap && wrap.innerText) || "").toLowerCase(), "");
@@ -1138,10 +1211,12 @@
       });
       const input = inputs[inputs.length - 1]; // composer attachments render late in the DOM
       if (!input) return false;
-      input.files = dtFor().files;
+      input.files = dtFor(f).files;
       input.dispatchEvent(new Event("change", { bubbles: true }));
       return true;
-    });
+    };
+    inputFn.via = "input";
+    attempts.push(inputFn);
 
     // Try each strategy IN ORDER; require a NEW preview element to appear before
     // trusting it (identity, not count-delta — immune to simultaneous changes).
@@ -1171,20 +1246,24 @@
       const beforeEls = new Set(trayEls());
       lastBeforeEls = beforeEls;
       const uploadsAtDispatch = trayUploads();
-      // (the Chrome file API strategy is async; the synthetic ones are sync)
+      // (the strategies are async: the file API round-trips to the background,
+      // the synthetic ones may have to load the File first)
       let fired = false;
       try { fired = !!(await Promise.resolve(safe(attempt, false))); } catch (e) { fired = false; }
       if (!fired) { strategyIdx++; continue; }
+      lastAttachVia = attempt.via || "-";
       // Window sizing: the OPTIMISTIC paste fails fast (12s) when uploads were
       // running at dispatch — if this build rejects mid-upload pastes we want to
       // move to the settle-and-retry quickly, not burn 30s. The settled retry
       // keeps the LONG 30s window (throttled/RDP machines render previews
       // 20-30s late; a short window there judged good attaches "failed", swept
       // them away and struck the chat — the v0.21.29 lockout bug). The file API
-      // strategy (a real chooser-equivalent) always gets the long window.
-      const windowMs = attempt.isCdp ? 30000 : strategyIdx === firstPasteIdx ? (uploadsAtDispatch > 0 ? 12000 : 30000) : strategyIdx === firstPasteIdx + 1 ? 30000 : 12000;
+      // strategy gets 30s when the staged signal can shortcut it, 60s when it
+      // cannot (a tile is then the only evidence, and it can be a minute late).
+      const windowMs = attempt.isCdp ? (ctlBase ? 30000 : 60000) : strategyIdx === firstPasteIdx ? (uploadsAtDispatch > 0 ? 12000 : 30000) : strategyIdx === firstPasteIdx + 1 ? 30000 : 12000;
       const start = Date.now();
       let navigated = false;
+      let blind = false;
       while (Date.now() - start < windowMs) {
         await sleep(1000);
         if (tid && !stillOnThread(tid)) { navigated = true; break; }
@@ -1192,21 +1271,43 @@
           attached = true;
           break;
         }
+        if (ctlBase && stagedPerControl(ctlBase) === true) { blind = true; break; } // staged per the composer, tile pending
+      }
+      if (blind && !attached) {
+        // The composer holds the clip — give its tile a short chance to show
+        // (it is the better evidence), then proceed on the control alone.
+        const tB = Date.now();
+        while (Date.now() - tB < 10000) {
+          await sleep(1000);
+          if (tid && !stillOnThread(tid)) { navigated = true; break; }
+          if (trayEls().some((el) => !beforeEls.has(el))) { attached = true; break; }
+        }
       }
       if (navigated) {
         for (const b of trayRemoveBtns()) if (!beforeBtns.has(b)) safe(() => b.click()); // de-stray the wrong chat
         return "navigated";
       }
       if (attached) {
-        if (attempt.isCdp) noteCdpVerified();
+        if (attempt.isCdp) noteCdpVerified(false);
         break; // this strategy worked — stop trying others
       }
+      if (blind) {
+        if (attempt.isCdp) noteCdpVerified(true);
+        return "blind"; // staged for sure, invisible so far — NEVER dispatch another copy
+      }
       if (attempt.isCdp) {
-        // Protocol said ok but Messenger staged nothing (dead file / composer
-        // state): re-validate the path next time and skip the file API for the
-        // rest of this set instead of paying 30s per clip.
-        forgetDiskPaths([diskPath]);
-        noteCdpFail({ error: "file API set the file but no preview appeared" });
+        if (ctlBase) {
+          // The composer's own control says NOTHING is staged after the whole
+          // window: the set did not take (wrong/stale input on this layout).
+          // Provably empty → the synthetic strategies may follow without stacking.
+          noteCdpUnverified();
+        } else {
+          // No control signal and no tile: a late render cannot be ruled out. A
+          // second dispatch here is exactly how tiles piled up — stop, and let
+          // the clip count as attempted (the resume visit adopts its late tile).
+          noteCdpUnverified();
+          return "unverified";
+        }
       }
       strategyIdx++;
     }
@@ -1218,6 +1319,7 @@
         await sleep(1200);
         return true;
       }
+      if (ctlBase && stagedPerControl(ctlBase) === true) return "blind"; // flipped late
       await sweepTrayExtras(knownCount);
       if (trayRemoveBtns().length > knownCount) return "dirty"; // unverifiable leftover — never re-attempt
       return false; // provably nothing new attached — re-attempting later cannot duplicate
@@ -1228,11 +1330,27 @@
   // ONE Enter sends everything attached (+ click-Send fallback). Attach + send-
   // attempt = delivered (the v0.12.3 law): detach confirmation stays best-effort
   // because a false "not sent" used to trigger retries → duplicate videos.
-  async function sendAttachedVideos() {
+  async function sendAttachedVideos(blindBaseline) {
     const composer2 = findComposer();
     const previews = trayEls().length || 1;
     if (composer2) pressEnter(composer2);
     const s2 = Date.now();
+    if (blindBaseline) {
+      // BLIND SEND (v0.21.38): no tile to watch, and the upload may still be
+      // running (Enter is queued by Messenger until it completes). "Sent" = the
+      // send control reverting to its empty-composer label; allow the upload time.
+      while (Date.now() - s2 < 90000) {
+        await sleep(1000);
+        if (sendControlLabel() === blindBaseline) return true;
+      }
+      clickSend();
+      const s3 = Date.now();
+      while (Date.now() - s3 < 20000) {
+        await sleep(1000);
+        if (sendControlLabel() === blindBaseline) return true;
+      }
+      return true; // attach + send attempt = delivered (the v0.12.3 law)
+    }
     while (Date.now() - s2 < 8000) {
       await sleep(400);
       if (trayEls().length < previews) return true; // confirmed gone = sent
@@ -1240,6 +1358,47 @@
     clickSend(); // fallback for layouts where Enter doesn't send
     await sleep(1500);
     return true;
+  }
+  // After a streamed send: let a QUEUED Enter (pressed mid-upload) fire — never
+  // touch the tray while a progressbar is visible — then deal with what is left.
+  // Two very different things can still be in the tray:
+  //  (B) the clip itself, whose send did not land (the SAME tile elements as
+  //      before Enter, or any tile after a blind send) → send again, once via
+  //      Enter and once via the Send button; sweeping it would lose the clip
+  //      while the stamp says "sent";
+  //  (A) a late-rendered stray from an earlier attempt (NEW tile identities) →
+  //      removed; adopting it into the NEXT clip's message is how a buyer got
+  //      the same clip twice.
+  // Only an unremovable tile is carried as "known" (it rides the next Enter).
+  // Returns the tiles left in the tray.
+  async function settleTrayAfterSend(tid, preSendEls, blind) {
+    const gone = () => tid && !stillOnThread(tid);
+    const waitUploads = async () => {
+      const t0 = Date.now();
+      while (Date.now() - t0 < 90000 && trayUploads() > 0) {
+        if (gone()) return false;
+        await sleep(1000);
+      }
+      return true;
+    };
+    if (!(await waitUploads())) return trayRemoveBtns().length;
+    const t1 = Date.now();
+    while (Date.now() - t1 < 6000 && trayRemoveBtns().length > 0) await sleep(500);
+    if (trayRemoveBtns().length === 0 || gone()) return trayRemoveBtns().length;
+    const ours = blind || trayEls().some((el) => preSendEls && preSendEls.has(el));
+    if (ours) {
+      for (const again of ["enter", "button"]) {
+        const c = findComposer();
+        if (again === "enter" && c) pressEnter(c); else if (again === "button") clickSend();
+        const t2 = Date.now();
+        while (Date.now() - t2 < 8000 && trayRemoveBtns().length > 0) await sleep(500);
+        if (trayRemoveBtns().length === 0) return 0;
+        if (!(await waitUploads())) return trayRemoveBtns().length;
+        if (gone()) return trayRemoveBtns().length;
+      }
+    }
+    await sweepTrayExtras(0);
+    return trayRemoveBtns().length;
   }
   // Belt-and-suspenders: does THIS open chat already show a video on our side?
   // A sent video renders as a thumbnail with a play button and a small duration
@@ -1412,6 +1571,14 @@
       vstat("file API blocked: turn ON 'Allow access to file URLs' for SubSell in chrome://extensions — using fallback attach");
       return;
     }
+    if (r && r.missing) {
+      // The clip file is gone from disk (verified by the pre-set probe, nothing
+      // touched the composer): the background re-downloads it; this set goes
+      // synthetic, the next set is back on the file API.
+      cdpFailedSetToken = cdpSetToken;
+      setStatus({ videoLast: "clip file missing on disk — re-downloading; paste attach this time" });
+      return;
+    }
     if (/unavailable|permission/i.test(err)) {
       cdpDisabledUntil = Date.now() + 30 * 60 * 1000; // API not granted yet (reload pending)
     } else if (/input not found|no preview/i.test(err)) {
@@ -1450,10 +1617,26 @@
     lastRushProbeAt = Date.now();
     return true;
   }
-  function noteCdpVerified() {
+  function noteCdpVerified(blind) {
     cdpStrikes = 0;
+    cdpUnverifiedStreak = 0;
     lastCdpVerifiedAt = Date.now();
-    ask({ type: "CDP_VERIFIED" }); // fire-and-forget telemetry ("protocol ok" ≠ "clip staged")
+    ask({ type: "CDP_VERIFIED", blind: !!blind }); // fire-and-forget telemetry ("protocol ok" ≠ "clip staged")
+  }
+  // The browser accepted a file-API set but the composer showed NOTHING (no tile,
+  // no staged signal) for the whole window. One miss is a chat/layout quirk; two
+  // in a row mean this machine's composer is not taking file-API sets right now
+  // (wrong input on a new layout, frozen renderer…): park the file API 30 min so
+  // the synthetic strategies get their turn, then re-probe. A verified attach
+  // resets the streak. Telemetry: the 🩺 fileapi line shows unverified=N.
+  let cdpUnverifiedStreak = 0;
+  function noteCdpUnverified() {
+    ask({ type: "CDP_UNVERIFIED" });
+    if (++cdpUnverifiedStreak >= 2) {
+      cdpUnverifiedStreak = 0;
+      cdpDisabledUntil = Date.now() + 30 * 60 * 1000;
+      setStatus({ videoLast: "file API sets are not showing up in the composer on this machine — paste attach for 30 min" });
+    }
   }
   // Absolute on-disk path for a clip (background downloads it once per machine).
   // null = no path → that clip uses the synthetic strategies. Successes are memoized
@@ -1880,12 +2063,30 @@
       for (const v of activeCentral) {
         let ok = false;
         try {
-          const r = await ask({ type: "FETCH_VIDEO", url: v.url });
-          if (r && r.ok && r.base64) {
-            const mime = r.mime || "video/mp4";
-            files.push(dataUrlToFile(`data:${mime};base64,${r.base64}`, v.name || "video.mp4", mime));
-            paths.push(await diskPathFor({ url: v.url, name: v.name }));
+          // ON-DISK FIRST (v0.21.38): with the file API on, the clip's path is all
+          // the attach needs — hauling 10-30 MB of base64 per clip through the
+          // message channel before the first attach was seconds of "instant"
+          // lost on every visit. The File is loaded LAZILY, only if a synthetic
+          // strategy ever runs for this clip.
+          const p = cdpAvailable() ? await diskPathFor({ url: v.url, name: v.name }) : null;
+          if (p) {
+            const load = async () => {
+              const r = await ask({ type: "FETCH_VIDEO", url: v.url });
+              if (!(r && r.ok && r.base64)) return null;
+              const mime = r.mime || "video/mp4";
+              return dataUrlToFile(`data:${mime};base64,${r.base64}`, v.name || "video.mp4", mime);
+            };
+            files.push({ lazy: true, name: v.name || "video.mp4", load });
+            paths.push(p);
             ok = true;
+          } else {
+            const r = await ask({ type: "FETCH_VIDEO", url: v.url });
+            if (r && r.ok && r.base64) {
+              const mime = r.mime || "video/mp4";
+              files.push(dataUrlToFile(`data:${mime};base64,${r.base64}`, v.name || "video.mp4", mime));
+              paths.push(null);
+              ok = true;
+            }
           }
         } catch (e) {
           /* fall through to failure accounting */
@@ -1997,11 +2198,31 @@
       // then a single Enter sends the whole set as ONE message. A clip that
       // provably fails to attach stops the set with a resume marker; whatever
       // is already in the tray still goes out with the one send.
+      // A previous visit's LATE-rendered tile is restored with the chat's draft a
+      // beat after the chat opens: look for it before deciding the tray is clean.
+      {
+        const tW = Date.now();
+        while (Date.now() - tW < 2500 && trayRemoveBtns().length === 0) await sleep(500);
+      }
       if (startAt === 0 && trayRemoveBtns().length > 0) {
         await sweepTrayExtras(0); // fresh run: stale strays out before we stack clips
       }
-      // Resume runs ADOPT leftover unsent previews (a crashed run's attached
-      // heads) as known-good — they ride the same Enter, finally delivered.
+      // Resume runs ADOPT a leftover unsent preview (a crashed run's attached
+      // clip, or the tile of a clip the file API staged that rendered after we
+      // left) as known-good — it rides the first Enter, finally delivered. The
+      // streaming engine keeps at most ONE clip in flight per chat, so more than
+      // one leftover is a pile of copies: keep the newest (tail), trim the rest.
+      if (startAt > 0 && trayRemoveBtns().length > 1) {
+        for (let pass = 0; pass < 3 && trayRemoveBtns().length > 1; pass++) {
+          safe(() => trayRemoveBtns()[0].click());
+          await sleep(2000);
+        }
+        if (trayRemoveBtns().length > 1) {
+          vstat("tray holds " + trayRemoveBtns().length + " stuck previews — skipping this visit (" + (name || id) + ")");
+          videoLocked.delete(id);
+          return; // the resume marker stands; retried on a later visit
+        }
+      }
       let knownCount = trayRemoveBtns().length;
       let okCount = 0;
       let failedAt = -1;    // first clip whose attach provably failed (tray verified clean → re-attempt allowed)
@@ -2040,8 +2261,24 @@
       // to the verified one-by-one path: zero duplicate risk either way.
       let bulkDone = false;
       cdpSetToken++; // new set: a file-API miss inside it skips the file API for its remaining clips only
-      if (files.length - startAt > 1) {
-        const rest = files.slice(startAt);
+      // FILE API ⇒ STREAM ONE CLIP AT A TIME (v0.21.38, operator: "send whatever
+      // you can, don't wait for all"): no multi-file set — clip 1 is on its way
+      // in seconds, the reply rides right behind it, and at most one clip is ever
+      // in flight per chat (the property that makes late tiles adoptable instead
+      // of a pile). The synthetic multi-paste below stays for machines without it.
+      const cdpPerClip = cdpUsableNow() && paths.slice(startAt).every(Boolean);
+      let bulkFiles = null;
+      if (!cdpPerClip && files.length - startAt > 1) {
+        bulkFiles = [];
+        for (const f of files.slice(startAt)) {
+          let real = f;
+          if (f && f.lazy) { try { real = await f.load(); } catch (e) { real = null; } }
+          if (!real) { bulkFiles = null; break; } // can't load one → one-by-one handles it
+          bulkFiles.push(real);
+        }
+      }
+      if (bulkFiles) {
+        const rest = bulkFiles;
         const bulk = await attachVideosBulk(rest, id, paths.slice(startAt));
         safe(() => chrome.storage.local.get(["videoAttachTrace"], (rB) => {
           if (chrome.runtime.lastError) return;
@@ -2126,13 +2363,15 @@
           await setLocal({ videoSentThreads: dmA });
         }
         setStatus({ lastAction: `attaching video ${i + 1}/${files.length}…`, currentThread: name });
-        const res = await attachVideo(files[i], knownCount, id, paths[i]);
+        let res = await attachVideo(files[i], knownCount, id, paths[i]);
+        const resVia = lastAttachVia;
+        const resTrace = res === true ? "ok" : String(res);
         // ATTACH TRACE (ring of 12, shown in 🩺): which clip, what verdict, how
         // the tray looked — ends the guessing when a machine's attaches fail.
         safe(() => chrome.storage.local.get(["videoAttachTrace"], (rT) => {
           if (chrome.runtime.lastError) return;
           const tr = (rT && rT.videoAttachTrace) || [];
-          tr.push({ at: Date.now(), clip: i + 1, of: files.length, res: res === true ? "ok" : String(res), tray: trayRemoveBtns().length, up: trayUploads() });
+          tr.push({ at: Date.now(), clip: i + 1, of: files.length, res: resTrace + (resVia && resVia !== "-" ? "/" + resVia : ""), tray: trayRemoveBtns().length, up: trayUploads() });
           while (tr.length > 12) tr.shift();
           chrome.storage.local.set({ videoAttachTrace: tr }, () => void chrome.runtime.lastError);
         }));
@@ -2153,7 +2392,7 @@
           setStatus({ lastAction: "video set interrupted (chat switched) — finishing later", currentThread: name });
           return;
         }
-        if (res === true) {
+        if (res === true || res === "blind") {
           okCount++;
           // Count-based, +1 exactly: re-snapshotting the whole tray here would
           // absorb an undetected stray copy into the "known-good" set and let it
@@ -2169,12 +2408,22 @@
           dmP2[id] = { done: true, at: Date.now(), via: "lock", owner: TAB_UID, sent: okCount + startAt, resumeFrom: i + 1, resumeTotal: files.length };
           await setLocal({ videoSentThreads: dmP2 });
           if (streaming) {
+            if (res === "blind") {
+              // The composer says staged: give the tile up to 20 s more — once it
+              // is visible the normal upload-settled, exact-count send applies.
+              const tV = Date.now();
+              while (Date.now() - tV < 20000 && trayEls().length === 0) {
+                if (!stillOnThread(id)) break;
+                await sleep(1000);
+              }
+              if (trayEls().length > 0) res = true;
+            }
             // Let THIS clip's upload finish (Enter mid-upload is queued by FB, but
             // a finished upload sends instantly and leaves the tray empty for the
             // next paste — which is also what makes the next attach land on the
             // first try instead of being rejected mid-upload).
             const upS = Date.now();
-            while (Date.now() - upS < 75000 && trayUploads() > 0) {
+            while (res === true && Date.now() - upS < 75000 && trayUploads() > 0) {
               if (!stillOnThread(id)) break;
               await sleep(1000);
             }
@@ -2182,10 +2431,25 @@
               await parkTail(i + 1, `video set paused at ${i}/${files.length} (chat switched) — finishing later`);
               return;
             }
+            // EXACTLY ONE MESSAGE'S WORTH before Enter (v0.21.38): known head + this
+            // clip. A surplus tile is an earlier attempt's late copy — trimmed; if
+            // it won't go, nothing is sent (the clip counts as attempted and the
+            // set stops here rather than posting a pile — the PC-mnbbd tray7 case).
+            if (res === true && !(await trimTraySurplus(knownCount))) {
+              okCount--;
+              dirtyStop = true;
+              failedAt = i;
+              vstat("tray holds extra previews that won't clear — not sending a pile (" + (name || id) + ")");
+              break;
+            }
             setStatus({ lastAction: `sending video ${i + 1}/${files.length}…`, currentThread: name });
-            await sendAttachedVideos();
+            const preSendEls = new Set(trayEls());
+            await sendAttachedVideos(res === "blind" ? lastAttachCtlBase : null);
             streamedCount++;
-            knownCount = trayRemoveBtns().length; // normally 0 now; a stuck preview simply rides the next Enter
+            // Normally 0 now. A send that did not land is retried; a late stray is
+            // REMOVED (never adopted into the next message); only an unremovable
+            // tile is carried as known.
+            knownCount = await settleTrayAfterSend(id, preSendEls, res === "blind");
             refreshThreadLock(sidebarKey || id); // uploads outlive the cross-tab lease
             if (hooks && typeof hooks.onClipSent === "function") {
               // Interleave the TEXT reply right after the first clip (the reply
@@ -2206,11 +2470,15 @@
               return;
             }
           }
-        } else if (res === "dirty") {
-          // Attach unconfirmed AND the tray couldn't be verified clean — treat the
-          // clip as attempted (pre-attempt stamp already excludes it) and stop.
+        } else if (res === "dirty" || res === "unverified") {
+          // Attach unconfirmed AND the tray couldn't be verified clean ("dirty"),
+          // or the browser accepted a file-API set that showed nothing yet
+          // ("unverified" — a late tile is possible, and the resume visit adopts
+          // it): treat the clip as attempted (the pre-attempt stamp already
+          // excludes it) and stop — never dispatch a second copy.
           dirtyStop = true;
           failedAt = i;
+          if (res === "unverified") vstat("clip " + (i + 1) + " handed to the composer but nothing showed — finishing later, never twice (" + (name || id) + ")");
           break;
         } else {
           // attachVideo=false ⇒ no new preview appeared AND extras were cleaned ⇒

@@ -1368,7 +1368,13 @@ function pageFindComposerFileInput() {
   const composer = main.querySelector('[contenteditable="true"][role="textbox"]') || main.querySelector('[contenteditable="true"]');
   if (!composer) return null;
   const bad = /add (a |your )?videos? to( your| the)? listing|update( your)? listing|mettre à jour|modifier (l|votre annonce)|ajoute[rz]? (une |la |des )?vid/i;
-  const all = Array.from(main.querySelectorAll('input[type="file"]'));
+  const attachish = /attach|joindre|jointe|fichier|pi[èe]ce|\bfile\b|photo|m[ée]dia|upload|t[ée]l[ée]vers/i;
+  // The composer's input lives in [role=main]; a layout that portals it out
+  // (newer MWX builds move the attach control when the bar is compact) is the
+  // "composer file input not found" case — fall back to the whole document,
+  // with the same exclusions and the same locality requirement.
+  let all = Array.from(main.querySelectorAll('input[type="file"]'));
+  if (!all.length) all = Array.from(document.querySelectorAll('input[type="file"]'));
   const cr = composer.getBoundingClientRect();
   const composerUp = []; // the composer's nearest ancestors = the composer bar's subtree
   for (let n = composer.parentElement, i = 0; n && n !== main && i < 8; n = n.parentElement, i++) composerUp.push(n);
@@ -1389,11 +1395,29 @@ function pageFindComposerFileInput() {
     const pr = p ? p.getBoundingClientRect() : null;
     if (pr && pr.height > 0 && Math.abs(pr.top - cr.top) < 160) sc += 3; // sits in the composer bar
     if (composerUp.some((c) => c.contains(inp))) sc += 5; // same subtree as the textbox
+    // Its own control is labelled "Attach a file" / "Joindre un fichier" / …:
+    // the label sits on a sibling or a close ancestor of the hidden input.
+    for (let n = inp.parentElement, k = 0; n && k < 3; n = n.parentElement, k++) {
+      const lab = (n.getAttribute && (n.getAttribute("aria-label") || "")) || "";
+      const inner = n.querySelector ? n.querySelector('[aria-label]') : null;
+      if (attachish.test(lab) || (inner && attachish.test(inner.getAttribute("aria-label") || ""))) { sc += 3; break; }
+    }
     if (sc > bestScore) { bestScore = sc; best = inp; }
   }
   // Locality evidence is REQUIRED (bar proximity or shared subtree): a permissive
   // accept alone must never make us hand the clips to some other input.
   return bestScore >= 7 ? best : null;
+}
+// Forget disk-cache entries for files proven missing (see the probe in cdpSetFiles):
+// the next VIDEO_DISK_PATH request downloads them again.
+async function forgetDiskEntries(paths) {
+  if (!paths || !paths.length) return;
+  try {
+    const vd = await new Promise((r) => chrome.storage.local.get(["videoDisk"], (x) => r((x && x.videoDisk) || {})));
+    let changed = false;
+    for (const k of Object.keys(vd)) if (vd[k] && vd[k].path && paths.includes(vd[k].path)) { delete vd[k]; changed = true; }
+    if (changed) await new Promise((r) => chrome.storage.local.set({ videoDisk: vd }, () => { void chrome.runtime.lastError; r(); }));
+  } catch (e) { /* best effort */ }
 }
 async function recordCdp(ok, err) {
   try {
@@ -1413,6 +1437,27 @@ async function cdpSetFiles(tabId, paths) {
   try {
     await new Promise((res, rej) => chrome.debugger.attach(target, "1.3", () => (chrome.runtime.lastError ? rej(new Error(chrome.runtime.lastError.message)) : res())));
     attached = true;
+    // EXISTENCE PROBE (v0.21.38): stage the paths on a DETACHED input first and
+    // read the resulting File sizes. Chrome does not validate paths in
+    // DOM.setFileInputFiles — a clip deleted from disk becomes a 0-byte File,
+    // Messenger silently drops it, and the protocol still reports "ok": the
+    // "ok=97, verified=13, nothing ever appears" trap. Render-free, ~50 ms, and
+    // nothing touches the composer when the file is gone: the disk entry is
+    // forgotten so the next lookup re-downloads, and the caller pastes instead.
+    try {
+      const pr = await cdpCmd(target, "Runtime.evaluate", { expression: "(function(){var i=document.createElement('input');i.type='file';i.multiple=true;return i;})()", returnByValue: false }, 5000);
+      const pid = pr && pr.result && pr.result.objectId;
+      if (pid) {
+        await cdpCmd(target, "DOM.setFileInputFiles", { objectId: pid, files: paths }, 15000);
+        const sz = await cdpCmd(target, "Runtime.callFunctionOn", { objectId: pid, functionDeclaration: "function(){ var o=[]; for (var k=0;k<this.files.length;k++) o.push(this.files[k].size||0); return o; }", returnByValue: true }, 5000);
+        const sizes = sz && sz.result && Array.isArray(sz.result.value) ? sz.result.value : null;
+        if (sizes && (sizes.length !== paths.length || sizes.some((s) => !(s > 0)))) {
+          await forgetDiskEntries(paths.filter((p, i) => !(sizes[i] > 0)));
+          await recordCdp(false, "clip file missing on disk");
+          return { ok: false, error: "clip file missing on disk — re-downloading", missing: true };
+        }
+      }
+    } catch (e) { /* probe unsupported here — proceed exactly as before */ }
     const ev = await cdpCmd(target, "Runtime.evaluate", { expression: "(" + pageFindComposerFileInput.toString() + ")()", returnByValue: false }, 8000);
     const obj = ev && ev.result;
     if (!obj || !obj.objectId) { await recordCdp(false, "composer file input not found"); return { ok: false, error: "composer file input not found" }; }
@@ -1661,6 +1706,8 @@ async function buildDiagnostic() {
     L.push(
       "fileapi: debugger=" + (chrome.debugger ? "granted" : "MISSING") +
       " ok=" + (cs.okN || 0) + "(" + ageM(cs.lastOkAt) + ") verified=" + (cs.verifiedN || 0) + "(" + ageM(cs.lastVerifiedAt) + ")" +
+      (cs.blindN ? " blind=" + cs.blindN : "") +
+      (cs.unverifiedN ? " unverified=" + cs.unverifiedN + "(" + ageM(cs.lastUnverifiedAt) + ")" : "") +
       " err=" + (cs.errN || 0) + "(" + ageM(cs.lastErrAt) + ")" +
       (cs.lastErr ? " lastErr=\"" + cut(cs.lastErr, 70) + "\"" : "") +
       (/not allowed/i.test(cs.lastErr || "") && (cs.lastErrAt || 0) > (cs.lastOkAt || 0) ? " ⚠ turn ON 'Allow access to file URLs' for SubSell in chrome://extensions" : "") +
@@ -1967,10 +2014,23 @@ chrome.runtime.onMessage.addListener((msg, _sender, sendResponse) => {
         }
         case "CDP_VERIFIED": {
           // Content saw the preview appear after a file-API attach (protocol ok ≠ staged).
+          // blind:true = staged per the composer's send control, tile not rendered.
           try {
             const st = await new Promise((r) => chrome.storage.local.get(["cdpStats"], (x) => r((x && x.cdpStats) || {})));
             st.verifiedN = (st.verifiedN || 0) + 1;
             st.lastVerifiedAt = Date.now();
+            if (msg.blind) st.blindN = (st.blindN || 0) + 1;
+            chrome.storage.local.set({ cdpStats: st }, () => void chrome.runtime.lastError);
+          } catch (e) { /* telemetry only */ }
+          sendResponse({ ok: true });
+          break;
+        }
+        case "CDP_UNVERIFIED": {
+          // Protocol ok, but the composer showed nothing (no tile, no staged signal).
+          try {
+            const st = await new Promise((r) => chrome.storage.local.get(["cdpStats"], (x) => r((x && x.cdpStats) || {})));
+            st.unverifiedN = (st.unverifiedN || 0) + 1;
+            st.lastUnverifiedAt = Date.now();
             chrome.storage.local.set({ cdpStats: st }, () => void chrome.runtime.lastError);
           } catch (e) { /* telemetry only */ }
           sendResponse({ ok: true });
