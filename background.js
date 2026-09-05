@@ -1393,8 +1393,11 @@ function pageFindComposerFileInput() {
     if (inp.multiple) sc += 2;
     const p = inp.parentElement; // the input itself is display:none (zero rect)
     const pr = p ? p.getBoundingClientRect() : null;
-    if (pr && pr.height > 0 && Math.abs(pr.top - cr.top) < 160) sc += 3; // sits in the composer bar
-    if (composerUp.some((c) => c.contains(inp))) sc += 5; // same subtree as the textbox
+    const inBar = !!(pr && pr.height > 0 && Math.abs(pr.top - cr.top) < 160);
+    const inSubtree = composerUp.some((c) => c.contains(inp));
+    if (!inBar && !inSubtree) continue; // locality is REQUIRED — a bonus must never substitute for it
+    if (inBar) sc += 3; // sits in the composer bar
+    if (inSubtree) sc += 5; // same subtree as the textbox
     // Its own control is labelled "Attach a file" / "Joindre un fichier" / …:
     // the label sits on a sibling or a close ancestor of the hidden input.
     for (let n = inp.parentElement, k = 0; n && k < 3; n = n.parentElement, k++) {
@@ -1451,7 +1454,9 @@ async function cdpSetFiles(tabId, paths) {
         await cdpCmd(target, "DOM.setFileInputFiles", { objectId: pid, files: paths }, 15000);
         const sz = await cdpCmd(target, "Runtime.callFunctionOn", { objectId: pid, functionDeclaration: "function(){ var o=[]; for (var k=0;k<this.files.length;k++) o.push(this.files[k].size||0); return o; }", returnByValue: true }, 5000);
         const sizes = sz && sz.result && Array.isArray(sz.result.value) ? sz.result.value : null;
-        if (sizes && (sizes.length !== paths.length || sizes.some((s) => !(s > 0)))) {
+        // Act only on an EXPLICIT zero size with the list intact; a length mismatch
+        // means the probe is not supported on this build, never "missing".
+        if (sizes && sizes.length === paths.length && sizes.some((s) => !(s > 0))) {
           await forgetDiskEntries(paths.filter((p, i) => !(sizes[i] > 0)));
           await recordCdp(false, "clip file missing on disk");
           return { ok: false, error: "clip file missing on disk — re-downloading", missing: true };

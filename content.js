@@ -1036,6 +1036,11 @@
     const b = composerSendControl();
     return b ? (safe(() => b.getAttribute("aria-label"), "") || "").trim().toLowerCase() : "";
   };
+  // The empty-composer control is the LIKE/thumb button ("Send a like",
+  // "Envoyer un j'aime", "Send a 👍"…); the staged one is Send ("Press Enter to
+  // send", "Envoyer"). A baseline is accepted only when it reads like the former.
+  const LIKE_CTL_RE = /like|j'?aime|pouce|thumb|^send an? \S+$|^envoyer un \S+$/i;
+  const SEND_CTL_RE = /press enter|entr[eé]e pour|^send$|^envoyer$|envoyer un message/i;
   // true = the control changed since the empty-composer baseline (staged),
   // false = unchanged (nothing staged), null = signal unavailable right now.
   function stagedPerControl(baseline) {
@@ -1144,7 +1149,12 @@
     // The render-independent staged signal is trustworthy only from an EMPTY,
     // draft-free composer: with a known head or typed text the control already
     // shows Send and cannot flip again.
-    const ctlBase = knownCount === 0 && composer && !composerText(composer) ? sendControlLabel() : "";
+    // …and only when the control we found IS the like/thumb button (its label
+    // says so): any other button that happens to sit rightmost in the band
+    // would never flip and would silently disable the signal — or worse, flip
+    // for its own reasons. No recognizable like button ⇒ no signal (tile only).
+    let ctlBase = knownCount === 0 && composer && !composerText(composer) ? sendControlLabel() : "";
+    if (ctlBase && !(LIKE_CTL_RE.test(ctlBase) && !SEND_CTL_RE.test(ctlBase))) ctlBase = "";
     lastAttachCtlBase = ctlBase; // the send path compares against it in blind mode
     // OPTIMISTIC PIPELINING (v0.21.32): the next clip is pasted immediately,
     // WHILE the previous clip is still uploading — most FB builds accept it,
@@ -1258,12 +1268,16 @@
       // keeps the LONG 30s window (throttled/RDP machines render previews
       // 20-30s late; a short window there judged good attaches "failed", swept
       // them away and struck the chat — the v0.21.29 lockout bug). The file API
-      // strategy gets 30s when the staged signal can shortcut it, 60s when it
+      // strategy gets 45s when the staged signal can shortcut it, 60s when it
       // cannot (a tile is then the only evidence, and it can be a minute late).
-      const windowMs = attempt.isCdp ? (ctlBase ? 30000 : 60000) : strategyIdx === firstPasteIdx ? (uploadsAtDispatch > 0 ? 12000 : 30000) : strategyIdx === firstPasteIdx + 1 ? 30000 : 12000;
+      const windowMs = attempt.isCdp ? (ctlBase ? 45000 : 60000) : strategyIdx === firstPasteIdx ? (uploadsAtDispatch > 0 ? 12000 : 30000) : strategyIdx === firstPasteIdx + 1 ? 30000 : 12000;
       const start = Date.now();
       let navigated = false;
       let blind = false;
+      // The control also flips when the OPERATOR types: a flip counts as staged
+      // only while the textbox is still empty (otherwise Enter would ship their
+      // half-typed text along with the clip).
+      const flipped = () => ctlBase && stagedPerControl(ctlBase) === true && !composerText(composer);
       while (Date.now() - start < windowMs) {
         await sleep(1000);
         if (tid && !stillOnThread(tid)) { navigated = true; break; }
@@ -1271,7 +1285,7 @@
           attached = true;
           break;
         }
-        if (ctlBase && stagedPerControl(ctlBase) === true) { blind = true; break; } // staged per the composer, tile pending
+        if (flipped()) { blind = true; break; } // staged per the composer, tile pending
       }
       if (blind && !attached) {
         // The composer holds the clip — give its tile a short chance to show
@@ -1296,18 +1310,17 @@
         return "blind"; // staged for sure, invisible so far — NEVER dispatch another copy
       }
       if (attempt.isCdp) {
-        if (ctlBase) {
-          // The composer's own control says NOTHING is staged after the whole
-          // window: the set did not take (wrong/stale input on this layout).
-          // Provably empty → the synthetic strategies may follow without stacking.
-          noteCdpUnverified();
-        } else {
-          // No control signal and no tile: a late render cannot be ruled out. A
-          // second dispatch here is exactly how tiles piled up — stop, and let
-          // the clip count as attempted (the resume visit adopts its late tile).
-          noteCdpUnverified();
-          return "unverified";
-        }
+        // The browser accepted the set, yet neither a tile nor the composer's
+        // own control showed anything for the whole window. A late render (or a
+        // lagging control) cannot be ruled out, and a second dispatch into this
+        // tray is exactly how tiles piled up — so NEVER fall through to the
+        // synthetic strategies here (the v0.21.36 rule, kept): the clip counts
+        // as attempted (skip-forward), the reply's Enter flushes it if it was
+        // staged invisibly, and the resume visit adopts its tile if it renders
+        // late. Two of these in a row park the file API so the synthetic path
+        // gets the NEXT set instead.
+        noteCdpUnverified();
+        return "unverified";
       }
       strategyIdx++;
     }
@@ -1319,7 +1332,7 @@
         await sleep(1200);
         return true;
       }
-      if (ctlBase && stagedPerControl(ctlBase) === true) return "blind"; // flipped late
+      if (ctlBase && stagedPerControl(ctlBase) === true && !composerText(composer)) return "blind"; // flipped late
       await sweepTrayExtras(knownCount);
       if (trayRemoveBtns().length > knownCount) return "dirty"; // unverifiable leftover — never re-attempt
       return false; // provably nothing new attached — re-attempting later cannot duplicate
@@ -1330,74 +1343,59 @@
   // ONE Enter sends everything attached (+ click-Send fallback). Attach + send-
   // attempt = delivered (the v0.12.3 law): detach confirmation stays best-effort
   // because a false "not sent" used to trigger retries → duplicate videos.
-  async function sendAttachedVideos(blindBaseline) {
+  async function sendAttachedVideos(blindBaseline, tid) {
     const composer2 = findComposer();
     const previews = trayEls().length || 1;
     if (composer2) pressEnter(composer2);
     const s2 = Date.now();
+    // Every wait below stops the moment the operator opens another chat: a
+    // Send click there would ship THEIR draft to another buyer.
+    const gone = () => tid && !stillOnThread(tid);
     if (blindBaseline) {
       // BLIND SEND (v0.21.38): no tile to watch, and the upload may still be
       // running (Enter is queued by Messenger until it completes). "Sent" = the
       // send control reverting to its empty-composer label; allow the upload time.
       while (Date.now() - s2 < 90000) {
         await sleep(1000);
+        if (gone()) return true;
         if (sendControlLabel() === blindBaseline) return true;
       }
+      if (gone()) return true;
       clickSend();
       const s3 = Date.now();
       while (Date.now() - s3 < 20000) {
         await sleep(1000);
-        if (sendControlLabel() === blindBaseline) return true;
+        if (gone() || sendControlLabel() === blindBaseline) return true;
       }
       return true; // attach + send attempt = delivered (the v0.12.3 law)
     }
     while (Date.now() - s2 < 8000) {
       await sleep(400);
+      if (gone()) return true;
       if (trayEls().length < previews) return true; // confirmed gone = sent
     }
+    if (gone()) return true;
     clickSend(); // fallback for layouts where Enter doesn't send
     await sleep(1500);
     return true;
   }
   // After a streamed send: let a QUEUED Enter (pressed mid-upload) fire — never
-  // touch the tray while a progressbar is visible — then deal with what is left.
-  // Two very different things can still be in the tray:
-  //  (B) the clip itself, whose send did not land (the SAME tile elements as
-  //      before Enter, or any tile after a blind send) → send again, once via
-  //      Enter and once via the Send button; sweeping it would lose the clip
-  //      while the stamp says "sent";
-  //  (A) a late-rendered stray from an earlier attempt (NEW tile identities) →
-  //      removed; adopting it into the NEXT clip's message is how a buyer got
-  //      the same clip twice.
-  // Only an unremovable tile is carried as "known" (it rides the next Enter).
-  // Returns the tiles left in the tray.
-  async function settleTrayAfterSend(tid, preSendEls, blind) {
-    const gone = () => tid && !stillOnThread(tid);
-    const waitUploads = async () => {
-      const t0 = Date.now();
-      while (Date.now() - t0 < 90000 && trayUploads() > 0) {
-        if (gone()) return false;
-        await sleep(1000);
-      }
-      return true;
-    };
-    if (!(await waitUploads())) return trayRemoveBtns().length;
+  // touch the tray while a progressbar is visible — then clear whatever is left.
+  // A tile still there once the send has cleared is a late-rendered stray from an
+  // earlier attempt; adopting it into the NEXT clip's message is how a buyer got
+  // the same clip twice, so it is removed. (No second send attempt here: the
+  // v0.12.3 law — attach + one send attempt = delivered; retries on a false "not
+  // sent" were the original duplicate-video bug.) Only an unremovable tile is
+  // carried as "known" (it rides the next Enter). Returns the tiles left.
+  async function settleTrayAfterSend(tid) {
+    const t0 = Date.now();
+    while (Date.now() - t0 < 90000 && trayUploads() > 0) {
+      if (tid && !stillOnThread(tid)) return trayRemoveBtns().length;
+      await sleep(1000);
+    }
     const t1 = Date.now();
     while (Date.now() - t1 < 6000 && trayRemoveBtns().length > 0) await sleep(500);
-    if (trayRemoveBtns().length === 0 || gone()) return trayRemoveBtns().length;
-    const ours = blind || trayEls().some((el) => preSendEls && preSendEls.has(el));
-    if (ours) {
-      for (const again of ["enter", "button"]) {
-        const c = findComposer();
-        if (again === "enter" && c) pressEnter(c); else if (again === "button") clickSend();
-        const t2 = Date.now();
-        while (Date.now() - t2 < 8000 && trayRemoveBtns().length > 0) await sleep(500);
-        if (trayRemoveBtns().length === 0) return 0;
-        if (!(await waitUploads())) return trayRemoveBtns().length;
-        if (gone()) return trayRemoveBtns().length;
-      }
-    }
-    await sweepTrayExtras(0);
+    if (trayRemoveBtns().length > 0 && !(tid && !stillOnThread(tid))) await sweepTrayExtras(0);
     return trayRemoveBtns().length;
   }
   // Belt-and-suspenders: does THIS open chat already show a video on our side?
@@ -2218,9 +2216,22 @@
           await sleep(2000);
         }
         if (trayRemoveBtns().length > 1) {
-          vstat("tray holds " + trayRemoveBtns().length + " stuck previews — skipping this visit (" + (name || id) + ")");
+          // Skip this visit, but leave the chat RESUMABLE: the lock stamp above
+          // (via:"lock", fresh `at`) would read as "set in progress" for 30 min,
+          // and clearPend() already dropped the pending entry — rewrite a plain
+          // resume marker and re-queue (the pending lane retries it, paced).
+          const dmK = (await getLocal(["videoSentThreads"])).videoSentThreads || {};
+          if (!(dmK[id] && dmK[id].owner && dmK[id].owner !== TAB_UID)) {
+            dmK[id] = { done: true, at: Date.now(), owner: TAB_UID, resumeFrom: startAt, resumeTotal: files.length, sent: startAt };
+            await setLocal({ videoSentThreads: dmK });
+          }
           videoLocked.delete(id);
-          return; // the resume marker stands; retried on a later visit
+          {
+            const qkK = sidebarKey || id;
+            if (qkK && videoPending[qkK] == null && videoPending[id] == null) { videoPending[qkK] = Date.now(); persistDedup(); }
+          }
+          vstat("tray holds " + trayRemoveBtns().length + " stuck previews — skipping this visit (" + (name || id) + ")");
+          return;
         }
       }
       let knownCount = trayRemoveBtns().length;
@@ -2270,10 +2281,12 @@
       let bulkFiles = null;
       if (!cdpPerClip && files.length - startAt > 1) {
         bulkFiles = [];
-        for (const f of files.slice(startAt)) {
+        for (let k = startAt; k < files.length; k++) {
+          const f = files[k];
           let real = f;
           if (f && f.lazy) { try { real = await f.load(); } catch (e) { real = null; } }
           if (!real) { bulkFiles = null; break; } // can't load one → one-by-one handles it
+          files[k] = real; // keep the loaded File — the one-by-one fallback must not reload it
           bulkFiles.push(real);
         }
       }
@@ -2439,17 +2452,26 @@
               okCount--;
               dirtyStop = true;
               failedAt = i;
+              // Empty the tray entirely before leaving: the text reply that
+              // follows this visit presses Enter in the same composer, and a
+              // staged pile would ride it. Losing our own copy is the safe side
+              // (this clip is stamped attempted; the set resumes after it).
+              await sweepTrayExtras(0);
               vstat("tray holds extra previews that won't clear — not sending a pile (" + (name || id) + ")");
               break;
             }
+            if (res === "blind" && composerText(findComposer())) {
+              // The operator started typing here: their Enter will carry the
+              // staged clip; ours must not ship their half-typed text.
+              await parkTail(i + 1, `video set paused at ${i}/${files.length} (you are typing) — finishing later`);
+              return;
+            }
             setStatus({ lastAction: `sending video ${i + 1}/${files.length}…`, currentThread: name });
-            const preSendEls = new Set(trayEls());
-            await sendAttachedVideos(res === "blind" ? lastAttachCtlBase : null);
+            await sendAttachedVideos(res === "blind" ? lastAttachCtlBase : null, id);
             streamedCount++;
-            // Normally 0 now. A send that did not land is retried; a late stray is
-            // REMOVED (never adopted into the next message); only an unremovable
-            // tile is carried as known.
-            knownCount = await settleTrayAfterSend(id, preSendEls, res === "blind");
+            // Normally 0 now. A late stray is REMOVED here (never adopted into the
+            // next message); only an unremovable tile is carried as known.
+            knownCount = await settleTrayAfterSend(id);
             refreshThreadLock(sidebarKey || id); // uploads outlive the cross-tab lease
             if (hooks && typeof hooks.onClipSent === "function") {
               // Interleave the TEXT reply right after the first clip (the reply
@@ -2478,7 +2500,14 @@
           // excludes it) and stop — never dispatch a second copy.
           dirtyStop = true;
           failedAt = i;
-          if (res === "unverified") vstat("clip " + (i + 1) + " handed to the composer but nothing showed — finishing later, never twice (" + (name || id) + ")");
+          if (res === "unverified") {
+            // FLUSH: if the clip IS staged invisibly, one Enter on the (text-empty)
+            // composer sends it — delivered instead of lost, and consistent with
+            // the skip-forward stamp; on a truly empty composer Enter is a no-op.
+            const cF = findComposer();
+            if (cF && stillOnThread(id) && !composerText(cF)) pressEnter(cF);
+            vstat("clip " + (i + 1) + " handed to the composer but nothing showed — finishing later, never twice (" + (name || id) + ")");
+          }
           break;
         } else {
           // attachVideo=false ⇒ no new preview appeared AND extras were cleaned ⇒
