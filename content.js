@@ -225,9 +225,15 @@
   }
   function persistDedup() {
     // keep the persisted maps from growing unbounded (cap ~400 threads)
-    for (const map of [cooldowns, lastHandled, replyCounts, waitingSince, videoPending]) {
+    for (const map of [cooldowns, lastHandled, replyCounts, waitingSince]) {
       const keys = Object.keys(map);
       if (keys.length > 400) for (const k of keys.slice(0, keys.length - 400)) delete map[k];
+    }
+    // (v0.21.41) the video queue keeps its OLDEST entries — those are the
+    // longest-waiting chats; the old oldest-first trim silently dropped exactly them.
+    {
+      const pk = Object.keys(videoPending);
+      if (pk.length > 2000) for (const k of pk.slice(2000)) delete videoPending[k];
     }
     safe(() => chrome.storage.local.set({ cooldowns, lastHandled, replyCounts, waitingSince, videoPending, videoCatchUp }));
   }
@@ -989,6 +995,9 @@
       const btns = trayRemoveBtns();
       for (let k = btns.length - 1; k >= expectedGood; k--) safe(() => btns[k].click());
       await sleep(pass === 2 ? 1200 : 2500);
+      // One confirming re-check after a clean pass is enough (keeps the late-render
+      // protection, saves ~3.7 s per call on the synthetic ladder).
+      if (pass >= 1 && trayRemoveBtns().length <= expectedGood) return;
     }
   }
   // PRE-ENTER EXACTNESS (v0.21.38): the tray must hold exactly `expected` tiles
@@ -1135,7 +1144,9 @@
     lastAttachVia = "-";
     const composer = findComposer();
     if (composer) composer.focus();
-    if (tid && !stillOnThread(tid)) return "navigated";
+    // "aborted" (v0.21.41) = navigated away BEFORE anything was dispatched: the
+    // clip was never touched, the caller resumes AT it (not after it).
+    if (tid && !stillOnThread(tid)) return "aborted";
     let fileObj = file && file.lazy ? null : file;
     const ensureFile = async () => {
       if (fileObj) return fileObj;
@@ -1193,7 +1204,7 @@
       };
       pasteFn.via = "paste";
       attempts.push(pasteFn); // optimistic — fired even while a previous upload runs
-      attempts.push(pasteFn); // retry after the loop settles the uploads (see below)
+      if (trayUploads() > 0) attempts.push(pasteFn); // settled retry — only for the case it was written for (an upload running at ladder start)
       const dragFn = async () => {
         const f = await ensureFile();
         if (!f) return false;
@@ -1231,6 +1242,7 @@
     // Try each strategy IN ORDER; require a NEW preview element to appear before
     // trusting it (identity, not count-delta — immune to simultaneous changes).
     let attached = false;
+    let anyFired = false; // did ANY strategy dispatch into this composer?
     let strategyIdx = 0;
     let lastBeforeEls = new Set();
     for (const attempt of attempts) {
@@ -1243,7 +1255,7 @@
       if (strategyIdx > 0 && trayUploads() > 0) {
         const tS = Date.now();
         while (Date.now() - tS < 60000 && trayUploads() > 0) {
-          if (tid && !stillOnThread(tid)) return "navigated";
+          if (tid && !stillOnThread(tid)) return anyFired ? "navigated" : "aborted";
           await sleep(1000);
         }
       }
@@ -1252,7 +1264,7 @@
       // appeared in the new chat's tray, remove it immediately (fresh node
       // identities are reliable milliseconds after render).
       const beforeBtns = new Set(trayRemoveBtns());
-      if (tid && !stillOnThread(tid)) return "navigated";
+      if (tid && !stillOnThread(tid)) return anyFired ? "navigated" : "aborted";
       const beforeEls = new Set(trayEls());
       lastBeforeEls = beforeEls;
       const uploadsAtDispatch = trayUploads();
@@ -1261,6 +1273,7 @@
       let fired = false;
       try { fired = !!(await Promise.resolve(safe(attempt, false))); } catch (e) { fired = false; }
       if (!fired) { strategyIdx++; continue; }
+      anyFired = true;
       lastAttachVia = attempt.via || "-";
       // Window sizing: the OPTIMISTIC paste fails fast (12s) when uploads were
       // running at dispatch — if this build rejects mid-upload pastes we want to
@@ -1354,18 +1367,23 @@
     if (blindBaseline) {
       // BLIND SEND (v0.21.38): no tile to watch, and the upload may still be
       // running (Enter is queued by Messenger until it completes). "Sent" = the
-      // send control reverting to its empty-composer label; allow the upload time.
+      // send control back in its empty-composer state (the like button — any
+      // like-type label, not only the exact baseline string); allow the upload time.
+      const backToLike = () => {
+        const l = sendControlLabel();
+        return l === blindBaseline || (!!l && LIKE_CTL_RE.test(l) && !SEND_CTL_RE.test(l));
+      };
       while (Date.now() - s2 < 90000) {
         await sleep(1000);
         if (gone()) return true;
-        if (sendControlLabel() === blindBaseline) return true;
+        if (backToLike()) return true;
       }
       if (gone()) return true;
       clickSend();
       const s3 = Date.now();
       while (Date.now() - s3 < 20000) {
         await sleep(1000);
-        if (gone() || sendControlLabel() === blindBaseline) return true;
+        if (gone() || backToLike()) return true;
       }
       return true; // attach + send attempt = delivered (the v0.12.3 law)
     }
@@ -1393,6 +1411,10 @@
       if (tid && !stillOnThread(tid)) return trayRemoveBtns().length;
       await sleep(1000);
     }
+    // Still uploading after 90 s (a big clip on a slow uplink) with the Enter
+    // queued behind it: NEVER sweep — carry it as known; the queued Enter delivers
+    // it and trimTraySurplus keeps the next Enter exact.
+    if (trayUploads() > 0) return trayRemoveBtns().length;
     const t1 = Date.now();
     while (Date.now() - t1 < 6000 && trayRemoveBtns().length > 0) await sleep(500);
     if (trayRemoveBtns().length > 0 && !(tid && !stillOnThread(tid))) await sweepTrayExtras(0);
@@ -1562,31 +1584,33 @@
   let cdpFailedSetToken = -1;
   const cdpAvailable = () => Date.now() > cdpDisabledUntil;
   const cdpUsableNow = () => cdpAvailable() && cdpFailedSetToken !== cdpSetToken;
+  // (v0.21.41) Parks are ROUTING decisions (file API vs. paste), never delivery
+  // decisions — so they are short: a failed file-API call costs well under a
+  // second, while a park sends every clip down the minutes-long synthetic ladder.
   function noteCdpFail(r) {
     const err = (r && r.error) || "no response";
     if (r && r.fileAccess === "denied") {
-      cdpDisabledUntil = Date.now() + 6 * 3600 * 1000;
+      cdpDisabledUntil = Date.now() + 15 * 60 * 1000; // re-probed every 15 min so a flipped toggle is picked up within the shift
       vstat("file API blocked: turn ON 'Allow access to file URLs' for SubSell in chrome://extensions — using fallback attach");
       return;
     }
     if (r && r.missing) {
-      // The clip file is gone from disk (verified by the pre-set probe, nothing
-      // touched the composer): the background re-downloads it; this set goes
-      // synthetic, the next set is back on the file API.
-      cdpFailedSetToken = cdpSetToken;
-      setStatus({ videoLast: "clip file missing on disk — re-downloading; paste attach this time" });
+      // This clip's file is gone from disk (verified by the pre-set probe, nothing
+      // touched the composer): the background re-downloads it; THIS clip goes
+      // synthetic, the other clips' paths are independent and stay on the file API.
+      setStatus({ videoLast: "clip file missing on disk — re-downloading; paste attach for this clip" });
       return;
     }
     if (/unavailable|permission/i.test(err)) {
-      cdpDisabledUntil = Date.now() + 30 * 60 * 1000; // API not granted yet (reload pending)
+      cdpDisabledUntil = Date.now() + 2 * 60 * 1000; // API not granted yet (reload pending) — the probe is free
     } else if (/input not found|no preview/i.test(err)) {
-      // Transient CHAT state (composer holding a draft, stuck preview, dead file):
-      // skip the file API for the rest of this set, but never black it out for
-      // the next chats on a single miss — three in a row park it 5 min.
-      cdpFailedSetToken = cdpSetToken;
-      if (++cdpStrikes >= 3) { cdpStrikes = 0; cdpDisabledUntil = Date.now() + 5 * 60 * 1000; }
+      // Transient CHAT state (composer holding a draft, stuck preview): the next
+      // clip retries the file API after the tray settles; three in a row park 2 min.
+      if (++cdpStrikes >= 3) { cdpStrikes = 0; cdpDisabledUntil = Date.now() + 2 * 60 * 1000; }
+    } else if (/message port closed|could not establish connection|receiving end does not exist|^no response$/i.test(err)) {
+      cdpFailedSetToken = cdpSetToken; // background restart: nothing reached the composer — retry next set
     } else {
-      cdpDisabledUntil = Date.now() + 5 * 60 * 1000; // attach/detach/timeout/protocol errors
+      cdpDisabledUntil = Date.now() + 2 * 60 * 1000; // attach/detach/timeout/protocol errors
     }
     setStatus({ videoLast: "file API attach failed: " + trunc(err, 80) + " — falling back to paste" });
   }
@@ -1630,10 +1654,10 @@
   let cdpUnverifiedStreak = 0;
   function noteCdpUnverified() {
     ask({ type: "CDP_UNVERIFIED" });
-    if (++cdpUnverifiedStreak >= 2) {
+    if (++cdpUnverifiedStreak >= 3) {
       cdpUnverifiedStreak = 0;
-      cdpDisabledUntil = Date.now() + 30 * 60 * 1000;
-      setStatus({ videoLast: "file API sets are not showing up in the composer on this machine — paste attach for 30 min" });
+      cdpDisabledUntil = Date.now() + 5 * 60 * 1000;
+      setStatus({ videoLast: "file API sets are not showing up in the composer on this machine — paste attach for 5 min" });
     }
   }
   // Absolute on-disk path for a clip (background downloads it once per machine).
@@ -1648,11 +1672,12 @@
       if (!paths || (e && e.path && paths.includes(e.path))) delete diskPathMem[k];
     }
   }
+  // (v0.21.41) no longer gated on the file-API park: the disk cache stays warm
+  // while parked, so lifting a park is never a cold start.
   async function diskPathFor(req) {
-    if (!cdpAvailable()) return null;
     const key = req.url || "local:" + (req.name || "") + ":" + ((req.dataUrl && req.dataUrl.length) || 0);
     const m = diskPathMem[key];
-    if (m && Date.now() - m.at < (m.path ? 2 * 60 * 1000 : 15 * 60 * 1000)) return m.path;
+    if (m && Date.now() - m.at < (m.path ? 2 * 60 * 1000 : (m.ttl || 5 * 60 * 1000))) return m.path;
     try {
       // Per-clip time budget: the background keeps the download running past it
       // and persists the id, so the NEXT visit adopts the file — this visit falls back.
@@ -1665,19 +1690,28 @@
         diskPathMem[key] = { path: r.path, at: Date.now() };
         return r.path;
       }
-      diskPathMem[key] = { path: null, at: Date.now() };
-      if (++diskFailStreak >= 6) { diskFailStreak = 0; cdpDisabledUntil = Date.now() + 15 * 60 * 1000; } // this machine can't stage clips on disk right now
+      // A SOFT miss (download still running / lookup timed out) is re-asked in
+      // 30 s and never counts toward the park; hard misses are remembered 5 min.
+      const soft = /still downloading|timed out/i.test((r && r.error) || "");
+      diskPathMem[key] = { path: null, at: Date.now(), ttl: soft ? 30 * 1000 : 5 * 60 * 1000 };
+      if (!soft && ++diskFailStreak >= 6) { diskFailStreak = 0; cdpDisabledUntil = Date.now() + 5 * 60 * 1000; } // this machine can't stage clips on disk right now
       setStatus({ videoLast: "clip not on disk yet: " + trunc((r && r.error) || "?", 60) + " — paste attach this time" });
     } catch (e) { /* fall back */ }
     return null;
   }
   const VIDEO_CLAIM_TTL = 3 * 60 * 1000; // an in-flight claim older than this is stale
+  // A via:"lock" stamp younger than this = a set being sent RIGHT NOW in some pass.
+  // ONE constant for the engine's wait, the scan-time resume rescue and the
+  // catch-up arm (they disagreed: 10 vs 30 min — a crashed set sat 30 min).
+  const VIDEO_INFLIGHT_MS = 10 * 60 * 1000;
   // (v0.21.40, operator: "remove all blocks — send any video you can") the only
   // pacing left on a chat whose clips fail to load/attach is this short backoff;
   // there is NO 24h pause and NO give-up count any more. `fails` is still counted
   // (diagnostic), the pending lane's own per-chat retry spacing bounds the cost.
-  const VIDEO_RETRY_BACKOFF = 3 * 60 * 1000; // wait this long before retrying a failed send
+  const VIDEO_RETRY_BACKOFF = 3 * 60 * 1000; // wait this long before retrying a failed ATTACH
   const VIDEO_MAX_TRIES = 3; // telemetry threshold only ("attachFails3+" in 🩺) — never blocks
+  // A LOAD failure (clip not downloadable yet) usually clears within a minute.
+  const backoffFor = (att) => (att && att.why === "load" ? 60 * 1000 : VIDEO_RETRY_BACKOFF);
   // Synchronous, in-memory guard: threadIds this content-script instance has already
   // committed a video to. Checked with ZERO awaits at the very top of maybeSendVideo,
   // so even if chrome.storage writes lag, a chat can't be sent to twice in one session.
@@ -1886,7 +1920,7 @@
       // bows out at its next iteration.
       // (v0.21.40: 10 min, was 30 — a live pass re-stamps `at` at least every few
       // minutes; a crashed one used to block its own chat's resume for half an hour)
-      if (resumeFrom != null && done[id].via === "lock" && now - (done[id].at || 0) < 10 * 60 * 1000) {
+      if (resumeFrom != null && done[id].via === "lock" && now - (done[id].at || 0) < VIDEO_INFLIGHT_MS) {
         vstat("set in progress in another pass — waiting (" + (name || id) + ")");
         return;
       }
@@ -1899,7 +1933,9 @@
         // attach. If the open chat visibly has our video → confirm it; if the
         // loaded chat shows none → provably nothing attached (attach is preview-
         // based), clear the mark so the chat finally gets its set.
-        if (dmk.via === "lock" && !dmk.sent && now - (dmk.at || 0) > 24 * 3600 * 1000 && !dmk.recon) {
+        // (v0.21.41: the in-flight window, not 24 h — a live pass re-stamps `at`
+        // within ~2 min of locking; anything older with no clip stamped is a crash)
+        if (dmk.via === "lock" && !dmk.sent && now - (dmk.at || 0) > VIDEO_INFLIGHT_MS && !dmk.recon) {
           const mainEl = getMain();
           if (mainEl && findComposer() && safe(() => mainEl.querySelector('[role="row"]'), null)) {
             const dmR = (await getLocal(["videoSentThreads"])).videoSentThreads || {};
@@ -1910,7 +1946,12 @@
               delete dmR[id];
               await setLocal({ videoSentThreads: dmR });
               videoLocked.delete(id);
-              vstat("cleared an orphaned send-lock (" + (name || id) + ") — video sends on a later visit");
+              {
+                // queue the delivery explicitly — "a later visit" meant hours on busy machines
+                const qkH = sidebarKey || id;
+                if (qkH && videoPending[qkH] == null && videoPending[id] == null) { videoPending[qkH] = Date.now(); persistDedup(); }
+              }
+              vstat("cleared an orphaned send-lock (" + (name || id) + ") — video sends on the next visit");
               return; // NEVER send in the same visit as a heal — normal pipeline takes it later
             }
           }
@@ -1941,8 +1982,12 @@
             await setLocal({ videoSentThreads: dmP });
           }
         }
-        videoLocked.add(id);
-        clearPend();
+        // (v0.21.41) latch the session guard only for CONFIRMED marks. A bare
+        // via:"lock" (a set in flight in another pass — or a crash) is re-read on
+        // every visit so heal (i) can run without a page reload, and its pending
+        // entry is kept.
+        const confirmedMark = !!(dmk.sent || dmk.recon || dmk.via === "dom" || dmk.via === "taildrop" || dmk.resumeTotal != null);
+        if (confirmedMark) { videoLocked.add(id); clearPend(); }
         vstat("skip — chat already marked sent (" + (name || id) + ")");
         return;
       }
@@ -1974,8 +2019,11 @@
           vstat("another tab is sending to " + (name || id));
           return;
         }
-        if (att0.failAt && now - att0.failAt < VIDEO_RETRY_BACKOFF) {
-          vstat("backing off after a failed load — retry soon (" + (name || id) + ")");
+        // (v0.21.41) a buyer-triggered visit (reply hook present) is the natural
+        // retry point — never refused for pacing; otherwise load fails back off
+        // 60 s, attach fails 3 min.
+        if (!(hooks && typeof hooks.onClipSent === "function") && att0.failAt && now - att0.failAt < backoffFor(att0)) {
+          vstat("backing off after a failed " + (att0.why === "load" ? "load" : "attach") + " — retry soon (" + (name || id) + ")");
           return;
         }
       }
@@ -2000,6 +2048,11 @@
       // yet, so this chat still gets its video on a later visit.
       if (!stillOnThread(id)) {
         console.debug("[SubSell] video: aborted — user switched chats during the wait", id);
+        {
+          // nothing attached, no lock: queue the retry (a buyer-triggered visit had no pending entry)
+          const qkA = sidebarKey || id;
+          if (qkA && videoPending[qkA] == null && videoPending[id] == null) { videoPending[qkA] = Date.now(); persistDedup(); }
+        }
         setStatus({ lastAction: "video postponed — you switched chats (will retry)", currentThread: name });
         return;
       }
@@ -2013,7 +2066,9 @@
           // Do NOT latch videoLocked when the observed mark is a RESUME marker —
           // "done" is transient there (another pass's partial set); a latched tab
           // would eat the tail's pending-queue entry forever without delivering.
-          if (!(fresh[id] && typeof fresh[id].resumeFrom === "number")) videoLocked.add(id);
+          // …nor on another pass's BARE in-flight lock: if that pass crashes, a
+          // latched tab would refuse the chat (and eat its pending entry) until reload.
+          if (!(fresh[id] && (typeof fresh[id].resumeFrom === "number" || (fresh[id].via === "lock" && !fresh[id].sent)))) videoLocked.add(id);
           if (!(fresh[id] && fresh[id].done)) {
             fresh[id] = { done: true, at: Date.now(), via: "dom" };
             await setLocal({ videoSentThreads: fresh });
@@ -2028,7 +2083,7 @@
       // set instead of blocking it: one oversized/broken upload in the dashboard used
       // to fail the complete-set rule on EVERY chat = "no videos at all". The
       // remaining clips still ship, and the popup names the bad one.
-      const STRIKE_TTL = 6 * 3600 * 1000; // an excluded URL is re-probed after this
+      const STRIKE_TTL = 60 * 60 * 1000; // (v0.21.41) an excluded URL is re-probed after this (was 6 h)
       const urlFails = (await getLocal(["videoUrlFails"])).videoUrlFails || {};
       const strikeN = (e) => (typeof e === "number" ? e : (e && e.n) || 0);   // legacy numeric = {n:value, at:0}
       const strikeAt = (e) => (typeof e === "number" ? 0 : (e && e.at) || 0);
@@ -2055,18 +2110,32 @@
           /* skip a bad local video */
         }
       }
-      for (const v of activeCentral) {
+      // (v0.21.41) The index space is the FULL configured list, always: a URL that
+      // is struck out (3 download failures, re-probed hourly) keeps its slot as an
+      // EXCLUDED sentinel the loop steps over — so `files.length` never changes
+      // between visits and a parked tail can no longer be dropped as "set changed"
+      // (the .40 regression: one bad clip URL sealed chats after their first clip).
+      const EXCLUDED_SLOT = { excluded: true };
+      // A stalled clip download must never freeze the scan loop (replies included):
+      // the fetch gets a budget; past it the clip is a null slot for this visit.
+      const fetchWithBudget = (url) => Promise.race([
+        ask({ type: "FETCH_VIDEO", url }),
+        sleep(100000).then(() => ({ ok: false, error: "video fetch timed out" })),
+      ]);
+      for (const v of central) {
+        if (strikeN(urlFails[v.url]) >= 3) { files.push(EXCLUDED_SLOT); paths.push(null); continue; }
         let ok = false;
         try {
           // ON-DISK FIRST (v0.21.38): with the file API on, the clip's path is all
           // the attach needs — hauling 10-30 MB of base64 per clip through the
           // message channel before the first attach was seconds of "instant"
           // lost on every visit. The File is loaded LAZILY, only if a synthetic
-          // strategy ever runs for this clip.
-          const p = cdpAvailable() ? await diskPathFor({ url: v.url, name: v.name }) : null;
+          // strategy ever runs for this clip. (The disk cache is kept warm even
+          // while the file API is parked — a park must not mean a cold start.)
+          const p = await diskPathFor({ url: v.url, name: v.name });
           if (p) {
             const load = async () => {
-              const r = await ask({ type: "FETCH_VIDEO", url: v.url });
+              const r = await fetchWithBudget(v.url);
               if (!(r && r.ok && r.base64)) return null;
               const mime = r.mime || "video/mp4";
               return dataUrlToFile(`data:${mime};base64,${r.base64}`, v.name || "video.mp4", mime);
@@ -2075,7 +2144,7 @@
             paths.push(p);
             ok = true;
           } else {
-            const r = await ask({ type: "FETCH_VIDEO", url: v.url });
+            const r = await fetchWithBudget(v.url);
             if (r && r.ok && r.base64) {
               const mime = r.mime || "video/mp4";
               files.push(dataUrlToFile(`data:${mime};base64,${r.base64}`, v.name || "video.mp4", mime));
@@ -2114,15 +2183,20 @@
       // the next visit, not skipped), and only a set whose NEXT DUE clip is
       // missing waits (short backoff + pending queue).
       const expected = files.length;
-      const loadedN = files.filter(Boolean).length;
+      const loadedN = files.filter((f) => f && !f.excluded).length;
       const firstMissing = files.findIndex((f) => !f);
-      const nextDue = resumeFrom != null ? Math.min(resumeFrom, files.length) : 0;
-      if (!files.length || (nextDue < files.length && !files[nextDue])) {
+      const startAt0 = resumeFrom != null ? Math.min(resumeFrom, files.length) : 0;
+      let nextDue = startAt0;
+      while (nextDue < files.length && files[nextDue] && files[nextDue].excluded) nextDue++; // step over struck-out clips
+      const nothingLoadable = startAt0 < files.length && nextDue >= files.length; // every remaining clip is struck out
+      if (!files.length || nothingLoadable || (nextDue < files.length && !files[nextDue])) {
         await recordVideoFail(id, "load");
         const allBlocked = central.length > 0 && !activeCentral.length;
         const msg = allBlocked
-          ? "⚠ all " + central.length + " dashboard clip(s) failing to DOWNLOAD on this machine (network/proxy?) — replies unaffected, re-probing in 6h"
-          : "loaded " + loadedN + "/" + expected + " clip(s), clip " + (nextDue + 1) + " not yet — retrying in a few minutes (" + (name || id) + ")";
+          ? "⚠ all " + central.length + " dashboard clip(s) failing to DOWNLOAD on this machine (network/proxy?) — replies unaffected, re-probing within the hour"
+          : nothingLoadable
+            ? "remaining clip(s) can't download right now (struck out) — re-probing within the hour (" + (name || id) + ")"
+            : "loaded " + loadedN + "/" + expected + " clip(s), clip " + (nextDue + 1) + " not yet — retrying within a minute (" + (name || id) + ")";
         vstat(msg);
         setStatus({ lastError: "video: " + msg, currentThread: name });
         // Queue the retry explicitly (pending lane, honored after the short backoff).
@@ -2301,12 +2375,17 @@
       // slot AT OR AFTER it — a missing slot before startAt was already delivered)
       const firstMissingFromStart = files.findIndex((f, k) => k >= startAt && !f);
       const runEnd = firstMissingFromStart >= 0 ? firstMissingFromStart : files.length;
-      const cdpPerClip = cdpUsableNow() && runEnd > startAt && paths.slice(startAt, runEnd).every(Boolean);
+      const cdpPerClip = cdpUsableNow() && runEnd > startAt && paths.slice(startAt, runEnd).every((p, k) => !!p || !!(files[startAt + k] && files[startAt + k].excluded));
       let bulkFiles = null;
-      if (!cdpPerClip && runEnd - startAt > 1) {
+      // (v0.21.41) never in streaming mode: a multi-file paste holds every clip for
+      // one Enter (against "send whatever you can") and on this fleet it takes zero
+      // files anyway (bulk:0) — 10+ s lost per set. Kept only for the dormant
+      // hold-and-send mode.
+      if (!streaming && !cdpPerClip && runEnd - startAt > 1) {
         bulkFiles = [];
         for (let k = startAt; k < runEnd; k++) {
           const f = files[k];
+          if (f && f.excluded) { bulkFiles = null; break; } // a struck-out slot inside the range → one-by-one
           let real = f;
           if (f && f.lazy) { try { real = await f.load(); } catch (e) { real = null; } }
           if (!real) { bulkFiles = null; break; } // can't load one → one-by-one handles it
@@ -2337,7 +2416,7 @@
           setStatus({ lastAction: "video set interrupted (chat switched) — finishing later", currentThread: name });
           return;
         }
-        if (typeof bulk === "number" && bulk >= rest.length && runEnd === files.length) {
+        if (typeof bulk === "number" && bulk >= rest.length) {
           okCount = rest.length;
           // Belt-and-suspenders: never let a surplus preview (any source) ride the
           // single Enter — extras always append at the TAIL, same rule as sweepTrayExtras.
@@ -2349,7 +2428,7 @@
           bulkDone = true;
           const dmB = (await getLocal(["videoSentThreads"])).videoSentThreads || {};
           if (dmB[id] && dmB[id].owner && dmB[id].owner !== TAB_UID) return;
-          dmB[id] = { done: true, at: Date.now(), via: "lock", owner: TAB_UID, sent: okCount + startAt, resumeFrom: files.length, resumeTotal: files.length };
+          dmB[id] = { done: true, at: Date.now(), via: "lock", owner: TAB_UID, sent: okCount + startAt, resumeFrom: runEnd, resumeTotal: files.length };
           await setLocal({ videoSentThreads: dmB });
           setStatus({ lastAction: `${okCount} video(s) attached together`, currentThread: name });
         } else if (trayRemoveBtns().length > knownCount) {
@@ -2358,7 +2437,9 @@
       }
 
       let loadStop = false; // the loop stopped at a clip that could not be loaded (re-tried later, never skipped)
-      for (let i = bulkDone ? files.length : startAt; i < files.length; i++) {
+      let unverifiedStop = false; // the loop stopped at a file-API clip that never showed (one adopt visit later)
+      for (let i = bulkDone ? runEnd : startAt; i < files.length; i++) {
+        if (files[i] && files[i].excluded) continue; // struck-out clip URL: send the rest (re-probed hourly)
         if (!files[i]) {
           // Not loadable right now: everything before it is out (or going out);
           // resume exactly here on a later visit. No pre-attempt stamp — the
@@ -2421,6 +2502,21 @@
           while (tr.length > 12) tr.shift();
           chrome.storage.local.set({ videoAttachTrace: tr }, () => void chrome.runtime.lastError);
         }));
+        if (res === "aborted") {
+          // Navigated BEFORE anything was dispatched (v0.21.41): clip i was never
+          // touched — resume AT i (the pre-attempt stamp said i+1; correct it).
+          const dmAb = (await getLocal(["videoSentThreads"])).videoSentThreads || {};
+          if (dmAb[id] && dmAb[id].owner && dmAb[id].owner !== TAB_UID) return;
+          dmAb[id] = { done: true, at: Date.now(), owner: TAB_UID, resumeFrom: i, resumeTotal: files.length, sent: okCount + startAt };
+          await setLocal({ videoSentThreads: dmAb });
+          videoLocked.delete(id);
+          {
+            const qkAb = sidebarKey || id;
+            if (qkAb && videoPending[qkAb] == null && videoPending[id] == null) { videoPending[qkAb] = Date.now(); persistDedup(); }
+          }
+          setStatus({ lastAction: "video set interrupted (chat switched) — finishing later", currentThread: name });
+          return;
+        }
         if (res === "navigated") {
           // Mid-attach navigation: clip i counts as ATTEMPTED (its paste may have
           // landed somewhere unverifiable — re-attempting could double-send);
@@ -2454,16 +2550,7 @@
           dmP2[id] = { done: true, at: Date.now(), via: "lock", owner: TAB_UID, sent: okCount + startAt, resumeFrom: i + 1, resumeTotal: files.length };
           await setLocal({ videoSentThreads: dmP2 });
           if (streaming) {
-            if (res === "blind") {
-              // The composer says staged: give the tile up to 20 s more — once it
-              // is visible the normal upload-settled, exact-count send applies.
-              const tV = Date.now();
-              while (Date.now() - tV < 20000 && trayEls().length === 0) {
-                if (!stillOnThread(id)) break;
-                await sleep(1000);
-              }
-              if (trayEls().length > 0) res = true;
-            }
+            if (res === "blind" && trayEls().length > 0) res = true; // the tile showed after all → normal exact-count send
             // Let THIS clip's upload finish (Enter mid-upload is queued by FB, but
             // a finished upload sends instantly and leaves the tray empty for the
             // next paste — which is also what makes the next attach land on the
@@ -2490,6 +2577,9 @@
               // staged pile would ride it. Losing our own copy is the safe side
               // (this clip is stamped attempted; the set resumes after it).
               await sweepTrayExtras(0);
+              // Tray verified EMPTY after the sweep ⇒ nothing of this clip can ship
+              // ⇒ re-attempting it later is duplicate-safe (resume AT i, not i+1).
+              if (trayRemoveBtns().length === 0) dirtyStop = false;
               vstat("tray holds extra previews that won't clear — not sending a pile (" + (name || id) + ")");
               break;
             }
@@ -2515,7 +2605,10 @@
                 return;
               }
             }
-            if (i + 1 < files.length && buyersWaitingNow(id, sidebarKey)) {
+            // (v0.21.41) with the file API usable a clip costs seconds, so only an
+            // OVERDUE buyer (lane-0 evidence) interrupts the set; on the synthetic
+            // path (minutes per clip) any waiting buyer still does.
+            if (i + 1 < files.length && (cdpUsableNow() ? buyersWaitingCount(id, sidebarKey, true) > 0 : buyersWaitingNow(id, sidebarKey))) {
               // YIELD: someone else is waiting for a reply. Their answer outranks
               // this chat's remaining clips — the tail is queued (pending lane,
               // guaranteed delivery), not dropped, and no failure is recorded.
@@ -2533,6 +2626,7 @@
           // excludes it) and stop — never dispatch a second copy.
           dirtyStop = true;
           failedAt = i;
+          if (res === "unverified") unverifiedStop = true;
           if (res === "unverified") {
             // FLUSH: if the clip IS staged invisibly, one Enter on the (text-empty)
             // composer sends it — delivered instead of lost, and consistent with
@@ -2562,7 +2656,7 @@
       if (wantSend && !stillOnThread(id)) {
         const dmB = (await getLocal(["videoSentThreads"])).videoSentThreads || {};
         if (!(dmB[id] && dmB[id].owner && dmB[id].owner !== TAB_UID)) {
-          dmB[id] = { done: true, at: Date.now(), owner: TAB_UID, resumeFrom: failedAt >= 0 ? (dirtyStop ? failedAt + 1 : failedAt) : files.length, resumeTotal: files.length, sent: okCount + startAt };
+          dmB[id] = { done: true, at: Date.now(), owner: TAB_UID, resumeFrom: failedAt >= 0 ? ((dirtyStop && !loadStop) ? failedAt + 1 : failedAt) : files.length, resumeTotal: files.length, sent: okCount + startAt };
           await setLocal({ videoSentThreads: dmB });
         }
         videoLocked.delete(id);
@@ -2595,7 +2689,7 @@
               done: true, at: Date.now(), via: "lock", owner: TAB_UID, sent: okCount + startAt,
               // Partial attach: the tail stays resumable (same skip-forward rules
               // as the normal partial branch); full attach: resumeFrom = total.
-              resumeFrom: failedAt >= 0 ? ((dirtyStop || trayMismatch) ? failedAt + 1 : failedAt) : files.length,
+              resumeFrom: failedAt >= 0 ? (loadStop ? failedAt : ((dirtyStop || trayMismatch) ? failedAt + 1 : failedAt)) : files.length,
               resumeTotal: files.length,
             };
             await setLocal({ videoSentThreads: dmD });
@@ -2657,7 +2751,26 @@
           const chk = ((await getLocal(["videoSentThreads"])).videoSentThreads || {})[id];
           if (chk && chk.owner && chk.owner !== TAB_UID) return; // taken over — its stamps govern
         }
-        const resumeAtF = (dirtyStop || trayMismatch) ? failedAt + 1 : failedAt;
+        // A LOAD stop never skips: the clip at failedAt was never touched.
+        const resumeAtF = loadStop ? failedAt : ((dirtyStop || trayMismatch) ? failedAt + 1 : failedAt);
+        if (resumeAtF >= files.length && unverifiedStop) {
+          // (v0.21.41) the LAST clip was handed to the composer but never showed:
+          // keep the chat resumable for ONE adopt visit — if its tile renders late
+          // (Messenger restores it with the draft) that visit sends it; if the tray
+          // is empty the visit terminal-stamps. Never re-dispatched (the reply's
+          // Enter already flushed an invisibly staged clip).
+          const dmU = (await getLocal(["videoSentThreads"])).videoSentThreads || {};
+          dmU[id] = { done: true, at: Date.now(), owner: TAB_UID, resumeFrom: files.length, resumeTotal: files.length, sent: okCount + startAt, unverifiedTail: 1 };
+          await setLocal({ videoSentThreads: dmU });
+          videoLocked.delete(id);
+          {
+            const qkU = sidebarKey || id;
+            if (qkU && videoPending[qkU] == null && videoPending[id] == null) { videoPending[qkU] = Date.now(); persistDedup(); }
+          }
+          vstat("sent " + (okCount + startAt) + "/" + files.length + " — last clip handed over but not shown; one adopt visit later (" + (name || id) + ")");
+          if (okCount > 0) ask({ type: "LOG_EVENT", entry: { thread: name, threadId: id, buyer: "(demo video)", action: "video", reply: (okCount + startAt) + "/" + files.length + " demo videos sent — last clip checked on a later visit" } });
+          return;
+        }
         if (resumeAtF >= files.length) {
           // Nothing left to resume (dirty on the LAST clip) — terminal-stamp what
           // was actually delivered; the unverifiable tail clip is dropped (the
@@ -2706,6 +2819,21 @@
     } catch (e) {
       vstat("error: " + e.message);
       setStatus({ lastError: "video error: " + e.message });
+      // (v0.21.41) STATE REPAIR: an exception between our lock write and the first
+      // clip stamp (background restart, DOM helper throw) used to leave a bare lock
+      // that read as "already sent" until heal (i). Nothing was attached (attach is
+      // preview-based and the first stamp precedes every dispatch), so undo it now.
+      try {
+        const cm = (await getLocal(["videoSentThreads"])).videoSentThreads || {};
+        const m = cm[id];
+        if (m && m.via === "lock" && m.owner === TAB_UID && !m.sent && typeof m.resumeFrom !== "number") {
+          delete cm[id];
+          await setLocal({ videoSentThreads: cm });
+          videoLocked.delete(id);
+          const qkE = sidebarKey || id;
+          if (qkE && videoPending[qkE] == null && videoPending[id] == null) { videoPending[qkE] = Date.now(); persistDedup(); }
+        }
+      } catch (e2) { /* best effort */ }
     }
   }
 
@@ -2975,6 +3103,12 @@
       // buyer-looking snippet — e.g. some group rows — from looping forever).
       if (sidebarSaysBuyer && (suspiciousReads[id] = (suspiciousReads[id] || 0) + 1) < 3) {
         cooldowns[id] = Date.now() + 2 * 60 * 1000;
+        // (v0.21.41) a chat that owes a video tail still gets its video pass here
+        // (idempotent) — three suspicious reads used to cost it three lane slots for nothing.
+        if (videoPending[id] != null || videoPending[sidebarId] != null) {
+          await maybeSendVideo(id, name, false, sidebarId);
+          if (videoLocked.has(id)) clearVideoPending(sidebarId);
+        }
         setStatus({ lastAction: "sidebar showed a buyer message but chat reads you-last — re-checking in 2 min", currentThread: name });
         return;
       }
@@ -3005,7 +3139,11 @@
       // ourselves. Hard stop against self-reply spam.
       clearWaiting(id, sidebarId);
       cooldowns[id] = Date.now() + IDLE_COOLDOWN_MS;
-      setStatus({ lastAction: "skip — that last message was ours, not the buyer", currentThread: name });
+      // (v0.21.41) same omission as the lastHandled branch had: give the chat its
+      // video pass (idempotent) instead of a 10-min cooldown and nothing.
+      await maybeSendVideo(id, name, videoPending[id] == null && videoPending[sidebarId] == null, sidebarId);
+      if (videoLocked.has(id)) clearVideoPending(sidebarId);
+      setStatus({ lastAction: "skip — that last message was ours, not the buyer (video checked)", currentThread: name });
       return;
     }
     // Composite dedupe key (new writes) with backward compat for entries persisted
@@ -3237,7 +3375,7 @@
     // buyers should not wait for it. With the file API usable the streaming
     // engine costs seconds per clip and yields between clips, so it is always
     // videos-first — "unproven recently" no longer counts against it.
-    if (!videoLocked.has(id) && buyersWaitingCount(id, sidebarId) >= 3 && !cdpUsableNow()) {
+    if (!videoLocked.has(id) && buyersWaitingCount(id, sidebarId) >= 3 && !cdpAvailable()) {
       // Never queue a chat whose set is already CONFIRMED delivered (persisted
       // mark — videoLocked is in-memory and empty after a reload): the engine
       // exits in ms for it and latches videoLocked.
@@ -3302,11 +3440,14 @@
   // (v0.21.40) queued sets must not sit for hours (a diagnostic showed 21 pending,
   // oldest 19 h): one queued set every 90 s, eligible after 2 min, a failing chat
   // re-tried every 15 min. Lanes 0/1 (overdue / brand-new buyer) still outrank it.
-  const AGED_VIDEO_EVERY_MS = 90 * 1000;
-  const AGED_VIDEO_MIN_AGE_MS = 2 * 60 * 1000;
+  // (v0.21.41) 15 s spacing (a pending visit itself takes longer — the throttle
+  // only ever skipped slots), no age floor (parkTail re-stamps a just-yielded tail
+  // fresh, which hid it from the lane for 2 min), 4 min per-chat retry.
+  const AGED_VIDEO_EVERY_MS = 15 * 1000;
+  const AGED_VIDEO_MIN_AGE_MS = 0;
   // (Note: whenever NO buyer is waiting, LANE 1.5 drains continuously with no
   // pacing at all — these constants only bound the worst case on busy machines.)
-  const AGED_VIDEO_RETRY_MS = 15 * 60 * 1000;
+  const AGED_VIDEO_RETRY_MS = 4 * 60 * 1000;
   let lastAgedVideoAt = 0;
   const agedVideoTried = {}; // threadId -> last aged-lane attempt
   // Is this chat's video engine in a backoff that would refuse a send instantly?
@@ -3317,7 +3458,7 @@
   const videoAttBlocked = (videoAtt, id, now) => {
     const one = (k) => {
       const att = (videoAtt || {})[k];
-      return !!(att && att.failAt && now - att.failAt < VIDEO_RETRY_BACKOFF); // (v0.21.40) short backoff only — no 24h pause
+      return !!(att && att.failAt && now - att.failAt < backoffFor(att)); // (v0.21.40) short backoff only — no 24h pause
     };
     return one(id) || (adoptedAlias[id] != null && one(adoptedAlias[id]));
   };
@@ -3325,7 +3466,9 @@
   // (overdue ledger, or unread + buyer-attributed snippet). The streaming video
   // engine consults this between clips so a long set never makes a new buyer
   // wait for an old chat's remaining videos.
-  function buyersWaitingCount(excludeId, excludeSidebarId) {
+  // `overdueOnly` counts only lane-0 evidence (on the ledger longer than OVERDUE_MS).
+  let lastCapN = 0; // the reply cap as of the last scan (settings are read there)
+  function buyersWaitingCount(excludeId, excludeSidebarId, overdueOnly) {
     const now = Date.now();
     let n = 0;
     for (const a of safe(() => conversationAnchors(), [])) {
@@ -3333,8 +3476,16 @@
       if (id === excludeId || id === excludeSidebarId || adoptedAlias[id] === excludeId) continue;
       if (openFailCount(id) >= 3 && now <= (cooldowns[id] || 0)) continue; // won't-open park
       if (!safe(() => snippetSuggestsBuyerLast(a), false)) continue;
+      // (v0.21.41) mirror lane-0/1 eligibility exactly: a row no lane would serve
+      // must not count as "waiting" — on this fleet dots never clear on minimized
+      // windows, so capped / suppressed / just-opened rows kept every set yielding
+      // after clip 1 and rush mode permanently on.
+      if (now - (lastOpened[id] || 0) <= UNREAD_REOPEN_MS) continue;
+      if (waitSuppress[id] && waitSuppress[id] > now) continue;
+      if (lastCapN > 0 && Math.max(replyCounts[id] || 0, adoptedAlias[id] != null ? (replyCounts[adoptedAlias[id]] || 0) : 0) >= lastCapN) continue;
       const ws = waitingSince[id];
-      if ((ws && now - ws > OVERDUE_MS) || safe(() => isUnreadAnchor(a), false)) n++;
+      const overdue = !!(ws && now - ws > OVERDUE_MS);
+      if (overdue || (!overdueOnly && safe(() => isUnreadAnchor(a), false))) n++;
     }
     return n;
   }
@@ -3374,6 +3525,31 @@
     // BUYER's message. A dot with OUR preview ("You: …") is a STALE dot — on
     // minimized windows FB often never clears dots after we reply, and those
     // ghosts were re-opened forever, eating the queue.
+    // LANE 0.5 candidate — AGED PENDING VIDEOS (anti-starvation), computed BEFORE
+    // lane 1 (v0.21.41 fairness): on busy accounts lane 1 is never empty during
+    // business hours, so queued/partial sets were never revisited (a diagnostic
+    // showed 21 pending, the oldest for 19 h). Rule: a brand-new buyer still goes
+    // first — unless the oldest queued set has itself waited longer than
+    // OVERDUE_MS; then that set takes this slot (one ~1-min visit), and lane 1
+    // gets the next. Lane 0 (overdue buyers) stays absolute above both.
+    let agedPick = null;
+    if (now - lastAgedVideoAt > AGED_VIDEO_EVERY_MS) {
+      let avT = Infinity;
+      for (const a of anchors) {
+        const id = threadId(a);
+        if (exclude.has(id)) continue;
+        const t = videoPending[id];
+        if (t == null) continue;
+        if (now - (agedVideoTried[id] || 0) < AGED_VIDEO_RETRY_MS) continue; // a stuck chat can't wedge the lane
+        if (videoAttBlocked(videoAtt, id, now)) continue; // engine would refuse instantly — don't waste the slot
+        if (t < avT) { avT = t; agedPick = a; }
+      }
+      if (agedPick && now - avT > OVERDUE_MS) {
+        lastAgedVideoAt = now;
+        agedVideoTried[threadId(agedPick)] = now; // stamped BEFORE the visit (safe direction)
+        return agedPick;
+      }
+    }
     for (const a of anchors) {
       const id = threadId(a);
       if (exclude.has(id)) continue;
@@ -3381,30 +3557,18 @@
       if (!safe(() => snippetSuggestsBuyerLast(a), false)) continue; // stale dot → not lane 1
       if (now - (lastOpened[id] || 0) <= UNREAD_REOPEN_MS) continue;
       if (openFailCount(id) >= 3 && now <= (cooldowns[id] || 0)) continue; // won't-open park (see lane 0)
+      // (v0.21.41) a reply-CAPPED chat is resolved by policy — its lit dot must not
+      // take lane 1 every 4 min forever (that alone kept lane 1 non-empty all day).
+      if (lastCapN > 0 && Math.max(replyCounts[id] || 0, adoptedAlias[id] != null ? (replyCounts[adoptedAlias[id]] || 0) : 0) >= lastCapN) continue;
       return a; // first match = newest buyer → instant videos + reply
     }
 
-    // LANE 0.5 — AGED PENDING VIDEOS (anti-starvation): on busy accounts lanes 0/1
-    // are never both empty during business hours, so LANE 1.5 never ran and deferred
-    // sets waited FOREVER ("replies fine, videos never send" — the busiest accounts).
-    // At most one pending set goes out per 4 min. LANES 0 and 1 above outrank this:
-    // an overdue buyer or a BRAND-NEW buyer is never displaced by an old chat's set.
-    if (now - lastAgedVideoAt > AGED_VIDEO_EVERY_MS) {
-      let av = null, avT = Infinity;
-      for (const a of anchors) {
-        const id = threadId(a);
-        if (exclude.has(id)) continue;
-        const t = videoPending[id];
-        if (t == null || now - t < AGED_VIDEO_MIN_AGE_MS) continue;
-        if (now - (agedVideoTried[id] || 0) < AGED_VIDEO_RETRY_MS) continue; // a stuck chat can't wedge the lane
-        if (videoAttBlocked(videoAtt, id, now)) continue; // engine would refuse instantly — don't waste the slot
-        if (t < avT) { avT = t; av = a; }
-      }
-      if (av) {
-        lastAgedVideoAt = now;
-        agedVideoTried[threadId(av)] = now; // stamped BEFORE the visit — a lock collision or failed open just delays 10 min (safe direction)
-        return av;
-      }
+    // LANE 0.5 (fallback position): the oldest queued set was not yet overdue, so
+    // lane 1 had its chance above; no brand-new buyer → the queued set goes now.
+    if (agedPick) {
+      lastAgedVideoAt = now;
+      agedVideoTried[threadId(agedPick)] = now; // stamped BEFORE the visit (safe direction)
+      return agedPick;
     }
 
     // LANE 1.5 — PENDING VIDEOS (guaranteed delivery): sets deferred during a busy
@@ -3431,7 +3595,9 @@
         // Won't-open park applies here too — the 15-min cooldown bypass below used
         // to override it, so one unopenable pending chat was retried every scan.
         if (openFailCount(id) >= 3 && now <= (cooldowns[id] || 0)) continue;
-        if (now <= (cooldowns[id] || 0) && now - t < 15 * 60 * 1000) continue; // fresh cooldown; wait unless pending >15 min
+        // (v0.21.41) no cooldown gate here: every visit writes a cooldown (90 s or
+        // 10 min), which turned a parked tail into a 10-min-per-clip cadence even on
+        // an idle machine; failure pacing is videoAttBlocked's job.
         if (t < pvT) { pvT = t; pv = a; }
       }
       if (evicted) persistDedup(); // batched: one write per scan max, only on state change
@@ -3527,6 +3693,7 @@
       }
       let unread = 0, waiting = 0, purgedStale = false;
       const capN = Math.max(0, Number(settings.maxRepliesPerConvo) || 0);
+      lastCapN = capN;
       for (const a of anchors) {
         if (safe(() => isUnreadAnchor(a), false)) unread++;
         if (safe(() => snippetSuggestsBuyerLast(a), false)) {
@@ -3573,9 +3740,16 @@
           if (!rid) continue;
           const adKey = adoptedAlias[rid];
           const mk = vtScan[rid] || (adKey != null ? vtScan[adKey] : null);
-          if (!mk || typeof mk.resumeFrom !== "number") continue;
-          if (typeof mk.resumeTotal === "number" && mk.resumeFrom >= mk.resumeTotal) continue; // nothing left to send
-          if (mk.via === "lock" && nowT - (mk.at || 0) < 30 * 60 * 1000) continue; // in-flight — leave it alone
+          if (!mk) continue;
+          // (v0.21.41) a BARE lock (no sent, no resume index) older than the in-flight
+          // window is a crash between lock and first attach — queue it so the
+          // engine's heal (i) runs on the next visit instead of waiting for rotation.
+          const bareStale = mk.via === "lock" && !mk.sent && typeof mk.resumeFrom !== "number" && nowT - (mk.at || 0) > VIDEO_INFLIGHT_MS;
+          if (!bareStale) {
+            if (typeof mk.resumeFrom !== "number") continue;
+            if (typeof mk.resumeTotal === "number" && mk.resumeFrom >= mk.resumeTotal && !mk.unverifiedTail) continue; // nothing left to send
+            if (mk.via === "lock" && nowT - (mk.at || 0) < VIDEO_INFLIGHT_MS) continue; // in-flight — leave it alone
+          }
           if (videoPending[rid] == null && (adKey == null || videoPending[adKey] == null)) {
             videoPending[rid] = nowT;
             queuedResume = true;
@@ -3713,6 +3887,12 @@
       lastOpened[tid] = Date.now(); // lease won — NOW it counts as an open
       try {
         await handleThread(target);
+        // (v0.21.41) a visit that cleared the chat's queue entry (set done, or in
+        // flight) releases its aged-lane retry stamp — the stamp is for STUCK chats.
+        {
+          const tid0 = threadId(target);
+          if (tid0 && videoPending[tid0] == null && (adoptedAlias[tid0] == null || videoPending[adoptedAlias[tid0]] == null)) delete agedVideoTried[tid0];
+        }
       } finally {
         await releaseThreadLock(tid);
       }
@@ -3753,7 +3933,7 @@
       // RIGHT NOW in some pass — clearing it (and its claim) would let a second
       // full set go out in parallel. Skip; a genuinely orphaned lock ages past
       // the window and is healed/cleared by the normal paths.
-      const inFlight = e && e.via === "lock" && Date.now() - (e.at || 0) < 30 * 60 * 1000;
+      const inFlight = e && e.via === "lock" && Date.now() - (e.at || 0) < VIDEO_INFLIGHT_MS;
       if (e && (e === true || (e.done && !confirmed && !inFlight))) { delete vt[k]; delete am[k]; videoLocked.delete(k); cleared++; }
     }
     videoCatchUp = { armed: true, at: Date.now() };

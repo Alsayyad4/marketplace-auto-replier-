@@ -1171,18 +1171,37 @@ async function fetchVideo(url) {
       delete cached[url];
       chrome.storage.local.set({ videoCache: cached }, () => void chrome.runtime.lastError);
     }
-    const resp = await fetch(url);
-    if (!resp.ok) return { error: `Video ${resp.status}` };
+    // (v0.21.41) bounded: a stalled CDN/proxy connection used to hang the caller
+    // (and with it the tab's whole scan loop) until the worker was torn down.
+    const ac = typeof AbortController !== "undefined" ? new AbortController() : null;
+    const fetchTimer = ac ? setTimeout(() => { try { ac.abort(); } catch (_) { /* already done */ } }, 90000) : null;
+    const clearFetchTimer = () => { if (fetchTimer) clearTimeout(fetchTimer); };
+    let resp;
+    try {
+      resp = await fetch(url, ac ? { signal: ac.signal } : undefined);
+    } catch (e) {
+      clearFetchTimer();
+      return { error: /abort/i.test(String((e && e.name) || e)) ? "video fetch timed out (90s)" : "fetch failed: " + ((e && e.message) || e) };
+    }
+    if (!resp.ok) { clearFetchTimer(); return { error: `Video ${resp.status}` }; }
     // Reject oversized clips from the Content-Length header BEFORE reading the
     // body — same error, same decision point, near-zero egress instead of a full
     // 50MB+ download × 3 retries × every machine. Header absent/garbage falls
     // through to the existing post-download check below.
     const clen = Number(resp.headers.get("content-length") || 0);
     if (clen > 45 * 1024 * 1024) {
+      clearFetchTimer();
       try { await resp.body?.cancel(); } catch (_) { /* stream already consumed */ }
       return { error: "video too large (" + Math.round(clen / 1048576) + "MB) — re-upload it under ~40MB in the dashboard" };
     }
-    const buf = await resp.arrayBuffer();
+    let buf;
+    try {
+      buf = await resp.arrayBuffer();
+    } catch (e) {
+      clearFetchTimer();
+      return { error: /abort/i.test(String((e && e.name) || e)) ? "video fetch timed out (90s)" : "fetch failed: " + ((e && e.message) || e) };
+    }
+    clearFetchTimer();
     // Chrome hard-caps extension messages (~64MB); base64 adds ~33%. A clip over
     // ~45MB can never be delivered — say so explicitly instead of failing forever.
     if (buf.byteLength > 45 * 1024 * 1024) {
@@ -1243,6 +1262,7 @@ function dlSearch(q) {
 // Download to Downloads/<filename>; resolves { item } once complete, { pending: id }
 // when still running after `timeoutMs` (the download keeps going — a later call
 // adopts it), or { error }. History entry KEPT (absolute path + `exists` re-checks).
+const DANGER_BLOCK_RE = /^(file|url|content|uncommon|host|unwanted|sensitiveContentBlock|blockedTooLarge|blockedScanFailed|deepScannedOpenedDangerous|passwordProtected|blockedPasswordProtected|accountCompromise)$/;
 function dlAndWait(url, filename, timeoutMs, onStarted) {
   return new Promise((resolve) => {
     try {
@@ -1252,15 +1272,22 @@ function dlAndWait(url, filename, timeoutMs, onStarted) {
         }
         try { if (onStarted) onStarted(id); } catch (e) { /* bookkeeping only */ }
         const started = Date.now();
+        let misses = 0;
         const poll = () => {
           chrome.downloads.search({ id }, (items) => {
             const it = items && items[0];
             if (it && it.state === "complete") return resolve({ item: it });
-            if (it && it.danger && it.danger !== "safe" && it.danger !== "accepted") {
+            // (v0.21.41) only TERMINAL danger verdicts abort; scanning/"safe"-ish
+            // states on managed machines (asyncScanning, promptForScanning,
+            // deepScannedSafe…) are transient — keep polling to completion.
+            if (it && DANGER_BLOCK_RE.test(it.danger || "")) {
               chrome.downloads.cancel(id, () => void chrome.runtime.lastError);
               return resolve({ error: "blocked as dangerous (" + it.danger + ")" });
             }
-            if (!it || it.state === "interrupted") return resolve({ error: (it && it.error) ? String(it.error) : "download did not finish" });
+            // An EMPTY search result while the download is actually running (history
+            // erased mid-download, a slow shelf) is tolerated a few times.
+            if (!it) { if (++misses > 4) return resolve({ error: "download did not finish" }); return setTimeout(poll, 500); }
+            if (it.state === "interrupted") return resolve({ error: it.error ? String(it.error) : "download interrupted" });
             if (Date.now() - started > (timeoutMs || 90000)) return resolve({ pending: id }); // still running — adopted by a later call
             setTimeout(poll, 500);
           });
@@ -1280,7 +1307,7 @@ async function dlItemFresh(id) {
   return (await dlSearch({ id }))[0] || null;
 }
 const diskInFlight = {}; // key -> Promise (single-flight per clip: two tabs never race the same file)
-const DISK_FAIL_BACKOFF = 30 * 60 * 1000;
+const DISK_FAIL_BACKOFF = 30 * 60 * 1000; // unused since v0.21.41 (escalating per-entry backoff in ensureVideoOnDisk)
 // { url } (https clip) or { dataUrl, name } (legacy per-machine clip) → absolute
 // on-disk path: downloads once per machine, adopts an in-progress download started
 // by an earlier call, re-verifies the file still exists, backs off after failures.
@@ -1307,17 +1334,32 @@ async function ensureVideoOnDisk(req) {
           if (hit.pending || hit.path !== it.filename) await save({ id: it.id, path: it.filename, size: it.fileSize || 0, at: Date.now() });
           return { ok: true, path: it.filename, cached: true };
         }
-        if (it && it.state === "in_progress") return { ok: false, error: "still downloading" };
-        // gone from history / interrupted / deleted on disk → fresh download below
+        if (it && it.state === "in_progress") {
+          // STALL WATCHDOG (v0.21.41): a download that has not moved in 2 min (a
+          // proxy that accepts the connection and never sends) would stay
+          // in_progress for hours — cancel it and start over below.
+          const got = it.bytesReceived || 0;
+          if (hit.bytes === got && hit.bytesAt && Date.now() - hit.bytesAt > 120000) {
+            try { await new Promise((r) => chrome.downloads.cancel(hit.id, () => { void chrome.runtime.lastError; r(); })); } catch (e) { /* best effort */ }
+          } else {
+            if (hit.bytes !== got || !hit.bytesAt) await save(Object.assign({}, hit, { bytes: got, bytesAt: Date.now() }));
+            return { ok: false, error: "still downloading" };
+          }
+        }
+        // gone from history / interrupted / deleted on disk / stalled → fresh download below
       }
-      if (hit && hit.failAt && Date.now() - hit.failAt < DISK_FAIL_BACKOFF) {
-        return { ok: false, error: "disk: " + (hit.error || "recent failure") + " — retrying later" };
+      if (hit && hit.failAt) {
+        // (v0.21.41) escalating backoff — 30 s, 1, 2, 4, 8, then 15 min — instead of a
+        // flat 30 min: a transient failure is retried within the minute.
+        const tries = hit.tries || 1;
+        const backoff = Math.min(15 * 60 * 1000, 30000 * Math.pow(2, tries - 1));
+        if (Date.now() - hit.failAt < backoff) return { ok: false, error: "disk: " + (hit.error || "recent failure") + " — retrying later" };
       }
       const fname = VIDEO_DISK_DIR + "/" + hashStr(key).slice(0, 8) + "-" + safeFileStem(req.name) + ".mp4";
       const r = await dlAndWait(src, fname, 90000, (id) => { save({ id, pending: true, at: Date.now() }); });
       if (r.pending != null) return { ok: false, error: "still downloading" };
       if (r.error || !r.item || !r.item.filename) {
-        await save({ failAt: Date.now(), error: String(r.error || "no path after download").slice(0, 80) });
+        await save({ failAt: Date.now(), error: String(r.error || "no path after download").slice(0, 80), tries: ((hit && hit.tries) || 0) + 1 });
         return { ok: false, error: r.error || "no path after download" };
       }
       await save({ id: r.item.id, path: r.item.filename, size: r.item.fileSize || 0, at: Date.now() });

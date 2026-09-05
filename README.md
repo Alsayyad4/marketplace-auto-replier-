@@ -6,6 +6,28 @@ French), built for used-iPhone sales in Montréal. Runs locally per Chrome profi
 by default; **optional cloud sync** turns it into a web app so one change reaches
 every computer.
 
+> 🧹 **v0.21.41 — the audit pass: 105 gates reviewed by 35 agents, the remaining ones fixed.**
+> A multi-agent audit of v0.21.40 walked every exit of the video engine, the scheduler,
+> clip availability and the attach layer. It found one regression in .40 (a clip that
+> fails to download could seal a chat after its first clip) and a long tail of smaller
+> gates. All fixed: **struck-out clips keep their slot** so a parked set is never dropped
+> as "changed"; **queued sets get a fair share of the machine** — when the oldest queued
+> set has waited over 5 minutes it takes the next slot even on a busy sidebar, the
+> pending lane runs every 15 s with no age floor, and rows no lane would ever serve
+> (reply-capped, just-opened, suppressed) no longer count as "buyers waiting" — the
+> mechanism that cut every set to one clip and kept rush mode on; **between clips the
+> engine yields only to a genuinely overdue buyer** when the file API is on; a crashed
+> set is picked up after 10 minutes everywhere (engine, scan rescue, catch-up) and a
+> crash between lock and first clip heals in 10 minutes instead of 24 hours, with the
+> chat re-queued; a buyer-triggered visit is never refused for pacing; load failures
+> back off 60 s; file-API parks are 2–15 min routing decisions, never delivery
+> decisions; the disk cache stays warm while parked; a clip fetch or download can no
+> longer hang the machine (90 s fetch budget, stall watchdog, escalating retry, only
+> terminal "dangerous" verdicts abort); a clip whose last attach never showed gets one
+> adopt visit instead of being written off; navigating away before anything was
+> dispatched no longer skips the clip; and the queue keeps its oldest entries when it
+> overflows.
+>
 > 🚦 **v0.21.40 — the blocks are gone: no 24h pauses, no "all clips must load first", queued sets go out within minutes.**
 > Operator directive: *"remove all blocks of this functionality — just send any video you
 > can, you don't need to upload all to send."* Everything that could keep a not-yet-served
