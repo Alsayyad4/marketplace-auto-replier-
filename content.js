@@ -1672,8 +1672,12 @@
     return null;
   }
   const VIDEO_CLAIM_TTL = 3 * 60 * 1000; // an in-flight claim older than this is stale
-  const VIDEO_RETRY_BACKOFF = 20 * 60 * 1000; // wait this long before retrying a failed send
-  const VIDEO_MAX_TRIES = 3; // give up after this many failed attempts
+  // (v0.21.40, operator: "remove all blocks — send any video you can") the only
+  // pacing left on a chat whose clips fail to load/attach is this short backoff;
+  // there is NO 24h pause and NO give-up count any more. `fails` is still counted
+  // (diagnostic), the pending lane's own per-chat retry spacing bounds the cost.
+  const VIDEO_RETRY_BACKOFF = 3 * 60 * 1000; // wait this long before retrying a failed send
+  const VIDEO_MAX_TRIES = 3; // telemetry threshold only ("attachFails3+" in 🩺) — never blocks
   // Synchronous, in-memory guard: threadIds this content-script instance has already
   // committed a video to. Checked with ZERO awaits at the very top of maybeSendVideo,
   // so even if chrome.storage writes lag, a chat can't be sent to twice in one session.
@@ -1872,7 +1876,7 @@
       // finally gets all 3 configured clips instead of 2.
       const resumeFrom = done[id] && done[id].done && typeof done[id].resumeFrom === "number" ? done[id].resumeFrom : null;
 
-      // IN-FLIGHT guard: a via:"lock" progress stamp younger than 30 min means a
+      // IN-FLIGHT guard: a via:"lock" progress stamp younger than 10 min means a
       // set is probably being sent RIGHT NOW in another pass/tab (every loop
       // iteration refreshes `at`, so a live pass stays fresh even under heavy
       // background-tab timer throttling). Only a STALE stamp (crash mid-set) may
@@ -1880,7 +1884,9 @@
       // owner check + pre-attempt stamps below make interleaving duplicate-free —
       // the resumer starts strictly after the last stamped clip and the old owner
       // bows out at its next iteration.
-      if (resumeFrom != null && done[id].via === "lock" && now - (done[id].at || 0) < 30 * 60 * 1000) {
+      // (v0.21.40: 10 min, was 30 — a live pass re-stamps `at` at least every few
+      // minutes; a crashed one used to block its own chat's resume for half an hour)
+      if (resumeFrom != null && done[id].via === "lock" && now - (done[id].at || 0) < 10 * 60 * 1000) {
         vstat("set in progress in another pass — waiting (" + (name || id) + ")");
         return;
       }
@@ -1962,17 +1968,8 @@
       // download problem used to ban a chat from ever getting its video.
       const att0 = (cfg.videoAttempts || {})[id] || null;
       if (att0) {
-        if ((att0.fails || 0) >= VIDEO_MAX_TRIES) {
-          if (now - (att0.failAt || 0) < 24 * 3600 * 1000) {
-            vstat(att0.why === "attach"
-              ? "paused 24h — clips attached 0/N 3× (FB upload UI may have changed on this machine) for " + (name || id)
-              : "paused 24h — clips failed to load 3× for " + (name || id));
-            return;
-          }
-          const am = (await getLocal(["videoAttempts"])).videoAttempts || {};
-          delete am[id];
-          await setLocal({ videoAttempts: am }); // expired → give the chat a fresh chance
-        }
+        // (v0.21.40) No 24h pause: a chat that failed 3× keeps retrying on the
+        // short backoff below. The count is kept for the diagnostic only.
         if (att0.claimAt && now - att0.claimAt < VIDEO_CLAIM_TTL && att0.claimTab !== TAB_UID) {
           vstat("another tab is sending to " + (name || id));
           return;
@@ -2092,6 +2089,10 @@
         if (ok) {
           if (urlFails[v.url]) { delete urlFails[v.url]; urlFailsChanged = true; }
         } else {
+          // (v0.21.40) keep the slot: indices stay aligned with the configured
+          // set, the loop sends the clips BEFORE this one and resumes here later.
+          files.push(null);
+          paths.push(null);
           urlFails[v.url] = { n: strikeN(urlFails[v.url]) + 1, at: Date.now() };
           urlFailsChanged = true;
         }
@@ -2105,20 +2106,39 @@
         }
       }
 
-      // The set must be COMPLETE before we send anything (a partial set + lock was
-      // how "3 configured, buyer got 2" happened) — but "complete" now means the
-      // clips that CAN load: globally-dead clips are excluded above, never blocking.
-      const expected = activeCentral.length ? activeCentral.length : files.length;
-      if (!files.length || files.length < expected) {
+      // SEND WHAT LOADED (v0.21.40, operator: "send any video you can, you don't
+      // need all to send"). The old rule held the WHOLE set until every clip had
+      // loaded — one slow download meant no video at all. Now a clip that can't
+      // load right now is a `null` slot: the clips before it go out on this visit,
+      // the loop stops at the slot with a resume marker (that clip is re-tried on
+      // the next visit, not skipped), and only a set whose NEXT DUE clip is
+      // missing waits (short backoff + pending queue).
+      const expected = files.length;
+      const loadedN = files.filter(Boolean).length;
+      const firstMissing = files.findIndex((f) => !f);
+      const nextDue = resumeFrom != null ? Math.min(resumeFrom, files.length) : 0;
+      if (!files.length || (nextDue < files.length && !files[nextDue])) {
         await recordVideoFail(id, "load");
         const allBlocked = central.length > 0 && !activeCentral.length;
         const msg = allBlocked
           ? "⚠ all " + central.length + " dashboard clip(s) failing to DOWNLOAD on this machine (network/proxy?) — replies unaffected, re-probing in 6h"
-          : "loaded " + files.length + "/" + expected + " clip(s) — will retry (" + (name || id) + ")";
+          : "loaded " + loadedN + "/" + expected + " clip(s), clip " + (nextDue + 1) + " not yet — retrying in a few minutes (" + (name || id) + ")";
         vstat(msg);
         setStatus({ lastError: "video: " + msg, currentThread: name });
+        // Queue the retry explicitly (pending lane, honored after the short backoff).
+        {
+          const qkL = sidebarKey || id;
+          const dnL = (cfg.videoSentThreads || {})[id];
+          const doneL = !!(dnL && dnL.done && typeof dnL.resumeFrom !== "number");
+          if (qkL && !doneL && videoPending[qkL] == null && videoPending[id] == null) { videoPending[qkL] = Date.now(); persistDedup(); }
+        }
         return;
       }
+      {
+        const laterMissing = files.findIndex((f, k) => k > nextDue && !f);
+        if (laterMissing >= 0) vstat("clip " + (laterMissing + 1) + " can't load right now — sending the others first (" + (name || id) + ")");
+      }
+      void firstMissing;
 
       // Resume-tail is an INDEX into `files`. With strike decay the active set can
       // GROW between visits (a revived URL slots in earlier), so replaying the index
@@ -2277,11 +2297,15 @@
       // in seconds, the reply rides right behind it, and at most one clip is ever
       // in flight per chat (the property that makes late tiles adoptable instead
       // of a pile). The synthetic multi-paste below stays for machines without it.
-      const cdpPerClip = cdpUsableNow() && paths.slice(startAt).every(Boolean);
+      // (the run covers the loadable clips from startAt up to the first missing
+      // slot AT OR AFTER it — a missing slot before startAt was already delivered)
+      const firstMissingFromStart = files.findIndex((f, k) => k >= startAt && !f);
+      const runEnd = firstMissingFromStart >= 0 ? firstMissingFromStart : files.length;
+      const cdpPerClip = cdpUsableNow() && runEnd > startAt && paths.slice(startAt, runEnd).every(Boolean);
       let bulkFiles = null;
-      if (!cdpPerClip && files.length - startAt > 1) {
+      if (!cdpPerClip && runEnd - startAt > 1) {
         bulkFiles = [];
-        for (let k = startAt; k < files.length; k++) {
+        for (let k = startAt; k < runEnd; k++) {
           const f = files[k];
           let real = f;
           if (f && f.lazy) { try { real = await f.load(); } catch (e) { real = null; } }
@@ -2313,7 +2337,7 @@
           setStatus({ lastAction: "video set interrupted (chat switched) — finishing later", currentThread: name });
           return;
         }
-        if (typeof bulk === "number" && bulk >= rest.length) {
+        if (typeof bulk === "number" && bulk >= rest.length && runEnd === files.length) {
           okCount = rest.length;
           // Belt-and-suspenders: never let a surplus preview (any source) ride the
           // single Enter — extras always append at the TAIL, same rule as sweepTrayExtras.
@@ -2333,7 +2357,16 @@
         }
       }
 
+      let loadStop = false; // the loop stopped at a clip that could not be loaded (re-tried later, never skipped)
       for (let i = bulkDone ? files.length : startAt; i < files.length; i++) {
+        if (!files[i]) {
+          // Not loadable right now: everything before it is out (or going out);
+          // resume exactly here on a later visit. No pre-attempt stamp — the
+          // clip was never touched.
+          loadStop = true;
+          failedAt = i;
+          break;
+        }
         // Navigation abort: NOTHING has been sent yet (send is one Enter at the
         // end) and Enter must never fire after the operator switched chats.
         // Clips already attached are recorded as attempted (if Messenger kept
@@ -2642,13 +2675,14 @@
         dmF[id] = { done: true, at: Date.now(), owner: TAB_UID, resumeFrom: resumeAtF, resumeTotal: files.length, sent: okCount + startAt };
         await setLocal({ videoSentThreads: dmF });
         videoLocked.delete(id); // the finishing visit must pass the in-memory guard
-        await recordVideoFail(id, "attach"); // 20-min backoff, 3 strikes → 24h pause
+        await recordVideoFail(id, loadStop ? "load" : "attach"); // short backoff only (v0.21.40)
         {
           const qkF = sidebarKey || id;
           if (qkF && videoPending[qkF] == null && videoPending[id] == null) { videoPending[qkF] = Date.now(); persistDedup(); }
         }
-        vstat("sent " + (okCount + startAt) + "/" + files.length + " — clip " + (failedAt + 1) + " didn't attach; finishing on a later visit (" + (name || id) + ")");
-        setStatus({ lastError: "video: " + (okCount + startAt) + "/" + files.length + " sent, clip " + (failedAt + 1) + " didn't attach — will finish later", currentThread: name });
+        const whyF = loadStop ? "couldn't load yet" : "didn't attach";
+        vstat("sent " + (okCount + startAt) + "/" + files.length + " — clip " + (failedAt + 1) + " " + whyF + "; finishing on a later visit (" + (name || id) + ")");
+        setStatus({ lastError: "video: " + (okCount + startAt) + "/" + files.length + " sent, clip " + (failedAt + 1) + " " + whyF + " — will finish later", currentThread: name });
         if (okCount > 0) ask({ type: "LOG_EVENT", entry: { thread: name, threadId: id, buyer: "(demo video)", action: "video", reply: (okCount + startAt) + "/" + files.length + " demo videos sent — finishing the rest on a later visit" } });
         return;
       }
@@ -3197,15 +3231,21 @@
     // pending lane (guaranteed later delivery). A machine with a healthy file
     // API keeps videos-first — its attach costs seconds, not minutes.
     let rush = false;
-    if (!videoLocked.has(id) && buyersWaitingCount(id, sidebarId) >= 3 && !cdpRecentlyHealthy()) {
+    // (v0.21.40, operator: "remove the blocks — videos instantly") rush only when
+    // the file API is genuinely UNAVAILABLE on this machine right now (denied /
+    // parked): then an attach means minutes of synthetic pasting and three other
+    // buyers should not wait for it. With the file API usable the streaming
+    // engine costs seconds per clip and yields between clips, so it is always
+    // videos-first — "unproven recently" no longer counts against it.
+    if (!videoLocked.has(id) && buyersWaitingCount(id, sidebarId) >= 3 && !cdpUsableNow()) {
       // Never queue a chat whose set is already CONFIRMED delivered (persisted
       // mark — videoLocked is in-memory and empty after a reload): the engine
-      // exits in ms for it and latches videoLocked. And while the file API is
-      // usable-but-unproven, one probe visit per 10 min goes videos-first.
+      // exits in ms for it and latches videoLocked.
       const dnR = ((await getLocal(["videoSentThreads"])).videoSentThreads || {})[id];
       const served = !!(dnR && dnR.done && typeof dnR.resumeFrom !== "number");
-      rush = !served && !rushProbeDue();
+      rush = !served;
     }
+    void rushProbeDue; void cdpRecentlyHealthy; // kept for the diagnostic/health line
     if (rush) {
       const qkR = sidebarId || id;
       if (qkR && videoPending[qkR] == null && videoPending[id] == null) { videoPending[qkR] = Date.now(); persistDedup(); }
@@ -3259,11 +3299,14 @@
   // LANE 1, and a chat that just got an aged attempt is skipped for an hour so one
   // stuck chat (e.g. clips in 24h fail-pause) can't wedge the lane. In-memory only —
   // a content-script reload restarts the pacing, which fails toward FEWER preemptions.
-  const AGED_VIDEO_EVERY_MS = 4 * 60 * 1000; // was 10 min — operator wants queued sets out fast
-  const AGED_VIDEO_MIN_AGE_MS = 10 * 60 * 1000; // was 20 min — eligible sooner; LANE 0 still absolute
+  // (v0.21.40) queued sets must not sit for hours (a diagnostic showed 21 pending,
+  // oldest 19 h): one queued set every 90 s, eligible after 2 min, a failing chat
+  // re-tried every 15 min. Lanes 0/1 (overdue / brand-new buyer) still outrank it.
+  const AGED_VIDEO_EVERY_MS = 90 * 1000;
+  const AGED_VIDEO_MIN_AGE_MS = 2 * 60 * 1000;
   // (Note: whenever NO buyer is waiting, LANE 1.5 drains continuously with no
   // pacing at all — these constants only bound the worst case on busy machines.)
-  const AGED_VIDEO_RETRY_MS = 60 * 60 * 1000;
+  const AGED_VIDEO_RETRY_MS = 15 * 60 * 1000;
   let lastAgedVideoAt = 0;
   const agedVideoTried = {}; // threadId -> last aged-lane attempt
   // Is this chat's video engine in a backoff that would refuse a send instantly?
@@ -3274,10 +3317,7 @@
   const videoAttBlocked = (videoAtt, id, now) => {
     const one = (k) => {
       const att = (videoAtt || {})[k];
-      return !!(att && (
-        (((att.fails || 0) >= VIDEO_MAX_TRIES) && now - (att.failAt || 0) < 24 * 3600 * 1000) ||
-        (att.failAt && now - att.failAt < VIDEO_RETRY_BACKOFF)
-      ));
+      return !!(att && att.failAt && now - att.failAt < VIDEO_RETRY_BACKOFF); // (v0.21.40) short backoff only — no 24h pause
     };
     return one(id) || (adoptedAlias[id] != null && one(adoptedAlias[id]));
   };

@@ -6,6 +6,22 @@ French), built for used-iPhone sales in Montréal. Runs locally per Chrome profi
 by default; **optional cloud sync** turns it into a web app so one change reaches
 every computer.
 
+> 🚦 **v0.21.40 — the blocks are gone: no 24h pauses, no "all clips must load first", queued sets go out within minutes.**
+> Operator directive: *"remove all blocks of this functionality — just send any video you
+> can, you don't need to upload all to send."* Everything that could keep a not-yet-served
+> chat from getting its clips is now either removed or reduced to a short pace: the
+> **24-hour attach/load pause and the 3-strike give-up are gone** (a failing chat simply
+> retries after 3 minutes, forever — the counts stay visible in the diagnostic as
+> `attachFails3+`); the **whole-set rule is gone** — clips that loaded go out now, and a
+> clip that can't load yet gets its own slot, retried on the next visit (never skipped);
+> the **pending-videos lane** runs every 90 s instead of every 4 min and a queued set is
+> eligible after 2 min (a diagnostic showed 21 sets queued, the oldest for 19 hours); a
+> crashed pass blocks its own chat's resume for 10 min instead of 30; and **rush mode**
+> (reply first, videos queued) now triggers only when the file API is genuinely
+> unavailable on the machine, not merely "unproven recently". The duplicate-safety
+> rules are untouched: a chat marked delivered is never re-sent, and an attempted clip
+> whose state is unknowable is skipped rather than risked twice.
+>
 > 🎬 **v0.21.38 — one clip in flight at a time; the composer itself confirms the attach; no more piles, no more 24h video pauses.**
 > A live diagnostic (machine PC-mnbbd) showed the failure behind "some chats get no
 > video at all": on that machine the file API handed the clips to Messenger correctly

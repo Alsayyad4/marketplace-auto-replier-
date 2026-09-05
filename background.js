@@ -1758,7 +1758,7 @@ async function buildDiagnostic() {
   for (const k of Object.keys(uf)) { const e = uf[k]; if (e && (e.n || 0) >= 3 && now - (e.at || 0) < 6 * 3600 * 1000) strikes++; }
   const cu = st.videoCatchUp || {};
   L.push(
-    "attempts: pausedLoad=" + pLoad + " pausedAttach=" + pAttach + " liveClaims=" + claims +
+    "attempts: loadFails3+=" + pLoad + " attachFails3+=" + pAttach + " (no pauses since .40) liveClaims=" + claims +
     " urlStrikesActive=" + strikes +
     " catchUp=" + (cu.armed ? "ARMED(" + ageM(cu.at) + ")" : "off") +
     " auto13=" + (st.autoCatchUp01213 ? "done" : "-") + " auto17=" + (st.autoCatchUp01217 ? "done" : "-") +
