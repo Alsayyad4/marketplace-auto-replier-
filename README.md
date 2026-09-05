@@ -6,6 +6,13 @@ French), built for used-iPhone sales in Montréal. Runs locally per Chrome profi
 by default; **optional cloud sync** turns it into a web app so one change reaches
 every computer.
 
+> 🔍 **v0.21.42 — verification pass over .41: three small fixes.** A clip whose tile was
+> seen is never re-dispatched after a failed tray trim (duplicate safety first); a chat
+> with previews that will not clear is paced (3 min) instead of being re-opened every
+> scan; and a parked set whose remaining clips are all struck out closes the same way an
+> in-visit set does, while a fresh chat with nothing downloadable waits 15 minutes instead
+> of visiting every minute.
+>
 > 🧹 **v0.21.41 — the audit pass: 105 gates reviewed by 35 agents, the remaining ones fixed.**
 > A multi-agent audit of v0.21.40 walked every exit of the video engine, the scheduler,
 > clip availability and the attach layer. It found one regression in .40 (a clip that

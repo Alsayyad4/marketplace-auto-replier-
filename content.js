@@ -1711,7 +1711,7 @@
   const VIDEO_RETRY_BACKOFF = 3 * 60 * 1000; // wait this long before retrying a failed ATTACH
   const VIDEO_MAX_TRIES = 3; // telemetry threshold only ("attachFails3+" in 🩺) — never blocks
   // A LOAD failure (clip not downloadable yet) usually clears within a minute.
-  const backoffFor = (att) => (att && att.why === "load" ? 60 * 1000 : VIDEO_RETRY_BACKOFF);
+  const backoffFor = (att) => (att && att.why === "struck" ? 15 * 60 * 1000 : att && att.why === "load" ? 60 * 1000 : VIDEO_RETRY_BACKOFF);
   // Synchronous, in-memory guard: threadIds this content-script instance has already
   // committed a video to. Checked with ZERO awaits at the very top of maybeSendVideo,
   // so even if chrome.storage writes lag, a chat can't be sent to twice in one session.
@@ -2189,8 +2189,23 @@
       let nextDue = startAt0;
       while (nextDue < files.length && files[nextDue] && files[nextDue].excluded) nextDue++; // step over struck-out clips
       const nothingLoadable = startAt0 < files.length && nextDue >= files.length; // every remaining clip is struck out
+      if (nothingLoadable && startAt0 > 0) {
+        // (v0.21.42) a parked tail whose remaining clips are ALL struck out ends
+        // exactly like the in-visit path ends (`continue` over struck slots →
+        // terminal): the chat got everything sendable. Consistent, and no
+        // once-a-minute no-op visits for up to an hour.
+        videoLocked.add(id);
+        clearPend();
+        const dmX = (await getLocal(["videoSentThreads"])).videoSentThreads || {};
+        dmX[id] = { done: true, at: Date.now(), owner: TAB_UID, sent: startAt0, resumeTotal: files.length };
+        await setLocal({ videoSentThreads: dmX });
+        vstat("remaining clip(s) can't download (struck out) — set closed at " + startAt0 + "/" + files.length + " (" + (name || id) + ")");
+        return;
+      }
       if (!files.length || nothingLoadable || (nextDue < files.length && !files[nextDue])) {
-        await recordVideoFail(id, "load");
+        // a fresh chat with NOTHING loadable waits for the strike window (15 min
+        // pacing), a merely-slow clip is retried within the minute
+        await recordVideoFail(id, nothingLoadable || (central.length > 0 && !activeCentral.length) ? "struck" : "load");
         const allBlocked = central.length > 0 && !activeCentral.length;
         const msg = allBlocked
           ? "⚠ all " + central.length + " dashboard clip(s) failing to DOWNLOAD on this machine (network/proxy?) — replies unaffected, re-probing within the hour"
@@ -2324,6 +2339,7 @@
             const qkK = sidebarKey || id;
             if (qkK && videoPending[qkK] == null && videoPending[id] == null) { videoPending[qkK] = Date.now(); persistDedup(); }
           }
+          await recordVideoFail(id, "attach"); // (v0.21.42) 3-min pacing — without it lane 1.5 re-opened this chat every scan
           vstat("tray holds " + trayRemoveBtns().length + " stuck previews — skipping this visit (" + (name || id) + ")");
           return;
         }
@@ -2577,9 +2593,9 @@
               // staged pile would ride it. Losing our own copy is the safe side
               // (this clip is stamped attempted; the set resumes after it).
               await sweepTrayExtras(0);
-              // Tray verified EMPTY after the sweep ⇒ nothing of this clip can ship
-              // ⇒ re-attempting it later is duplicate-safe (resume AT i, not i+1).
-              if (trayRemoveBtns().length === 0) dirtyStop = false;
+              // (v0.21.42) skip-forward stays: this clip's tile WAS seen, and on a
+              // late-rendering machine one more copy can surface after the sweep —
+              // re-dispatching it later could pair with that copy. Law 1 wins.
               vstat("tray holds extra previews that won't clear — not sending a pile (" + (name || id) + ")");
               break;
             }
@@ -3598,6 +3614,9 @@
         // (v0.21.41) no cooldown gate here: every visit writes a cooldown (90 s or
         // 10 min), which turned a parked tail into a 10-min-per-clip cadence even on
         // an idle machine; failure pacing is videoAttBlocked's job.
+        // (v0.21.42) …but never the SAME chat twice within a minute: an exit that
+        // re-queues without recording a fail must not become an 8-s loop.
+        if (now - (lastOpened[id] || 0) < 60 * 1000) continue;
         if (t < pvT) { pvT = t; pv = a; }
       }
       if (evicted) persistDedup(); // batched: one write per scan max, only on state change
