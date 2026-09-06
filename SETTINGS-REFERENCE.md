@@ -3,7 +3,7 @@
 This is the **authoritative list** of every setting the web dashboard edits and the
 extension consumes. It is generated from `DEFAULTS` in `background.js` and the tab
 layout in `options.html`. The web editor (`docs/`) mirrors these tabs/fields exactly,
-stores them all in one **config JSON object**, and the `supabase/functions/config`
+stores them all in one **config JSON object**, and the `supabase/functions/subsell-config`
 endpoint serves that object to the extension.
 
 - The config JSON is the same shape as the extension's "Export config" output.
@@ -15,13 +15,13 @@ endpoint serves that object to the extension.
 | Field | id | Type | Default | What it does |
 |---|---|---|---|---|
 | Anthropic API key | `apiKey` | string | `""` | Key (`sk-ant-…`) the extension calls Claude with. |
-| Model | `model` | enum | `claude-sonnet-4-6` | `claude-sonnet-4-6` / `claude-opus-4-8` / `claude-haiku-4-5-20251001`. |
+| Model | `model` | enum | `claude-haiku-4-5` | `claude-haiku-4-5-20251001` (recommended — 3× cheaper) / `claude-sonnet-4-6` / `claude-opus-4-8`. |
 | Response delay (s) | `responseDelaySec` | number | `30` | Wait before replying (human-like). |
 | Jitter (s) | `jitterSec` | number | `60` | Extra random 0–N s added to the delay. |
 | Hourly cap | `hourlyCap` | number | `30` | Max replies/hour. |
 | Daily cap | `dailyCap` | number | `200` | Max replies/day. |
-| Max replies / conversation | `maxRepliesPerConvo` | number | `5` | Total bot replies in one chat (0 = unlimited). |
-| When that cap is hit | `convoCapBehavior` | enum | `stop` | `stop` (go quiet) or `notify` (ping operator). |
+| Max replies / conversation | `maxRepliesPerConvo` | number | `5` | **Hard cap** on bot **text replies** in one chat, counted across the whole conversation. Once hit, the bot stays silent even if the buyer keeps asking more questions. Demo videos and follow-ups are separate and do **not** count toward it. `0` = unlimited. |
+| When that cap is hit | `convoCapBehavior` | enum | `stop` | `stop` (go quiet) or `notify` (flag the chat as needs-you in the popup). |
 | Typing WPM min | `wpmMin` | number | `38` | Lower bound of human typing speed. |
 | Typing WPM max | `wpmMax` | number | `78` | Upper bound of human typing speed. |
 | Respect business hours | `businessHoursEnabled` | bool | `true` | Only reply between the hours below. |
@@ -37,6 +37,7 @@ endpoint serves that object to the extension.
 | Day-0 daily cap | `warmupStartCap` | number | `10` | Daily cap on day 0. |
 | Off-platform guardrails | `offPlatformGuard` | bool | `true` | Forbid phone/email/links/"contact me elsewhere". |
 | Closer mode | `closerMode` | bool | `true` | Drive buyers to call/visit; trade-in/buyback/liquidation. |
+| Closing style | `closerIntensity` | enum | `medium` | `soft` (one gentle invite) / `medium` (guide toward the visit) / `master` (full sales playbook: micro-commitments, assumptive & two-option closes, reserve technique, honest urgency, objection handling, one advancing question per message, stop-selling-after-yes). Only applies when Closer mode is ON. |
 | Never quote exact prices | `noExactPrices` | bool | `true` | Promise best price in person (ignored if `priceList` set). |
 | Silent visit confirmation | `visitConfirmEnabled` | bool | `true` | After a buyer says they'll come, ask "still coming?" silently. |
 | Ask after (minutes) | `visitConfirmAfterMin` | number | `120` | Delay before the silent visit confirm. |
@@ -61,16 +62,33 @@ endpoint serves that object to the extension.
 
 ## Tab: Follow-ups
 
-`followUps` — array of rows. Each: `{ name, afterMinutes (number), message, enabled (bool) }`. After the bot replies it arms a timer; if the buyer stays quiet that long it sends `message` once.
+**Smart follow-up** (proactive; Claude decides per chat, capped so it never spams):
+- `smartFollowupEnabled` — bool (default `false`). Master on/off for proactive follow-ups on quiet chats.
+- `smartFollowupMaxCount` — number (default `1`). Max follow-ups per chat, total (e.g. 1 or 2).
+- `smartFollowupQuietHours` — number (default `6`). Hours a chat must be quiet before the **first** follow-up.
+- `smartFollowupGapHours` — number (default `24`). Hours between follow-ups (2nd, 3rd…).
+- `coaching` — array (default `[]`). Graded real replies from the dashboard's **Activity** tab (👍 = imitate, 👎 + correction = the right answer): `[{kind:"good"|"fix", buyer, reply, bad, better, note, at}]`, capped at 30 (FIFO). Rendered into every bot's system prompt as highest-priority coaching; edited only through the Activity tab's Teach buttons + Coaching list.
+
+**Simple timer follow-up** (fixed message; separate feature — use one or the other):
+- `followUps` — array of `{ name, afterMinutes (number), message, enabled (bool) }`. After the bot replies it arms a timer; if the buyer stays quiet that long it sends `message` once.
 
 ## Tab: Videos
 
-`videos` — array of rows. Each: `{ name, url, notes }`. A library of demo-video URLs (reference list).
+- `demoVideoUrls` — array of `{ name, url }`. **Central demo videos**: uploaded once in
+  the dashboard (stored in Supabase Storage), served via the config URL. Each extension
+  downloads them and sends them as **native** attachments **once per chat** — including
+  on quiet/older chats it revisits (not just right after a reply). The buyer never sees a link.
+- `demoVideoDelaySec` — number (default `10`). Seconds to wait after a fresh reply before
+  sending the first video (on a revisit it's sent immediately).
+- `demoVideoBetweenSec` — number (default `8`). Seconds to pause **between** videos when
+  several are configured.
+- `videos` — array of `{ name, url, notes }`. A reference URL library only (not auto-sent).
 
 ## NOT web-managed (per-machine, stay in the extension)
 
 These live in each computer's local storage and are **not** in the config JSON:
 - `enabled` — on/off toggle per machine.
+- `machineLabel` — how this computer/account shows up in the web app's **Activity** log (Settings → "This computer's label"). Falls back to a stable random id.
 - `videoEnabled` (bool), `videoDelaySec` (number, default 10), `demoVideos` (uploaded
   mp4 files as base64) — the actual demo video is uploaded per machine (too big to serve
   as JSON). The **Videos** tab above syncs video *URLs* only.

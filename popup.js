@@ -16,6 +16,8 @@
     return new Promise((r) => chrome.runtime.sendMessage({ type: "SAVE_SETTINGS", settings: s }, r));
   }
 
+  try { if ($("ver")) $("ver").textContent = "v" + chrome.runtime.getManifest().version; } catch (e) { /* cosmetic */ }
+
   function renderStatePill(on) {
     const pill = $("statePill");
     pill.textContent = on ? "ON" : "OFF";
@@ -30,9 +32,22 @@
       $("apiKey").textContent = s.apiKeySet ? "set ✓" : "NOT set";
       $("apiKey").className = s.apiKeySet ? "ok" : "bad";
       $("hour").textContent = `${s.hourCount} / ${s.hourlyCap}`;
-      $("day").textContent = `${s.dayCount} / ${s.dailyCap}`;
+      // Show the cap that is actually ENFORCED (s.fullDailyCap). s.dailyCap is the
+      // warm-up display target, which confused ("34 / 10") — warm-up isn't enforced.
+      $("day").textContent = `${s.dayCount} / ${s.fullDailyCap != null ? s.fullDailyCap : s.dailyCap}`;
       $("hours").textContent = s.withinHours ? "open ✓" : "closed";
       $("hours").className = s.withinHours ? "ok" : "warn";
+      // Activity-log (central) health — so an empty Activity tab is self-explaining.
+      const cl = $("cloudlog");
+      if (cl) {
+        const m = s.lastMirror;
+        if (!m) { cl.textContent = "no sends yet"; cl.className = "muted"; }
+        else if (m.ok) { cl.textContent = "✓ reporting"; cl.className = "ok"; }
+        else { cl.textContent = "✗ " + (m.error || "failed"); cl.className = "bad"; }
+        // Frozen cloud sync outranks everything: settings (incl. dashboard videos)
+        // are no longer updating on this machine — log in again in Options.
+        if (s.cloudStale) { cl.textContent = "⚠ cloud sync frozen — log in again (Options)"; cl.className = "bad"; }
+      }
     });
   }
 
@@ -51,6 +66,7 @@
       ["signal matched", tick.signalMatched || "—"],
       ["last action", tick.lastAction || "—"],
       ["last reply", tick.lastReplySent || "—"],
+      ["video status", tick.videoLast || "—"],
       ["last error", tick.lastError || "—"],
     ];
     for (const [k, v] of pairs) {
@@ -174,6 +190,134 @@
     settings.responseDelaySec = Number($("delay").value);
     $("delayVal").textContent = settings.responseDelaySec;
     await saveSettings(settings);
+  }
+
+  /* ----- Wake scanner: re-inject the bot into every open Messenger tab, so the
+   * operator never has to reload pages by hand if a tab ever looks stalled. ----- */
+  if ($("wake")) {
+    $("wake").addEventListener("click", () => {
+      $("wakeStatus").textContent = "Waking…";
+      chrome.runtime.sendMessage({ type: "WAKE_TABS" }, (r) => {
+        $("wakeStatus").textContent = chrome.runtime.lastError ? "error" : "Scanner re-armed ✓";
+        setTimeout(() => ($("wakeStatus").textContent = ""), 2500);
+      });
+    });
+  }
+
+  /* The updater has to know the unpacked folder's real name to write into it,
+   * and only a foreground page can read it — so the popup reports it to the
+   * background every time it opens. Renamed folders then auto-update fine. */
+  try {
+    if (chrome.runtime.getPackageDirectoryEntry) {
+      chrome.runtime.getPackageDirectoryEntry((dir) => {
+        void chrome.runtime.lastError;
+        if (dir && dir.name) {
+          chrome.runtime.sendMessage({ type: "SUD_DIRNAME", name: dir.name }, () => void chrome.runtime.lastError);
+        }
+      });
+    }
+  } catch (e) { /* optional signal — the updater falls back to known names */ }
+
+  /* ----- 🩺 One-click diagnostic — copy a full (redacted) state report -----
+   * Combines the background's storage/config/queue report with a live probe of
+   * every open Messenger tab (sidebar rows + detector verdicts on the open chat),
+   * drops it in the textarea AND the clipboard. The operator pastes it to Claude
+   * so failures are diagnosed from facts instead of guesses. No secrets: the API
+   * key and config-link key are never included (see buildDiagnostic). */
+  if ($("diagAll")) {
+    $("diagAll").addEventListener("click", async () => {
+      const s = $("diagAllStatus");
+      s.className = "muted";
+      s.textContent = "Collecting…";
+      const parts = [];
+      const bg = await new Promise((r) =>
+        chrome.runtime.sendMessage({ type: "GET_DIAGNOSTIC" }, (x) => r(chrome.runtime.lastError ? null : x))
+      );
+      parts.push(bg && bg.ok ? bg.text : "background report FAILED: " + ((bg && bg.error) || "no response"));
+      const tabs = await new Promise((r) =>
+        chrome.tabs.query({ url: EXISTING_TAB_MATCH }, (t) => r(chrome.runtime.lastError ? [] : t || []))
+      );
+      if (!tabs.length) parts.push("(no Messenger tab open on this profile — live sidebar section missing. Press 📨 Open Marketplace, wait 10s, run the diagnostic again.)");
+      for (const t of tabs.slice(0, 4)) {
+        const resp = await new Promise((r) =>
+          chrome.tabs.sendMessage(t.id, { type: "DIAG_PROBE" }, (x) => r(chrome.runtime.lastError ? null : x))
+        );
+        parts.push(
+          resp && resp.ok
+            ? resp.text
+            : "TAB " + (t.url || "?").replace(/[?#].*$/, "") + " — SCANNER NOT RESPONDING (this is itself a finding: press ⚡ Wake, or reload the tab, then re-run)" +
+              (resp && resp.error ? " [" + resp.error + "]" : "")
+        );
+      }
+      const report = "===== SubSell DIAGNOSTIC — paste this whole block to Claude =====\n" + parts.join("\n---\n") + "\n===== END =====";
+      $("dump").value = report;
+      try {
+        await navigator.clipboard.writeText(report);
+        s.textContent = "copied ✓ — now paste it to Claude";
+        s.className = "ok";
+      } catch (e) {
+        $("dump").focus();
+        $("dump").select();
+        s.textContent = "press Ctrl+C to copy, then paste to Claude";
+        s.className = "warn";
+      }
+    });
+  }
+
+  /* ----- One-click backlog catch-up (THIS computer) — no per-chat work -----
+   * Re-queues every replied-to chat that has no confirmed video; delivery runs
+   * through the normal paced, duplicate-guarded video pipeline. Only clears
+   * old ambiguous marks — genuine sends are kept. New buyers already get videos
+   * automatically, so this is a one-time cleanup per machine. */
+  if ($("catchUpVideos")) {
+    $("catchUpVideos").addEventListener("click", async () => {
+      const sure = confirm(
+        "Catch up videos on THIS computer?\n\nEvery chat you've replied to that has no video yet will get its video set over the next while (paced automatically so it never interrupts replies).\n\nChats that already have a visible video are skipped. One rare edge: a video sent long ago and scrolled far out of view could resend. Press OK to proceed."
+      );
+      if (!sure) return;
+      const tab = await activeTab();
+      if (!tab) { $("catchUpStatus").textContent = "open a Messenger tab first"; return; }
+      $("catchUpStatus").textContent = "Arming…";
+      chrome.tabs.sendMessage(tab.id, { type: "CATCH_UP_VIDEOS" }, (resp) => {
+        if (chrome.runtime.lastError || !resp) { $("catchUpStatus").textContent = "open messenger.com in this tab first"; return; }
+        $("catchUpStatus").textContent = resp.ok
+          ? "on ✓ — re-queued " + resp.cleared + " chat(s); videos will send automatically"
+          : (resp.error || "failed");
+      });
+    });
+  }
+
+  /* ----- Maintenance: clear the "video already sent" mark for the OPEN chat -----
+   * For chats wrongly marked served (old bug eras). Operator-verified, one chat at
+   * a time; the content script refuses when a sent video is actually visible. */
+  if ($("clearVideoMark")) {
+    $("clearVideoMark").addEventListener("click", async () => {
+      const sure = confirm(
+        "Only continue if you can SEE this chat contains NO video from us — scroll the conversation up and check first. If a video was delivered but is out of view, clearing will cause a RE-SEND."
+      );
+      if (!sure) return;
+      const tab = await activeTab();
+      if (!tab) { $("clearVideoStatus").textContent = "no active tab"; return; }
+      chrome.tabs.sendMessage(tab.id, { type: "CLEAR_VIDEO_MARK_OPEN_CHAT" }, (resp) => {
+        if (chrome.runtime.lastError || !resp) { $("clearVideoStatus").textContent = "open the chat in Messenger first"; return; }
+        $("clearVideoStatus").textContent = resp.ok
+          ? (resp.cleared ? "cleared — video will send on a later pass ✓" : "no video mark found for this chat")
+          : (resp.error || "failed");
+      });
+    });
+  }
+
+  /* ----- Built-in updater: check the cloud and update this extension now ----- */
+  if ($("checkUpdate")) {
+    $("checkUpdate").addEventListener("click", () => {
+      $("updStatus").textContent = "Checking…";
+      chrome.runtime.sendMessage({ type: "CHECK_UPDATE" }, (r) => {
+        if (chrome.runtime.lastError || !r) { $("updStatus").textContent = "error"; return; }
+        if (r.upToDate) $("updStatus").textContent = "Up to date ✓ (v" + r.version + ")";
+        else if (r.updated) $("updStatus").textContent = "v" + r.version + " downloaded — reloading…";
+        else $("updStatus").textContent = r.reason || "failed";
+      });
+    });
   }
 
   /* ----- Open Marketplace: force-open the Messenger Marketplace inbox -----

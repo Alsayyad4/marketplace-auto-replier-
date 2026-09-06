@@ -32,13 +32,38 @@
     </style>
   </head>
   <body>
-    <h1>SubSell Auto-Reply</h1>
+    <h1>SubSell Auto-Reply <span id="ver" class="muted" style="font-size:11px;font-weight:normal;"></span></h1>
 
     <div class="row">
       <button id="toggle" class="primary">Turn ON</button>
       <span id="statePill" class="pill off">OFF</span>
       <span class="spacer"></span>
       <a href="#" id="openOptions">Settings ▸</a>
+    </div>
+
+    <div class="row">
+      <button id="wake">⚡ Wake scanner (all tabs)</button>
+      <span id="wakeStatus" class="muted"></span>
+    </div>
+
+    <div class="row">
+      <button id="checkUpdate">⬇ Update now</button>
+      <span id="updStatus" class="muted"></span>
+    </div>
+
+    <div class="row">
+      <button id="diagAll">🩺 Diagnostic (copy &amp; send to Claude)</button>
+      <span id="diagAllStatus" class="muted"></span>
+    </div>
+
+    <div class="row">
+      <button id="catchUpVideos">📹 Catch up videos (this computer)</button>
+      <span id="catchUpStatus" class="muted"></span>
+    </div>
+
+    <div class="row">
+      <button id="clearVideoMark">🎬 Resend video to OPEN chat</button>
+      <span id="clearVideoStatus" class="muted"></span>
     </div>
 
     <div class="row">
@@ -53,6 +78,7 @@
         <div>This hour</div><div id="hour">—</div>
         <div>Today</div><div id="day">—</div>
         <div>Business hours</div><div id="hours">—</div>
+        <div>Activity log</div><div id="cloudlog">—</div>
       </div>
     </div>
 

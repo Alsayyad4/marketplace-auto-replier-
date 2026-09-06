@@ -139,7 +139,7 @@ create policy "owner can read/write own row"
 **Config endpoint (Edge Function `config`):** public, takes `?key=<config_key>`,
 looks up the row by `config_key`, returns `row.config` as JSON with permissive CORS.
 This is the URL the user pastes into the extension. Example:
-`https://<project>.supabase.co/functions/v1/config?key=<config_key>`
+`https://<project>.supabase.co/functions/v1/subsell-config?key=<config_key>`
 
 (Because the key grants access to the API key inside, treat `config_key` as a secret:
 let the user regenerate it, and keep `apiKey` only in the config served over HTTPS.)

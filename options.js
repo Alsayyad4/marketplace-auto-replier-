@@ -7,7 +7,7 @@
   const DEFAULTS = {
     enabled: false,
     apiKey: "",
-    model: "claude-sonnet-4-6",
+    model: "claude-haiku-4-5",
     responseDelaySec: 30,
     jitterSec: 60,
     hourlyCap: 30,
@@ -27,6 +27,7 @@
     examples: "",
     offPlatformGuard: true,
     closerMode: true,
+    closerIntensity: "medium",
     noExactPrices: true,
     closerGoals:
       "Your #1 goal is to get the buyer to come visit the shop in person. We give better prices in person than online. We also do trade-ins/exchanges, buyback of their old phone, and have liquidation deals — mention these naturally when relevant. Build excitement and urgency without being pushy. Always steer toward 'come by the shop and we'll take care of you'.",
@@ -47,6 +48,13 @@
     listings: [],
     followUps: [],
     videos: [],
+    demoVideoUrls: [],
+    demoVideoDelaySec: 10,
+    demoVideoBetweenSec: 8,
+    smartFollowupEnabled: false,
+    smartFollowupMaxCount: 1,
+    smartFollowupQuietHours: 6,
+    smartFollowupGapHours: 24,
   };
 
   let settings = Object.assign({}, DEFAULTS);
@@ -82,6 +90,7 @@
     ["examples", "value"],
     ["offPlatformGuard", "checked"],
     ["closerMode", "checked"],
+    ["closerIntensity", "value"],
     ["noExactPrices", "checked"],
     ["closerGoals", "value"],
     ["priceList", "value"],
@@ -98,6 +107,12 @@
     ["warmupEnabled", "checked"],
     ["warmupDays", "number"],
     ["warmupStartCap", "number"],
+    ["smartFollowupEnabled", "checked"],
+    ["smartFollowupMaxCount", "number"],
+    ["smartFollowupQuietHours", "number"],
+    ["smartFollowupGapHours", "number"],
+    ["demoVideoDelaySec", "number"],
+    ["demoVideoBetweenSec", "number"],
   ];
 
   function fieldsToForm() {
@@ -113,7 +128,13 @@
       const el = $(id);
       if (!el) continue;
       if (kind === "checked") settings[id] = el.checked;
-      else if (kind === "number") settings[id] = Number(el.value);
+      else if (kind === "number") {
+        // A BLANK box must not silently save 0 (Number("") === 0) — that zeroed the
+        // video delay/gap timings whenever a field was left empty. Blank = keep the
+        // previously saved value (or the default).
+        const n = Number(el.value);
+        if (el.value.trim() !== "" && Number.isFinite(n)) settings[id] = n;
+      }
       else settings[id] = el.value;
     }
   }
@@ -199,6 +220,26 @@
       [{ key: "name" }, { key: "url" }, { key: "notes", type: "textarea" }],
       renderVideos
     );
+  }
+  // Read-only list of central demo videos (uploaded/removed in the web app).
+  function renderCentralVideos() {
+    const el = $("centralVideoList");
+    if (!el) return;
+    const vids = Array.isArray(settings.demoVideoUrls) ? settings.demoVideoUrls : [];
+    if (!vids.length) {
+      el.textContent = "None set in the web app.";
+      return;
+    }
+    el.innerHTML = "";
+    vids.forEach((v, i) => {
+      const row = document.createElement("div");
+      const a = document.createElement("a");
+      a.href = v.url;
+      a.target = "_blank";
+      a.textContent = `${i + 1}. ${v.name || "video"}`;
+      row.appendChild(a);
+      el.appendChild(row);
+    });
   }
 
   $("addListing").addEventListener("click", () => {
@@ -349,15 +390,22 @@
 
   /* ----- remote config (the "permanent link") ----- */
   function loadRemoteConfig() {
-    chrome.storage.local.get(["remoteConfigUrl", "remoteConfigAt"], (r) => {
+    chrome.storage.local.get(["remoteConfigUrl", "remoteConfigAt", "machineLabel"], (r) => {
       if ($("remoteConfigUrl")) $("remoteConfigUrl").value = (r && r.remoteConfigUrl) || "";
+      if ($("machineLabel")) $("machineLabel").value = (r && r.machineLabel) || "";
       if ($("configStatus") && r && r.remoteConfigAt)
         $("configStatus").textContent = "last synced " + new Date(r.remoteConfigAt).toLocaleString();
     });
   }
   if ($("remoteConfigUrl")) {
     $("remoteConfigUrl").addEventListener("change", () => {
-      chrome.storage.local.set({ remoteConfigUrl: ($("remoteConfigUrl").value || "").trim() });
+      // Clear the cached config_key so the activity log re-derives it from the new URL.
+      chrome.storage.local.set({ remoteConfigUrl: ($("remoteConfigUrl").value || "").trim(), configKey: "" });
+    });
+  }
+  if ($("machineLabel")) {
+    $("machineLabel").addEventListener("change", () => {
+      chrome.storage.local.set({ machineLabel: ($("machineLabel").value || "").trim() });
     });
   }
   if ($("fetchConfig")) {
@@ -390,6 +438,97 @@
     });
   }
   loadRemoteConfig();
+
+  /* ----- cloud sync (Supabase web app) ----- */
+  function fmtWhen(ts) {
+    return ts ? new Date(ts).toLocaleString() : "never";
+  }
+  function refreshCloudStatus() {
+    chrome.runtime.sendMessage({ type: "CLOUD_STATUS" }, (s) => {
+      if (chrome.runtime.lastError || !s || !s.ok) return;
+      const el = $("cloudStatus");
+      if (!el) return;
+      if (!s.configured) {
+        el.textContent = "Not connected — enter your Supabase URL + anon key, then Save connection.";
+      } else if (!s.loggedIn) {
+        el.textContent = "Connected to " + s.url + " — log in to start syncing.";
+      } else {
+        el.textContent = "Logged in as " + (s.email || "?") + " · last synced " + fmtWhen(s.lastPullAt);
+      }
+    });
+  }
+  function persistCloudCreds(cb) {
+    const url = ($("supabaseUrl").value || "").trim();
+    const anonKey = ($("supabaseAnonKey").value || "").trim();
+    chrome.runtime.sendMessage({ type: "CLOUD_SET_CREDS", url, anonKey }, () => cb && cb());
+  }
+  if ($("saveCloudCreds")) {
+    $("saveCloudCreds").addEventListener("click", () => {
+      persistCloudCreds(() => {
+        $("cloudMsg").textContent = "Connection saved.";
+        setTimeout(() => ($("cloudMsg").textContent = ""), 2000);
+        refreshCloudStatus();
+      });
+    });
+  }
+  if ($("cloudLogin")) {
+    $("cloudLogin").addEventListener("click", () => {
+      $("cloudMsg").textContent = "Logging in…";
+      // Persist creds first in case they were typed but not explicitly saved.
+      persistCloudCreds(() => {
+        chrome.runtime.sendMessage(
+          { type: "CLOUD_LOGIN", email: ($("cloudEmail").value || "").trim(), password: $("cloudPassword").value },
+          (r) => {
+            if (chrome.runtime.lastError) {
+              $("cloudMsg").textContent = "Error: " + chrome.runtime.lastError.message;
+              return;
+            }
+            if (!r || !r.ok) {
+              $("cloudMsg").textContent = "Login failed: " + (r && r.error);
+              return;
+            }
+            $("cloudPassword").value = "";
+            $("cloudMsg").textContent = "Logged in ✓ — pulled your cloud settings.";
+            refreshCloudStatus();
+            load(); // re-read merged settings (cloud now wins) into the form
+          }
+        );
+      });
+    });
+  }
+  if ($("cloudLogout")) {
+    $("cloudLogout").addEventListener("click", () => {
+      chrome.runtime.sendMessage({ type: "CLOUD_LOGOUT" }, () => {
+        $("cloudMsg").textContent = "Logged out.";
+        setTimeout(() => ($("cloudMsg").textContent = ""), 2000);
+        refreshCloudStatus();
+        load();
+      });
+    });
+  }
+  if ($("cloudPull")) {
+    $("cloudPull").addEventListener("click", () => {
+      $("cloudMsg").textContent = "Pulling…";
+      chrome.runtime.sendMessage({ type: "CLOUD_PULL" }, (r) => {
+        if (chrome.runtime.lastError) {
+          $("cloudMsg").textContent = "Error: " + chrome.runtime.lastError.message;
+          return;
+        }
+        $("cloudMsg").textContent =
+          r && r.ok ? (r.empty ? "No cloud config saved yet." : "Synced ✓") : "Failed: " + (r && r.error);
+        refreshCloudStatus();
+        load();
+      });
+    });
+  }
+  function loadCloud() {
+    chrome.storage.local.get(["supabaseUrl", "supabaseAnonKey"], (r) => {
+      if ($("supabaseUrl")) $("supabaseUrl").value = (r && r.supabaseUrl) || "";
+      if ($("supabaseAnonKey")) $("supabaseAnonKey").value = (r && r.supabaseAnonKey) || "";
+      refreshCloudStatus();
+    });
+  }
+  loadCloud();
 
   /* ----- demo video(s) (stored locally on this computer, NOT synced) ----- */
   let demoVideos = [];
@@ -484,6 +623,7 @@
       renderListings();
       renderFollowUps();
       renderVideos();
+      renderCentralVideos();
     });
   }
 

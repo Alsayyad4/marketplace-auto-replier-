@@ -54,13 +54,35 @@
         <input type="password" id="apiKey" placeholder="sk-ant-…" />
         <label>Model</label>
         <select id="model">
+          <option value="claude-haiku-4-5-20251001">claude-haiku-4-5 (recommended — 3× cheaper)</option>
           <option value="claude-sonnet-4-6">claude-sonnet-4-6</option>
           <option value="claude-opus-4-8">claude-opus-4-8</option>
-          <option value="claude-haiku-4-5-20251001">claude-haiku-4-5</option>
         </select>
 
         <hr />
-        <label>Sync across computers — permanent link <span class="hint">put your key + settings in ONE shared file; every Chrome reads from it (works across different Google accounts). Edit the file → all machines update.</span></label>
+        <label>☁️ Cloud sync (web app) <span class="hint">the recommended way to run on many computers: log into ONE account; edit settings here or in the web dashboard and every connected Chrome updates within ~1 min — even across different Google accounts. Setup: cloud/SUPABASE_SETUP.md</span></label>
+        <div id="cloudStatus" class="hint">Checking…</div>
+        <div class="inline">
+          <div><label>Supabase project URL <span class="hint">safe to share</span></label><input type="text" id="supabaseUrl" placeholder="https://xxxx.supabase.co" /></div>
+          <div><label>Supabase anon (public) key <span class="hint">safe to share — NOT service_role</span></label><input type="password" id="supabaseAnonKey" placeholder="eyJ…" /></div>
+        </div>
+        <div class="row">
+          <button id="saveCloudCreds" type="button">Save connection</button>
+        </div>
+        <div class="inline">
+          <div><label>Account email</label><input type="text" id="cloudEmail" placeholder="you@example.com" /></div>
+          <div><label>Account password</label><input type="password" id="cloudPassword" placeholder="••••••••" /></div>
+        </div>
+        <div class="row">
+          <button id="cloudLogin" type="button" class="primary">Log in</button>
+          <button id="cloudPull" type="button">⟳ Pull now</button>
+          <button id="cloudLogout" type="button" class="danger">Log out</button>
+          <span id="cloudMsg" class="hint"></span>
+        </div>
+        <div class="hint">⚠️ Your API key is stored in your private cloud row (only your login can read it). While you're logged in, the cloud is the source of truth and overrides the link/Chrome-sync/local config below. Saving on this page also pushes to the cloud.</div>
+
+        <hr />
+        <label>Sync across computers — permanent link (older alternative) <span class="hint">put your key + settings in ONE shared file; every Chrome reads from it (works across different Google accounts). Edit the file → all machines update. Prefer Cloud sync above.</span></label>
         <div class="row">
           <button id="exportConfig" type="button">⬇ Export config to file</button>
           <span class="hint">do this on a fully set-up machine, then paste the file into a SECRET GitHub gist</span>
@@ -72,6 +94,10 @@
           <span id="configStatus" class="hint"></span>
         </div>
         <div class="hint">⚠️ Your API key lives inside that file — keep the link PRIVATE/secret, and rotate the key if it ever leaks. While a URL is set, the shared file is the source of truth (this page's fields are ignored).</div>
+
+        <hr />
+        <label>This computer's label <span class="hint">how this machine/account shows up in the web app's Activity log (e.g. "Shop PC — Nathan"). Local to this computer.</span></label>
+        <input type="text" id="machineLabel" placeholder="e.g. Shop PC — account 1" />
 
         <div class="inline">
           <div><label>Response delay (s)</label><input type="number" id="responseDelaySec" min="0" /></div>
@@ -127,6 +153,12 @@
 
         <hr />
         <label class="check"><input type="checkbox" id="closerMode" /> Closer mode <span class="hint">drive buyers to the shop; mention exchange / buyback / liquidation</span></label>
+        <label>Closing style <span class="hint">how hard the bot closes for the shop visit (needs Closer mode ON)</span></label>
+        <select id="closerIntensity">
+          <option value="soft">Soft — helpful, one gentle invite</option>
+          <option value="medium">Balanced — guide toward the visit</option>
+          <option value="master">Master closer — full sales playbook (reserve, assumptive close, objection handling)</option>
+        </select>
         <label class="check"><input type="checkbox" id="noExactPrices" /> Never quote exact prices in chat <span class="hint">promise the best deal in person instead (avoids price disputes)</span></label>
 
         <hr />
@@ -181,6 +213,14 @@
 
       <!-- FOLLOWUPS -->
       <section id="followups">
+        <label class="check"><input type="checkbox" id="smartFollowupEnabled" /> Smart follow-up on quiet chats <span class="hint">when a buyer goes quiet, Claude writes ONE short tailored nudge or skips — capped so it never spams. ⚠️ proactive outbound = higher ban risk; keep counts low.</span></label>
+        <div class="inline">
+          <div><label>Max follow-ups per chat <span class="hint">e.g. 1 or 2</span></label><input type="number" id="smartFollowupMaxCount" min="0" max="5" /></div>
+          <div><label>Quiet hours before the 1st</label><input type="number" id="smartFollowupQuietHours" min="1" /></div>
+          <div><label>Hours between follow-ups</label><input type="number" id="smartFollowupGapHours" min="1" /></div>
+        </div>
+        <hr />
+        <label>Simple timer follow-up <span class="hint">fixed message; separate from smart — use one or the other</span></label>
         <div class="row"><button id="addFollowUp">+ Add follow-up</button></div>
         <table id="followupsTable">
           <thead><tr><th>Name</th><th>After (min)</th><th>Message</th><th>On</th><th></th></tr></thead>
@@ -190,6 +230,13 @@
 
       <!-- VIDEOS -->
       <section id="videos">
+        <label>☁️ Central demo videos <span class="hint">uploaded in the web app (Videos tab) and synced here. Sent as a native attachment, once per chat. Upload/remove them in the web app.</span></label>
+        <div id="centralVideoList" class="hint">None set in the web app.</div>
+        <div class="inline">
+                    <div class="hint">Videos are sent instantly, all together in one message, the moment a buyer writes — no waiting, nothing to configure.</div>
+        </div>
+        <hr />
+        <label>Video URL library <span class="hint">reference list only (not auto-sent)</span></label>
         <div class="row"><button id="addVideo">+ Add video</button></div>
         <table id="videosTable">
           <thead><tr><th>Name</th><th>URL</th><th>Notes</th><th></th></tr></thead>

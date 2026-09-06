@@ -3,16 +3,16 @@
   <head>
     <meta charset="utf-8" />
     <meta name="viewport" content="width=device-width, initial-scale=1" />
-    <title>SubSell Auto-Reply — Control Panel</title>
+    <meta http-equiv="Cache-Control" content="no-cache, no-store, must-revalidate" />
+    <title>SubSell — Settings</title>
     <style>
       :root { color-scheme: light dark; }
       * { box-sizing: border-box; }
       body { font-family: -apple-system, Segoe UI, Roboto, Arial, sans-serif; margin: 0; font-size: 14px; line-height: 1.5; }
-      a { color: #1877f2; }
       header { padding: 12px 18px; border-bottom: 1px solid #ccc; display: flex; align-items: center; gap: 12px; flex-wrap: wrap; }
       header h1 { font-size: 17px; margin: 0; }
       header .who { margin-left: auto; color: #888; font-size: 12px; display: flex; gap: 10px; align-items: center; }
-      main { padding: 18px; max-width: 960px; margin: 0 auto; }
+      main { padding: 18px; max-width: 940px; margin: 0 auto; }
       label { display: block; margin: 12px 0 3px; font-weight: 600; }
       .hint { font-weight: 400; color: #888; font-size: 12px; }
       input[type="text"], input[type="password"], input[type="email"], input[type="number"], select, textarea {
@@ -27,156 +27,93 @@
       section.pane { display: none; }
       section.pane.active { display: block; }
       table { border-collapse: collapse; width: 100%; margin-top: 8px; }
-      th, td { border: 1px solid #ccc; padding: 4px 6px; text-align: left; vertical-align: top; }
+      th, td { border: 1px solid #ccc; padding: 4px 6px; text-align: left; }
       th { background: rgba(127,127,127,.12); }
       td input, td textarea { max-width: none; width: 100%; }
       button { font-size: 14px; padding: 8px 14px; border-radius: 6px; border: 1px solid #888; background: #f4f4f4; color: #111; cursor: pointer; }
       button.primary { background: #1877f2; color: #fff; border-color: #1877f2; }
       button.danger { color: #c0392b; }
       button.google { background:#fff; color:#222; border:1px solid #ccc; font-weight:600; width:100%; max-width:340px; }
-      button.big { font-size: 16px; padding: 12px 20px; font-weight: 700; }
-      .bar { position: sticky; bottom: 0; background: Canvas; padding: 12px 18px; border-top: 1px solid #ccc; display: flex; gap: 12px; align-items: center; flex-wrap: wrap; }
+      .bar { position: sticky; bottom: 0; background: Canvas; padding: 12px 18px; border-top: 1px solid #ccc; display: flex; gap: 12px; align-items: center; }
       .saved { color: #1a8f3c; }
       .err { color: #c0392b; }
       .row { display: flex; gap: 8px; align-items: center; margin: 8px 0; flex-wrap: wrap; }
-      .check { display: inline-flex; align-items: center; gap: 6px; font-weight: 400; margin: 6px 0; }
-      .card { max-width: 380px; margin: 6vh auto; padding: 26px; border: 1px solid #ccc; border-radius: 12px; }
+      .check { display: inline-flex; align-items: center; gap: 6px; font-weight: 400; }
+      .card { max-width: 380px; margin: 8vh auto; padding: 26px; border: 1px solid #ccc; border-radius: 12px; }
       .card h1 { margin: 0 0 4px; font-size: 20px; }
       .hidden { display: none !important; }
       .banner { padding: 12px 14px; background: rgba(24,119,242,.08); border: 1px solid rgba(24,119,242,.35); border-radius: 8px; margin-bottom: 14px; font-size: 13px; }
-      .banner.warn { background: rgba(240,180,0,.10); border-color: rgba(200,150,0,.5); }
       .urlbox { display:flex; gap:8px; align-items:center; flex-wrap:wrap; margin-top:6px; }
       .urlbox input { max-width: 560px; font-family: ui-monospace, monospace; font-size: 12px; }
       .divider { display:flex; align-items:center; gap:10px; color:#999; margin:16px 0; font-size:12px; }
       .divider::before, .divider::after { content:""; flex:1; border-top:1px solid #ccc; }
       hr { border: none; border-top: 1px solid #ddd; margin: 18px 0; }
-      pre { background: rgba(127,127,127,.10); padding: 10px; border-radius: 6px; white-space: pre-wrap; word-break: break-word; }
-      .install { max-width: 720px; margin: 0 auto 18px; padding: 18px; border: 2px solid #1877f2; border-radius: 12px; background: rgba(24,119,242,.06); }
-      .install h2 { margin: 0 0 6px; font-size: 18px; }
-      .steps { margin: 10px 0 0; padding-left: 20px; }
-      .steps li { margin: 6px 0; }
-      kbd { background: rgba(127,127,127,.2); border-radius: 4px; padding: 1px 6px; font-family: ui-monospace, monospace; font-size: 12px; }
-      .pill { display:inline-block; font-size: 11px; padding: 2px 8px; border-radius: 999px; background: rgba(127,127,127,.18); margin-left: 6px; vertical-align: middle; }
-      .muted { color:#888; }
-      .center { text-align:center; }
     </style>
   </head>
   <body>
-    <!-- ============================ LOGIN / LANDING ============================ -->
+    <!-- LOGIN -->
     <div id="loginView">
-      <main>
-        <h1 style="text-align:center;margin-top:8px;">SubSell Auto-Reply</h1>
-        <p class="center muted" style="margin-top:0;">Configure the bot once here → it runs on every computer's Chrome.</p>
-
-        <!-- INSTALL / ADD TO CHROME (no login needed) -->
-        <div class="install">
-          <h2>1 · Get the extension <span class="pill">required</span></h2>
-          <p class="hint" style="font-size:13px;">
-            The replying happens inside a Chrome <b>extension</b> — a web page can't type into
-            Messenger by itself. Install it once per computer, then come back here to set it up.
-          </p>
-          <div class="row">
-            <a id="addToChromeBtn" class="big" style="display:none;text-decoration:none;"><button class="primary big" type="button">➕ Add to Chrome</button></a>
-          </div>
-          <div id="manualInstall">
-            <p id="webstoreNote" class="hint" style="margin-top:4px;">
-              Not on the Chrome Web Store yet — install it manually (2 minutes, free):
-            </p>
-            <div class="row">
-              <a id="downloadZipBtn" href="#" target="_blank" rel="noopener"><button class="primary" type="button">⬇ Download the extension (.zip)</button></a>
-            </div>
-            <ol class="steps">
-              <li>Unzip the download. You should see <kbd>manifest.json</kbd> directly inside the folder.</li>
-              <li>Open <kbd>chrome://extensions</kbd> and turn on <b>Developer mode</b> (top-right).</li>
-              <li>Click <b>Load unpacked</b> and pick that folder.</li>
-              <li>The <b>SubSell</b> icon appears. Done — now sign in below to configure it.</li>
-            </ol>
-          </div>
+      <div class="card">
+        <h1>SubSell Settings</h1>
+        <p class="hint">Sign in to edit the settings shared by all your computers.</p>
+        <div id="configWarn" class="banner err hidden">
+          Not connected to a Supabase project. Fill in <code>docs/config.js</code> first —
+          see <code>supabase/README.md</code>.
         </div>
-
-        <!-- SIGN IN -->
-        <div class="card">
-          <h1>2 · Sign in</h1>
-          <p class="hint">Sign in to edit the settings shared by all your computers.</p>
-          <div id="configWarn" class="banner err hidden">
-            Not connected to a Supabase project. Fill in <code>docs/config.js</code> first —
-            see <code>supabase/README.md</code>.
-          </div>
-          <button id="googleBtn" class="google">Sign in with Google</button>
-          <div class="divider">or use email</div>
-          <label>Email</label>
-          <input type="email" id="loginEmail" autocomplete="username" placeholder="you@example.com" />
-          <label>Password</label>
-          <input type="password" id="loginPassword" autocomplete="current-password" placeholder="••••••••" />
-          <div class="row" style="margin-top:14px;">
-            <button id="loginBtn" class="primary">Log in</button>
-            <button id="signupBtn">Create account</button>
-          </div>
-          <div id="loginStatus" class="hint"></div>
+        <button id="googleBtn" class="google">Sign in with Google</button>
+        <div class="divider">or use email</div>
+        <label>Email</label>
+        <input type="email" id="loginEmail" autocomplete="username" placeholder="you@example.com" />
+        <label>Password</label>
+        <input type="password" id="loginPassword" autocomplete="current-password" placeholder="••••••••" />
+        <div class="row" style="margin-top:14px;">
+          <button id="loginBtn" class="primary">Log in</button>
+          <button id="signupBtn">Create account</button>
         </div>
-      </main>
+        <div id="loginStatus" class="hint"></div>
+      </div>
     </div>
 
-    <!-- ================================ APP ================================ -->
+    <!-- APP -->
     <div id="appView" class="hidden">
       <header>
         <h1>SubSell — Settings</h1>
-        <div class="who">
-          <a id="getExtLink" href="#getext">＋ Add to Chrome</a>
-          <span id="whoami"></span>
-          <button id="logoutBtn">Log out</button>
-        </div>
+        <div class="who"><span id="whoami"></span><button id="logoutBtn">Log out</button></div>
       </header>
 
       <main>
         <div class="banner">
-          <b>Your config link</b> — paste this into the extension on each computer:
+          <b>Your config URL</b> — paste this into the extension on each computer:
           <b>Settings → General → Remote config URL → Fetch now</b>. Edits you save here
-          reach every machine within ~10&nbsp;min (or hit Fetch now).
+          reach every machine within ~10&nbsp;min.
           <div class="urlbox">
-            <input type="text" id="configUrl" readonly placeholder="(sign in to generate)" />
+            <input type="text" id="configUrl" readonly />
             <button id="copyUrl" class="primary">Copy</button>
-            <button id="regenKey" class="danger" title="Invalidate the old URL and make a new one">Regenerate</button>
+            <button id="regenKey" class="danger" title="Invalidate the old URL and make a new one">Regenerate key</button>
           </div>
-          <div class="hint" style="margin-top:6px;">⚠️ This link contains a secret key that returns your API key — keep it private; regenerate if it leaks.</div>
+          <div class="hint" style="margin-top:6px;">⚠️ This URL contains a secret key that returns your API key — keep it private; regenerate if it leaks.</div>
         </div>
-
-        <details id="getext" class="banner">
-          <summary style="cursor:pointer;font-weight:600;">➕ Add to Chrome / install on another computer</summary>
-          <div style="margin-top:8px;">
-            <div class="row">
-              <a id="addToChromeBtn2" style="display:none;text-decoration:none;"><button class="primary" type="button">➕ Add to Chrome</button></a>
-              <a id="downloadZipBtn2" href="#" target="_blank" rel="noopener"><button type="button">⬇ Download .zip</button></a>
-            </div>
-            <ol class="steps">
-              <li>Unzip → open <kbd>chrome://extensions</kbd> → enable <b>Developer mode</b>.</li>
-              <li><b>Load unpacked</b> → pick the folder with <kbd>manifest.json</kbd>.</li>
-              <li>In the extension's <b>Settings → General</b>, paste your config link above into <b>Remote config URL</b> → <b>Fetch now</b>.</li>
-            </ol>
-          </div>
-        </details>
       </main>
 
       <div class="tabs">
         <div class="tab active" data-tab="general">General</div>
-        <div class="tab" data-tab="business">Business prompt</div>
+        <div class="tab" data-tab="business">Business</div>
         <div class="tab" data-tab="listings">Listings</div>
         <div class="tab" data-tab="followups">Follow-ups</div>
         <div class="tab" data-tab="videos">Videos</div>
-        <div class="tab" data-tab="test">Test responses</div>
-        <div class="tab" data-tab="log">Activity log</div>
+        <div class="tab" data-tab="activity">Activity</div>
       </div>
 
       <main>
         <!-- GENERAL -->
         <section id="general" class="pane active">
-          <label>Anthropic API key <span class="hint">stored in your private cloud row</span></label>
+          <label>Anthropic API key</label>
           <input type="password" id="apiKey" placeholder="sk-ant-…" />
           <label>Model</label>
           <select id="model">
+            <option value="claude-haiku-4-5-20251001">claude-haiku-4-5 (recommended — 3× cheaper)</option>
             <option value="claude-sonnet-4-6">claude-sonnet-4-6</option>
             <option value="claude-opus-4-8">claude-opus-4-8</option>
-            <option value="claude-haiku-4-5-20251001">claude-haiku-4-5</option>
           </select>
 
           <div class="inline">
@@ -188,7 +125,7 @@
             <div><label>Daily cap</label><input type="number" id="dailyCap" min="0" /></div>
           </div>
           <div class="inline">
-            <div><label>Max replies per conversation <span class="hint">total bot replies in one chat (0 = unlimited)</span></label><input type="number" id="maxRepliesPerConvo" min="0" /></div>
+            <div><label>Max replies / conversation <span class="hint">0 = unlimited</span></label><input type="number" id="maxRepliesPerConvo" min="0" /></div>
             <div><label>When that cap is hit</label>
               <select id="convoCapBehavior">
                 <option value="stop">Go quiet (stop replying)</option>
@@ -209,7 +146,7 @@
           </div>
 
           <hr />
-          <label class="check"><input type="checkbox" id="humanCadence" /> Human cadence <span class="hint">random breaks + occasional skipped cycles (less robotic, less suspicious)</span></label>
+          <label class="check"><input type="checkbox" id="humanCadence" /> Human cadence <span class="hint">random breaks + occasional skipped cycles</span></label>
           <div class="inline">
             <div><label>Skip chance (0–1)</label><input type="number" id="skipChance" min="0" max="1" step="0.01" /></div>
             <div><label>Break chance / cycle (0–1)</label><input type="number" id="breakChance" min="0" max="1" step="0.01" /></div>
@@ -220,19 +157,25 @@
           </div>
 
           <hr />
-          <label class="check"><input type="checkbox" id="warmupEnabled" /> Warm-up mode <span class="hint">new account ramps daily volume up over N days</span></label>
+          <label class="check"><input type="checkbox" id="warmupEnabled" /> Warm-up mode <span class="hint">ramp daily volume over N days</span></label>
           <div class="inline">
             <div><label>Warm-up days</label><input type="number" id="warmupDays" min="0" /></div>
             <div><label>Day-0 daily cap</label><input type="number" id="warmupStartCap" min="1" /></div>
           </div>
 
           <hr />
-          <label class="check"><input type="checkbox" id="offPlatformGuard" /> Off-platform guardrails <span class="hint">forbid phone numbers, links, "contact me elsewhere"; escalate instead</span></label>
-          <label class="check"><input type="checkbox" id="closerMode" /> Closer mode <span class="hint">drive buyers to the shop; mention exchange / buyback / liquidation</span></label>
-          <label class="check"><input type="checkbox" id="noExactPrices" /> Never quote exact prices in chat <span class="hint">promise the best deal in person instead (ignored when a Price list is set on the Business tab)</span></label>
+          <label class="check"><input type="checkbox" id="offPlatformGuard" /> Off-platform guardrails <span class="hint">forbid phone/email/links; escalate instead</span></label>
+          <label class="check"><input type="checkbox" id="closerMode" /> Closer mode <span class="hint">drive buyers to call/visit; trade-ins, buyback, liquidation</span></label>
+          <label>Closing style <span class="hint">how hard the bot closes for the shop visit (needs Closer mode ON)</span></label>
+          <select id="closerIntensity">
+            <option value="soft">Soft — helpful, one gentle invite</option>
+            <option value="medium">Balanced — guide toward the visit</option>
+            <option value="master">Master closer — full sales playbook (reserve, assumptive close, objection handling)</option>
+          </select>
+          <label class="check"><input type="checkbox" id="noExactPrices" /> Never quote exact prices <span class="hint">(ignored when a price list is set on the Business tab)</span></label>
 
           <hr />
-          <label class="check"><input type="checkbox" id="visitConfirmEnabled" /> Silent visit confirmation <span class="hint">after a buyer says they'll come, ask "still coming?"; records yes/no WITHOUT notifying you</span></label>
+          <label class="check"><input type="checkbox" id="visitConfirmEnabled" /> Silent visit confirmation <span class="hint">after a buyer says they'll come, ask "still coming?" silently</span></label>
           <div><label>Ask after (minutes)</label><input type="number" id="visitConfirmAfterMin" min="0" /></div>
         </section>
 
@@ -244,27 +187,23 @@
           <input type="text" id="businessAddress" />
           <label>Hours (text shown to Claude)</label>
           <input type="text" id="businessHoursText" />
-          <label>Business info <span class="hint">included in the system prompt</span></label>
+          <label>Business info</label>
           <textarea id="businessInfo"></textarea>
           <label>Instructions / tone</label>
           <textarea id="instructions"></textarea>
-          <label>Example conversations <span class="hint">few-shot teaching — paste real buyer→ideal-reply pairs, including when to send [VIDEO:url] or escalate [HUMAN]. The model copies your voice from these far better than from rules.</span></label>
-          <textarea id="examples" style="min-height:200px;" placeholder="Buyer: Le 13 est encore dispo?&#10;You: Allô! Oui tjs dispo 👍 256Go, batterie 91%. 420$ cash, pickup Beaubien.&#10;&#10;Buyer: Can I see it working?&#10;You: [VIDEO:https://…/iphone13.mp4] Here's a quick demo 🙂&#10;&#10;Buyer: Can you ship it and I'll e-transfer first?&#10;You: [HUMAN] buyer wants shipping + pay-first, possible scam"></textarea>
+          <label>Example conversations <span class="hint">few-shot buyer→ideal-reply pairs; strongly shapes the voice</span></label>
+          <textarea id="examples" style="min-height:200px;"></textarea>
           <label>Closer goals <span class="hint">how the bot sells the in-person visit (used when Closer mode is on)</span></label>
           <textarea id="closerGoals"></textarea>
-          <label>Price list <span class="hint">starting prices the bot WILL share (overrides "never quote prices"). One per line. The bot gives the starting price, then closes toward a call / shop visit.</span></label>
-          <textarea id="priceList" style="min-height:160px;" placeholder="iPhones (starting at):&#10;  iPhone 11 — from $___&#10;  iPhone 13 — from $___&#10;Samsung phones (starting at):&#10;  Galaxy S22 — from $___&#10;iPads / tablets (starting at):&#10;  iPad 9th gen — from $___"></textarea>
-          <label>Visit-confirm message <span class="hint">blank = bilingual default. Sent silently to confirm a buyer is still coming.</span></label>
-          <textarea id="visitConfirmMessage" placeholder="(blank uses the built-in FR/EN default)"></textarea>
+          <label>Price list <span class="hint">starting prices the bot WILL share; one per line (overrides "never quote prices")</span></label>
+          <textarea id="priceList" style="min-height:160px;"></textarea>
+          <label>Visit-confirm message <span class="hint">blank = bilingual default</span></label>
+          <textarea id="visitConfirmMessage"></textarea>
         </section>
 
         <!-- LISTINGS -->
         <section id="listings" class="pane">
-          <div class="row">
-            <button id="addListing">+ Add listing</button>
-            <button id="exportListings">Export JSON</button>
-            <button id="importListings">Import JSON</button>
-          </div>
+          <div class="row"><button id="addListing">+ Add listing</button></div>
           <table id="listingsTable">
             <thead><tr><th>Title</th><th>Model</th><th>Storage</th><th>Condition</th><th>Price CAD</th><th>Video URL</th><th>Avail.</th><th></th></tr></thead>
             <tbody></tbody>
@@ -273,6 +212,16 @@
 
         <!-- FOLLOWUPS -->
         <section id="followups" class="pane">
+          <h3 style="margin:6px 0;">Smart follow-up on quiet chats</h3>
+          <p class="hint">When a buyer goes quiet, the bot shows Claude the conversation and either writes <b>one short, tailored nudge</b> or skips it (no good reason). Capped per chat so it never spams. ⚠️ This is <b>proactive outbound</b> messaging — higher ban risk than replies; keep counts low and the quiet window generous.</p>
+          <label class="check"><input type="checkbox" id="smartFollowupEnabled" /> Enable smart follow-up</label>
+          <div class="inline">
+            <div><label>Max follow-ups per chat <span class="hint">e.g. 1 or 2</span></label><input type="number" id="smartFollowupMaxCount" min="0" max="5" /></div>
+            <div><label>Quiet hours before the 1st <span class="hint">wait this long after your last msg</span></label><input type="number" id="smartFollowupQuietHours" min="1" /></div>
+            <div><label>Hours between follow-ups <span class="hint">gap before the 2nd, 3rd…</span></label><input type="number" id="smartFollowupGapHours" min="1" /></div>
+          </div>
+          <hr />
+          <h3 style="margin:6px 0;">Simple timer follow-up <span class="hint">(fixed message; separate from smart — use one or the other)</span></h3>
           <div class="row"><button id="addFollowUp">+ Add follow-up</button></div>
           <table id="followupsTable">
             <thead><tr><th>Name</th><th>After (min)</th><th>Message</th><th>On</th><th></th></tr></thead>
@@ -282,56 +231,59 @@
 
         <!-- VIDEOS -->
         <section id="videos" class="pane">
-          <p class="hint">A library of demo-video <b>URLs</b> (reference list, synced to all machines). When a buyer asks to see a phone working, the bot can send one with <code>[VIDEO:url]</code>.</p>
+          <h3 style="margin:6px 0;">Demo video — sent once per chat (synced to every account)</h3>
+          <p class="hint">Upload an mp4 here once. Every connected extension downloads it and sends it as a <b>native video</b> a few seconds after its first reply — the buyer never sees a link. Keep each under ~25&nbsp;MB. (Needs the one-time Storage setup — see <code>supabase/storage.sql</code>.)</p>
+          <div class="row">
+            <input type="file" id="demoVideoFile" accept="video/mp4,video/*" />
+            <span id="demoVideoStatus" class="hint"></span>
+          </div>
+          <div class="inline">
+                        <div class="hint">Videos are sent instantly, all together in one message, the moment a buyer writes — no waiting, nothing to configure.</div>
+          </div>
+          <div id="demoVideoList" class="hint" style="margin-top:8px;">No central videos yet.</div>
+
+          <hr />
+          <h3 style="margin:6px 0;">Video URL library <span class="hint">(reference only — not auto-sent)</span></h3>
           <div class="row"><button id="addVideo">+ Add video</button></div>
           <table id="videosTable">
             <thead><tr><th>Name</th><th>URL</th><th>Notes</th><th></th></tr></thead>
             <tbody></tbody>
           </table>
-          <div class="banner warn" style="margin-top:16px;">
-            <b>The "send a demo video once per chat" upload is per-machine.</b> A video file is megabytes
-            and can't ride along in the synced settings, so you upload it (and toggle it on + set the
-            delay) inside <b>each extension</b>: its <b>Settings → General → "Send demo video(s) once per chat"</b>.
-            Only the URL library above and the on/off behavior sync; the actual file lives on each computer.
-          </div>
         </section>
 
-        <!-- TEST -->
-        <section id="test" class="pane">
-          <p class="hint">Dry-run Claude against a fake buyer message using the settings above — right here in the browser, no Facebook involved. Uses your API key and the same system prompt the extension builds, so what you see here is what the bot would say.</p>
-          <label>Fake buyer message</label>
-          <textarea id="testInput" placeholder="Bonjour, le iPhone 13 est encore dispo?"></textarea>
-          <div class="row"><button id="runTest" class="primary">Get Claude's reply</button> <span id="testStatus" class="hint"></span></div>
-          <label>Result</label>
-          <pre id="testResult">—</pre>
-        </section>
-
-        <!-- ACTIVITY LOG -->
-        <section id="log" class="pane">
-          <div class="banner">
-            <b>Activity logs live on each computer, not in the cloud.</b> Every machine replies on its own,
-            so each extension keeps its own log of the last 500 sends (buyer message + reply + action).
+        <!-- ACTIVITY -->
+        <section id="activity" class="pane">
+          <div class="row" style="justify-content:space-between;align-items:center;">
+            <h3 style="margin:6px 0;">Activity — every message your bots send, across all computers</h3>
+            <div>
+              <button id="testActivity" type="button">Send test event</button>
+              <button id="refreshActivity" type="button">⟳ Refresh</button>
+            </div>
           </div>
-          <p>To review what an account has been sending:</p>
-          <ol class="steps">
-            <li>On that computer, click the <b>SubSell</b> icon → <b>Settings ▸</b>.</li>
-            <li>Open the <b>Activity log</b> tab.</li>
-            <li>Use <b>Refresh</b>, <b>Export JSON</b>, or <b>Clear log</b> there.</li>
-          </ol>
-          <p class="hint">Tip: review each account's log now and then to make sure it still sounds like you — identical wording across accounts is a fingerprint.</p>
+          <div id="activityTotals" class="hint">Open this tab to load.</div>
+          <div id="activityByMachine" class="hint" style="margin:6px 0;"></div>
+          <div id="coachingBox" style="margin:10px 0;padding:10px;border:1px solid #444;border-radius:8px;">
+            <b>🎓 Coaching — teach the bot from real replies</b>
+            <div class="hint" style="margin:4px 0;">Grade any text reply below: 👍 = "answer like this" &nbsp;·&nbsp; 👎 = "wrong — here's what to say". Every machine learns it within ~1 minute. Kept: last 30 lessons.</div>
+            <div id="coachingList" class="hint">No lessons yet.</div>
+          </div>
+          <table id="activityTable">
+            <thead><tr><th>When</th><th>Machine</th><th>Chat</th><th>Type</th><th>Buyer said</th><th>Bot reply</th><th>Teach</th></tr></thead>
+            <tbody></tbody>
+          </table>
+          <p class="hint" style="margin-top:8px;">Needs the one-time setup: run <code>supabase/schema.sql</code> (adds the messages table) and deploy the log endpoint — <code>supabase functions deploy subsell-log --no-verify-jwt</code>. Each extension reports automatically once it has your config URL.</p>
         </section>
       </main>
 
       <div class="bar">
         <button id="save" class="primary">Save to cloud</button>
         <button id="reload">Reload</button>
-        <button id="downloadConfig" title="Save the settings as a file you can host yourself (e.g. a secret gist)">⬇ Download config file</button>
         <span id="savedMsg" class="saved"></span>
       </div>
     </div>
 
-    <script src="config.js"></script>
+    <script src="config.js?v=20260720"></script>
     <script src="https://cdn.jsdelivr.net/npm/@supabase/supabase-js@2"></script>
-    <script src="app.js"></script>
+    <script src="app.js?v=20260720"></script>
   </body>
 </html>

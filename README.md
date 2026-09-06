@@ -1,10 +1,161 @@
 # SubSell Marketplace Auto-Reply — Chrome Extension
 
-A single-user Chrome **Manifest V3** extension that auto-replies to Facebook
-Marketplace buyer messages using the Anthropic Claude API. Bilingual FR/EN
-(casual Quebec French), built for used-iPhone sales in Montréal. No backend, no
-cloud — runs locally, one Chrome profile per Facebook account.
+A Chrome **Manifest V3** extension that auto-replies to Facebook Marketplace
+buyer messages using the Anthropic Claude API. Bilingual FR/EN (casual Quebec
+French), built for used-iPhone sales in Montréal. Runs locally per Chrome profile
+by default; **optional cloud sync** turns it into a web app so one change reaches
+every computer.
 
+> 🔍 **v0.21.42 — verification pass over .41: three small fixes.** A clip whose tile was
+> seen is never re-dispatched after a failed tray trim (duplicate safety first); a chat
+> with previews that will not clear is paced (3 min) instead of being re-opened every
+> scan; and a parked set whose remaining clips are all struck out closes the same way an
+> in-visit set does, while a fresh chat with nothing downloadable waits 15 minutes instead
+> of visiting every minute.
+>
+> 🧹 **v0.21.41 — the audit pass: 105 gates reviewed by 35 agents, the remaining ones fixed.**
+> A multi-agent audit of v0.21.40 walked every exit of the video engine, the scheduler,
+> clip availability and the attach layer. It found one regression in .40 (a clip that
+> fails to download could seal a chat after its first clip) and a long tail of smaller
+> gates. All fixed: **struck-out clips keep their slot** so a parked set is never dropped
+> as "changed"; **queued sets get a fair share of the machine** — when the oldest queued
+> set has waited over 5 minutes it takes the next slot even on a busy sidebar, the
+> pending lane runs every 15 s with no age floor, and rows no lane would ever serve
+> (reply-capped, just-opened, suppressed) no longer count as "buyers waiting" — the
+> mechanism that cut every set to one clip and kept rush mode on; **between clips the
+> engine yields only to a genuinely overdue buyer** when the file API is on; a crashed
+> set is picked up after 10 minutes everywhere (engine, scan rescue, catch-up) and a
+> crash between lock and first clip heals in 10 minutes instead of 24 hours, with the
+> chat re-queued; a buyer-triggered visit is never refused for pacing; load failures
+> back off 60 s; file-API parks are 2–15 min routing decisions, never delivery
+> decisions; the disk cache stays warm while parked; a clip fetch or download can no
+> longer hang the machine (90 s fetch budget, stall watchdog, escalating retry, only
+> terminal "dangerous" verdicts abort); a clip whose last attach never showed gets one
+> adopt visit instead of being written off; navigating away before anything was
+> dispatched no longer skips the clip; and the queue keeps its oldest entries when it
+> overflows.
+>
+> 🚦 **v0.21.40 — the blocks are gone: no 24h pauses, no "all clips must load first", queued sets go out within minutes.**
+> Operator directive: *"remove all blocks of this functionality — just send any video you
+> can, you don't need to upload all to send."* Everything that could keep a not-yet-served
+> chat from getting its clips is now either removed or reduced to a short pace: the
+> **24-hour attach/load pause and the 3-strike give-up are gone** (a failing chat simply
+> retries after 3 minutes, forever — the counts stay visible in the diagnostic as
+> `attachFails3+`); the **whole-set rule is gone** — clips that loaded go out now, and a
+> clip that can't load yet gets its own slot, retried on the next visit (never skipped);
+> the **pending-videos lane** runs every 90 s instead of every 4 min and a queued set is
+> eligible after 2 min (a diagnostic showed 21 sets queued, the oldest for 19 hours); a
+> crashed pass blocks its own chat's resume for 10 min instead of 30; and **rush mode**
+> (reply first, videos queued) now triggers only when the file API is genuinely
+> unavailable on the machine, not merely "unproven recently". The duplicate-safety
+> rules are untouched: a chat marked delivered is never re-sent, and an attempted clip
+> whose state is unknowable is skipped rather than risked twice.
+>
+> 🎬 **v0.21.38 — one clip in flight at a time; the composer itself confirms the attach; no more piles, no more 24h video pauses.**
+> A live diagnostic (machine PC-mnbbd) showed the failure behind "some chats get no
+> video at all": on that machine the file API handed the clips to Messenger correctly
+> (`ok=97`) but the preview tiles rendered far later than the bot's 12-30 s windows.
+> Each attempt was judged "nothing attached", swept, re-pasted, and the chat struck
+> (21 chats sat in 24h pauses); later all the tiles rendered at once (`tray7`) and one
+> Enter would have sent seven clips. Now: **(1)** with the file API the engine sends
+> **one clip at a time** — clip 1 is handed over within seconds of the chat opening,
+> sent the moment it is ready, the text reply rides right behind it, then clips 2 and 3
+> — so at most one clip is ever in flight per chat and nothing can pile up. **(2)** The
+> attach is confirmed by Messenger's **own send control** (the like button turning into
+> Send), which flips instantly even when the tile is slow, so slow machines no longer
+> fail on timing. **(3)** Before every Enter the tray must hold exactly one message's
+> worth; a surplus copy is removed, and if it won't go, nothing is sent. **(4)** A clip
+> the browser accepted but that never showed is counted as attempted and the next visit
+> adopts its late tile — never a second copy. **(5)** Clips are checked to still exist on
+> disk before every attach (a deleted file was another way to get "ok" with nothing
+> staged), and clips no longer travel as base64 before the first attach. **(6)** Existing
+> attach pauses are cleared once so those chats retry now. Machines that show
+> `sud: base=-` in the diagnostic (PC-mnbbd, PC-5u78q) cannot self-update and need the
+> zip link once, extracted inside Downloads.
+>
+> 🧭 **v0.21.37 — answer the buyer even when Facebook clutters the thread; rush mode; stale-machine alerts.**
+> From two live diagnostics: on the v0.21.36 machine videos are now 100% consistent
+> (`fileapi ok=33 verified=33`, every set `bulk:3`), but "Mohand: Bonjour · 1h" and
+> "Touty: Ça dépend · 10h" still sat unanswered — Facebook's unpainted, centered
+> system blocks (automated-suggestion cards, "X is waiting for your response", dividers)
+> rendered *after* the buyer's bubble were counted as our message. Now: unpainted
+> **centered** blocks are treated as system rows (never "ours"), and the sidebar rescue
+> walks back over such blocks to find the text Messenger itself attributes to the buyer.
+> **Rush mode:** when 3+ other buyers are waiting and the file API hasn't proven itself
+> on the machine recently, the reply goes out first and the clips are queued (pending
+> lane) instead of spending minutes on synthetic attaches. **Stale machines** (self-update
+> can't find the extension folder, e.g. the machine still on v0.21.33 in the second
+> diagnostic) now post a once-a-day "STALE BUILD … cannot self-update" row to the
+> dashboard Activity feed naming the cure — update those by hand with the zip link.
+>
+> 🎯 **v0.21.36 — videos attached through Chrome's own file API (the permanent fix).**
+> Field evidence (screenshot + diagnostic): the bot replied but no video went out because
+> the *attach* step — faking a paste/drag/file-input event into Facebook's composer — is
+> accepted only some of the time on this Facebook build. Now the primary path is the one
+> Playwright uses: the extension puts the clips on disk once per machine
+> (`Downloads/SubSell-videos/`) and hands them to the composer's hidden file input
+> through Chrome's debugger protocol (`DOM.setFileInputFiles`) — Chrome stages them
+> exactly as if you picked them in the file dialog (trusted events), all clips at once.
+> Needs the new `debugger` permission (granted automatically on reload for Load-unpacked
+> installs). Chrome shows a small "SubSell started debugging this browser" bar for a
+> second or two per attach; add `--silent-debugger-extension-api` to the Chrome shortcut
+> to hide it. If a machine has the extension's **"Allow access to file URLs"** switch off,
+> the popup diagnostic says so (`fileapi:` line) and the old paste path is used meanwhile.
+> Every failure falls back to the previous strategies — never worse than before.
+> Also: chats where zero clips attached are now queued for an explicit retry visit.
+>
+> ⚡ **v0.21.34 — stream videos as they're ready; reply right after clip 1; rescue misread buyers.**
+> Diagnosed from a live machine report (`bulk:0` on every set, ~60s per clip, 41 pending
+> video chats, buyers waiting 2–12h while "suppressed"):
+> - **Send whatever can send.** On this Facebook build a multi-file paste is rejected and a
+>   new paste is refused while a clip is still uploading, so the old "attach everything, one
+>   Enter at the end" design held all 3 clips (and the text answer) for ~4 minutes per chat.
+>   Now each clip is **sent the moment its own upload finishes**, the **text reply ships right
+>   after clip 1** (still honoring your response delay), and the remaining clips stream one
+>   by one — each next paste lands on an empty, settled tray, so it attaches on the first try.
+> - **Nobody waits for an old chat's videos.** Between clips the engine checks whether
+>   another buyer is waiting for a reply; if so it parks the remaining clips on the
+>   pending lane (guaranteed later delivery, no failure strike) and lets the reply go first.
+> - **Sidebar-confirmed buyer turns.** When Messenger's own row reads "Charles: How much? ·
+>   2h" but the open-chat paint/geometry read defaulted that bubble to "me" (it was being
+>   suppressed for 6h after 3 such reads), the sidebar attribution now confirms it as the
+>   buyer's message and it gets answered.
+> - One-shot: attach-paused chats (3 strikes under the old hold-then-send path) retry
+>   immediately under the streaming engine. Busy watchdog widened to 9 min to cover a fully
+>   streamed 3-clip set.
+>
+> 🩹 **v0.21.33 — reply-reliability fixes ported from the review branch.**
+> Four classes of "this convo never got a reply" fixed, plus one message-loss fix:
+> - **Noise filter regressions:** the price/spec/date-header rules matched real buyer
+>   messages as prefixes — "$300 possible?", "128gb still available?", "mon budget
+>   c'est 300", "hier j'ai vu l'annonce", "demain 18h30", "dimanche 13h00" were all
+>   dropped, so the bot thought IT spoke last and parked those chats. Headers now
+>   need real header shapes (day word + time, amount-only, incl. the FR
+>   "aujourd'hui" typographic apostrophe). Covered by a 60-case regression test.
+> - **"Is this still available?" answered again:** that exact text is the buyer's
+>   standard opener; it was being filtered as a preset-chip. Chips stay excluded
+>   structurally (role=button), the real opener gets a reply.
+> - **Photo/sticker-only messages:** media bubbles (≥48px, non-blob, outside links)
+>   are now read with the same buyer-only-with-positive-evidence rule, so a buyer
+>   who answers with just a picture gets a reply instead of an endless idle park;
+>   our own clips are ignored when deciding who spoke last.
+> - **Repeated identical messages:** dedupe now keys on (our last message + trailing
+>   buyer texts + buyer text), so a buyer who says "ok" twice gets answered twice
+>   (old plain-text marks still honored — no re-billing of parked chats).
+> - **Follow-up/visit-confirm alarms** that fire while the content script is busy
+>   (or another tab holds the chat) re-arm 3 minutes later instead of being lost.
+>
+> ☁️ **v0.12.0 — cloud sync (web app).** Run SubSell like a web app: sign into a hosted
+> **settings dashboard** (Google or email) that serves your settings to every computer.
+> Edit once → every machine picks it up within ~10 min. Backed by your own free
+> **Supabase** project: settings live in a private row (`subsell_configs`, Row-Level
+> Security), and a tiny **Edge Function** serves them at a per-user **config URL** you
+> paste into the extension's existing **Settings → General → Remote config URL** — so
+> **zero extension changes** are needed. Setup in `supabase/README.md` (SQL in
+> `supabase/schema.sql`, function in `supabase/functions/subsell-config/`, web UI in `docs/`); the
+> JSON contract is `SPEC-webapp.md`. Purely additive — the reply/video/follow-up logic is
+> untouched; on/off stays per-machine.
+>
 > 🏢 **v0.11.0 — fleet deploy for your own machines.** Fixed extension ID
 > (`jdbjbonhdnfkkfihbodmhpmccoiajflm`) + Chrome enterprise-policy support, so you can
 > **force-install + auto-update** SubSell across hundreds of machines and **push the
@@ -83,48 +234,6 @@ cloud — runs locally, one Chrome profile per Facebook account.
 6. Open **messenger.com** (or use the popup's **📨 Open Marketplace** button),
    then flip the popup toggle to **ON**.
 
-## Web control panel (`docs/`) — configure once, every computer follows
-
-The extension is what actually replies (a web page can't type into Messenger by
-itself). The **web app in `docs/`** is the control panel + installer around it:
-
-- **Get the extension / "Add to Chrome"** — a prominent install panel. Until the
-  Chrome Web Store listing is live it offers **Download .zip → Load unpacked**;
-  once you publish (see below) it becomes a one-click **Add to Chrome** button.
-- **Every v10 setting, mirrored** — all seven tabs (General, Business prompt,
-  Listings, Follow-ups, Videos, **Test responses**, **Activity log**). The
-  **Test responses** tab calls Claude live in the browser using the *same* system
-  prompt the bot builds, so you can sanity-check key + prompt without touching
-  Facebook.
-- **One account → all machines (Supabase cloud login).** Log in, edit settings,
-  and the page gives you a per-account **config URL**. Paste it into each
-  extension's **Settings → General → Remote config URL → Fetch now**. Edits reach
-  every machine within ~10 min. This uses the extension's **existing** remote-config
-  feature — **no extension update required**. Backend setup (one-time, free) is in
-  [`supabase/README.md`](supabase/README.md); fill your project values in
-  [`docs/config.js`](docs/config.js).
-- **Or skip the cloud** — the **⬇ Download config file** button writes
-  `subsell-config.json`; host it in a secret gist and paste its raw URL into the
-  same Remote config URL field.
-
-> Demo-video *files* stay per-machine (megabytes can't sync) — upload them in each
-> extension's **Settings → General**. The video **URL library** and the on/off
-> behavior do sync. Activity **logs** are per-machine too; view them in each
-> extension's **Activity log** tab.
-
-Host `docs/` on **GitHub Pages** (Settings → Pages → deploy from `main` / `docs`)
-or any static host; the root [`index.html`](index.html) redirects there.
-
-## Publish to the Chrome Web Store (real "Add to Chrome")
-
-1. `bash store/build-extension-zip.sh` → builds `dist/subsell-extension.zip`
-   (extension files only; manifest `key` stripped so the Store assigns its own ID).
-2. Follow [`store/STORE-SUBMISSION.md`](store/STORE-SUBMISSION.md): $5 one-time
-   registration, paste the listing copy from [`store/listing.md`](store/listing.md),
-   set the privacy-policy URL ([`docs/privacy.html`](docs/privacy.html)), submit.
-3. After approval, paste your listing URL into `SUBSELL_WEBSTORE_URL` in
-   `docs/config.js` — the web app's **Add to Chrome** button goes live.
-
 ## Files
 
 | File | Purpose |
@@ -133,12 +242,12 @@ or any static host; the root [`index.html`](index.html) redirects there.
 | `background.js` | Service worker: Anthropic API (`claude-sonnet-4-6`, `anthropic-dangerous-direct-browser-access`), system-prompt assembly, rate limits + warm-up, business hours, per-conversation cap, follow-up alarms, `[HUMAN]` notifications, mp4 blob fetch, reply log. |
 | `content.js` | DOM side (SIMPLE mode): rotate through every chat → read the last message (composer-bounded, noise-filtered) → if it's the buyer's, ask Claude → type + verify-send. Live `debugTick` for the popup. |
 | `popup.html` / `popup.js` | On/off, status, delay slider, live debug, **Open Marketplace** button, unread diagnostic + Copy ALL. |
-| `options.html` / `options.js` | Tabbed settings (see below). |
+| `options.html` / `options.js` | Tabbed settings (see below). Paste your web-app **config URL** in **General → Remote config URL** to pull settings from the cloud. |
 | `icon16/48/128.png` | Action + notification icons. |
-| `docs/` | The **web control panel** (static site): `index.html`, `app.js`, `config.js`, `privacy.html`. Host on GitHub Pages. |
-| `supabase/` | Optional cloud backend for the dashboard: `schema.sql`, the `config` Edge Function, and setup `README.md`. |
-| `store/` | Chrome Web Store kit: `build-extension-zip.sh`, `STORE-SUBMISSION.md`, `listing.md`. |
-| `deploy/` | Enterprise fleet deploy (policy `.reg`, `update.xml`, `DEPLOY.md`). |
+| `docs/` | The cloud **dashboard** — a static web app (`index.html`, `app.js`, `config.js`) deployed to GitHub Pages; sign in (Google/email) to edit settings and copy your config URL. |
+| `supabase/` | Backend: `schema.sql` (table + RLS + signup trigger), `functions/subsell-config/index.ts` (public config Edge Function), and `README.md` (deploy steps). |
+| `SPEC-webapp.md` | The config-JSON contract between the web app and the extension. |
+| `SETTINGS-REFERENCE.md` | Every tab/field the editor mirrors + types/defaults (from `DEFAULTS`). |
 
 ## How the pipeline works
 
