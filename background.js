@@ -1706,7 +1706,7 @@ async function buildDiagnostic() {
         "cloudConfig", "cloudConfigAt", "cloudAuth", "cloudStale", "lastMirror", "debugTick",
         "videoSentThreads", "videoAttempts", "videoUrlFails", "waitingSince", "videoPending",
         "videoCatchUp", "autoCatchUp01213", "autoCatchUp01217", "videoEnabled", "demoVideos",
-        "videoCache", "replyLog", "sudBase", "sudDirName", "sudLastCheck", "cdpStats", "videoDisk",
+        "videoCache", "replyLog", "sudBase", "sudDirName", "sudLastCheck", "cdpStats", "videoDisk", "winRestoreN", "winRestoreAt",
         "cooldowns", "replyCounts", "lastHandled", "videoAttachTrace",
       ],
       (x) => r(x || {})
@@ -1816,7 +1816,8 @@ async function buildDiagnostic() {
     " urlStrikesActive=" + strikes +
     " catchUp=" + (cu.armed ? "ARMED(" + ageM(cu.at) + ")" : "off") +
     " auto13=" + (st.autoCatchUp01213 ? "done" : "-") + " auto17=" + (st.autoCatchUp01217 ? "done" : "-") +
-    " | sud: base=" + (st.sudBase ? "set" : "-") + " dir=" + cut(st.sudDirName, 24) + " lastCheck=" + ageM(st.sudLastCheck)
+    " | sud: base=" + (st.sudBase ? "set" : "-") + " dir=" + cut(st.sudDirName, 24) + " lastCheck=" + ageM(st.sudLastCheck) +
+    " | winRestored=" + (st.winRestoreN || 0) + (st.winRestoreN ? "(" + ageM(st.winRestoreAt) + ")" : "")
   );
   const trA = Array.isArray(st.videoAttachTrace) ? st.videoAttachTrace : [];
   L.push("attach-trace: " + (trA.length
@@ -2255,6 +2256,30 @@ async function heartbeat() {
       (t) => resolve(t || [])
     );
   });
+  // KEEP WINDOWS RESTORED (v0.21.44, operator: "you add them — no manual work").
+  // A MINIMIZED window is "hidden" to Chrome: page timers throttled to once a
+  // minute, no rendering, media deferred — the root of the late replies and the
+  // clips left attached-but-unsent. The operator keeps the windows open; if one
+  // gets minimized anyway, restore it here every minute (never focused, so the
+  // desktop is not stolen). Local `keepWindowsRestored:false` turns this off.
+  try {
+    const kw = await new Promise((r) => chrome.storage.local.get(["keepWindowsRestored", "winRestoreN"], (x) => r(x || {})));
+    if (kw.keepWindowsRestored !== false && chrome.windows) {
+      const wids = Array.from(new Set(tabs.map((t) => t.windowId).filter((w) => w != null)));
+      let n = 0;
+      for (const wid of wids) {
+        const w = await new Promise((r) => chrome.windows.get(wid, (x) => { void chrome.runtime.lastError; r(x || null); }));
+        if (w && w.state === "minimized") {
+          await new Promise((r) => chrome.windows.update(wid, { state: "normal", focused: false }, () => { void chrome.runtime.lastError; r(); }));
+          n++;
+        }
+      }
+      if (n) {
+        chrome.storage.local.set({ winRestoreN: (kw.winRestoreN || 0) + n, winRestoreAt: Date.now() }, () => void chrome.runtime.lastError);
+        LOG("restored", n, "minimized Messenger window(s)");
+      }
+    }
+  } catch (e) { /* best effort */ }
   const health = await new Promise((r) => chrome.storage.local.get(["tabHealth"], (x) => r((x && x.tabHealth) || {})));
   let refreshedOne = false;
   for (const tab of tabs) {

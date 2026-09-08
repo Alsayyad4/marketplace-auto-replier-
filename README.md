@@ -6,6 +6,17 @@ French), built for used-iPhone sales in Montréal. Runs locally per Chrome profi
 by default; **optional cloud sync** turns it into a web app so one change reaches
 every computer.
 
+> 🪟 **v0.21.44 — the extension keeps its own windows un-minimized; no Chrome flags to add.**
+> The operator asked for zero manual setup. Every minute the background worker looks
+> for a Messenger window that has been minimized and restores it (without focusing it),
+> because a minimized window is where Chrome throttles the page and the uploads stall.
+> Together with .43's background-timed waits, the command-line flags suggested earlier
+> are no longer needed. `keepWindowsRestored:false` in the machine's local storage turns
+> it off; the diagnostic shows `winRestored=N`. The only remaining hands-on step for
+> any machine is a one-time reinstall from the zip when the extension folder lives
+> outside Chrome's Downloads folder (`sud: base=-`), because Chrome cannot write files
+> anywhere else.
+>
 > 🔁 **v0.21.43 — the video path rebuilt for minimized Chrome windows: attach once, wait for the upload, press until it is gone, then check the chat.**
 > Two facts from the operator settled the diagnosis: the Chrome windows run **minimized**,
 > and clips were often **attached in the chat but never sent**. A minimized window puts
