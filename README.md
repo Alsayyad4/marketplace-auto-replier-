@@ -6,6 +6,25 @@ French), built for used-iPhone sales in Montréal. Runs locally per Chrome profi
 by default; **optional cloud sync** turns it into a web app so one change reaches
 every computer.
 
+> 🔁 **v0.21.43 — the video path rebuilt for minimized Chrome windows: attach once, wait for the upload, press until it is gone, then check the chat.**
+> Two facts from the operator settled the diagnosis: the Chrome windows run **minimized**,
+> and clips were often **attached in the chat but never sent**. A minimized window puts
+> Messenger under Chrome's background throttling: after five minutes hidden, the bot's own
+> timers fire once a minute, uploads crawl, Enter landed while the upload was still running,
+> Messenger dropped it, and nothing pressed again. Now: **(1)** every wait the bot takes on a
+> hidden window is timed by the extension's background worker, which Chrome does not
+> throttle, so polling and upload waits run at real speed again; **(2)** the attach does
+> exactly one dispatch per clip (file API, or one paste if that call fails) and no longer
+> tries to predict success from the tray; **(3)** the send step keeps going until the tray is
+> actually empty: it waits out the upload (never presses mid-upload), then Enter, the Send
+> button, and click-focus-Enter in rounds, up to four minutes; pressing on an already-empty
+> tray is a no-op, so the rounds cannot double-send; **(4)** after each set the bot checks
+> the ground truth (is one of our videos now visible in the chat?) — three misses in a row
+> switch the attach channel on that machine and post a dashboard row; **(5)** a new popup
+> button **▶ Send demo videos to OPEN chat now** fires the engine on the chat you are looking
+> at, so a machine can be tested in one minute. The verdict engine of .38–.42 stays
+> available (`videoJustSend:false`) but is off by default.
+>
 > 🔍 **v0.21.42 — verification pass over .41: three small fixes.** A clip whose tile was
 > seen is never re-dispatched after a failed tray trim (duplicate safety first); a chat
 > with previews that will not clear is paced (3 min) instead of being re-opened every

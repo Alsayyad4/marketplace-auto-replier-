@@ -29,7 +29,34 @@
   const COOLDOWN_MS = 90 * 1000; // wait before re-checking a chat we just acted on
   const IDLE_COOLDOWN_MS = 10 * 60 * 1000; // longer wait for chats where WE spoke last
 
-  const sleep = (ms) => new Promise((r) => setTimeout(r, ms));
+  // (v0.21.43) THROTTLE-IMMUNE SLEEP. The operator's Chrome windows run MINIMIZED.
+  // After a page has been hidden for 5 min, Chrome's intensive wake-up throttling
+  // fires chained timers at most ONCE PER MINUTE — so every 1-s poll in this
+  // script became a 60-s wait: uploads "took" ten minutes, Enter landed
+  // mid-upload, replies ran late. Message delivery is NOT throttled, so on a
+  // hidden page every wait ≥ 250 ms is timed by the background service worker
+  // (chunks ≤ 20 s, under its 30-s idle timer); any failure falls back to a
+  // plain setTimeout. Visible pages keep the plain timer.
+  const rawSleep = (ms) => new Promise((r) => setTimeout(r, ms));
+  async function sleep(ms) {
+    ms = Math.max(0, Number(ms) || 0);
+    if (ms < 50 || document.visibilityState !== "hidden") return rawSleep(ms);
+    const end = Date.now() + ms;
+    for (;;) {
+      const left = end - Date.now();
+      if (left <= 0) return;
+      const chunk = Math.min(left, 20000);
+      let ok = false;
+      try {
+        ok = await new Promise((res) => {
+          try {
+            chrome.runtime.sendMessage({ type: "SLEEP", ms: chunk }, (r) => { void chrome.runtime.lastError; res(!!(r && r.ok)); });
+          } catch (e) { res(false); }
+        });
+      } catch (e) { ok = false; }
+      if (!ok) await rawSleep(Math.min(left, 20000)); // background unavailable (reload/update) — plain timer
+    }
+  }
   const rand = (a, b) => a + Math.random() * (b - a);
   const log = (...a) => console.log("[SubSell]", ...a);
   const safe = (fn, fb) => {
@@ -870,6 +897,7 @@
     for (const b of els) {
       const al = (safe(() => b.getAttribute("aria-label"), "") || "").toLowerCase();
       if (!al) continue;
+      if (LIKE_CTL_RE.test(al) && !SEND_CTL_RE.test(al)) continue; // never the like/thumb control ("Send a 👍", "Envoyer un pouce…")
       if (/voice|vocal|clip|audio|micro|record|enregistr/.test(al)) continue; // mic / voice clip
       if (/like|j'?aime|sticker|autocollant|gif|emoji|r[ée]action/.test(al)) continue; // like/sticker/gif
       if (!(/\bsend\b/.test(al) || /press enter to send/.test(al) || /entr[eé]e pour envoyer/.test(al) || /envoyer un message/.test(al) || /^envoyer\b/.test(al))) continue;
@@ -1140,7 +1168,7 @@
   // as before. `file` may be a LAZY loader {lazy:true, load()} — on-disk clips
   // no longer haul their base64 through the message channel unless a synthetic
   // strategy actually needs the File.
-  async function attachVideo(file, knownCount, tid, diskPath) {
+  async function attachVideo(file, knownCount, tid, diskPath, opts) {
     lastAttachVia = "-";
     const composer = findComposer();
     if (composer) composer.focus();
@@ -1185,6 +1213,10 @@
         setStatus({ lastAction: "attaching video via Chrome file API…" });
         const r = await ask({ type: "CDP_SET_FILES", paths: [diskPath] });
         if (r && r.ok) return true;
+        // The set command itself failed late (timeout / detach): the files MAY be
+        // in — count it as dispatched (truthy) so no second copy is ever pasted;
+        // the wait/send decides from there.
+        if (r && r.maybeSet) { setStatus({ videoLast: "file API: set command timed out — treating the clip as handed over" }); return "maybe"; }
         if (r && r.missing) forgetDiskPaths([diskPath]); // deleted on disk — background re-downloads
         noteCdpFail(r);
         return false; // nothing reached the composer's input → synthetic strategies are safe
@@ -1238,6 +1270,55 @@
     };
     inputFn.via = "input";
     attempts.push(inputFn);
+
+    // JUST-SEND MODE (v0.21.43, operator: "just send the videos"). The verdict
+    // engine below PREDICTS whether a clip attached by watching the tray during
+    // the upload — and on this fleet's throttled windows the prediction kept
+    // being wrong. The early versions that worked did no prediction: attach,
+    // wait, Enter. This is that, with the modern attach: exactly ONE dispatch per
+    // clip (the file API; if that CALL fails — nothing reached the composer — one
+    // paste, never the drag/input ladder that stacked copies), then a wait that
+    // ends early when a tile is visible with its upload done, otherwise a fixed
+    // budget. Returns true (tile seen) or "assume" (nothing seen — the caller
+    // presses Enter anyway: an invisibly staged clip goes out, an empty composer
+    // ignores Enter, and the clip is marked attempted either way — the v0.12.3
+    // law). Afterwards the engine checks the GROUND TRUTH (a video visible in
+    // the chat) and switches attach channel when a machine's channel is not
+    // taking. Never a second copy of a clip into the same tray.
+    if (opts && opts.justSend) {
+      const beforeEls0 = new Set(trayEls());
+      const beforeBtns0 = new Set(trayRemoveBtns());
+      let dispatched = false;
+      for (const attempt of attempts) {
+        if (!(attempt.isCdp || attempt.via === "paste")) break; // never drag/input here
+        if (tid && !stillOnThread(tid)) return "aborted";
+        let fired = false;
+        try { fired = !!(await Promise.resolve(safe(attempt, false))); } catch (e) { fired = false; }
+        if (fired) { dispatched = true; lastAttachVia = attempt.via || "-"; break; }
+        // the file-API CALL failed (input not found / file missing / no debugger):
+        // nothing reached the composer, so ONE paste is safe; a paste that could
+        // not fire (no File) ends the attempt
+      }
+      if (!dispatched) return false; // clean failure — retried on a later visit
+      const JUST_SEND_WAIT_MS = 75000;
+      const t0 = Date.now();
+      let seenAt = 0;
+      setStatus({ lastAction: "clip handed to the composer (" + lastAttachVia + ") — waiting for the upload…" });
+      while (Date.now() - t0 < JUST_SEND_WAIT_MS) {
+        await sleep(1000);
+        if (tid && !stillOnThread(tid)) {
+          for (const b of trayRemoveBtns()) if (!beforeBtns0.has(b)) safe(() => b.click()); // de-stray the wrong chat
+          return "navigated";
+        }
+        const seen = trayEls().some((el) => !beforeEls0.has(el));
+        if (seen && !seenAt) seenAt = Date.now();
+        if (seen && trayUploads() === 0 && Date.now() - seenAt > 2000) return true; // tile visible, upload done
+        // staged per the composer's own control but no tile after 45 s: stop waiting for one
+        if (!seen && ctlBase && stagedPerControl(ctlBase) === true && !composerText(composer) && Date.now() - t0 > 45000) break;
+      }
+      if (trayEls().some((el) => !beforeEls0.has(el))) return true; // tile visible (upload may still run — the caller waits it out)
+      return "assume";
+    }
 
     // Try each strategy IN ORDER; require a NEW preview element to appear before
     // trusting it (identity, not count-delta — immune to simultaneous changes).
@@ -1369,13 +1450,15 @@
       // running (Enter is queued by Messenger until it completes). "Sent" = the
       // send control back in its empty-composer state (the like button — any
       // like-type label, not only the exact baseline string); allow the upload time.
+      // ("assume" = no baseline at all: tray emptied or a like-type label = sent)
       const backToLike = () => {
         const l = sendControlLabel();
-        return l === blindBaseline || (!!l && LIKE_CTL_RE.test(l) && !SEND_CTL_RE.test(l));
+        return (blindBaseline !== "assume" && l === blindBaseline) || (!!l && LIKE_CTL_RE.test(l) && !SEND_CTL_RE.test(l));
       };
       while (Date.now() - s2 < 90000) {
         await sleep(1000);
         if (gone()) return true;
+        if (trayEls().length < previews && trayUploads() === 0) return true;
         if (backToLike()) return true;
       }
       if (gone()) return true;
@@ -1396,6 +1479,78 @@
     clickSend(); // fallback for layouts where Enter doesn't send
     await sleep(1500);
     return true;
+  }
+  // SEND WHAT IS STAGED (v0.21.43 — the rebuilt send step). The failure the
+  // operator sees most is "the clip is attached in the chat and never goes out":
+  // Enter was pressed while the upload was still running (Messenger does not
+  // reliably queue it, and on a MINIMIZED window uploads and rendering are
+  // slow), and nothing ever pressed again. This loop keeps going until the tray
+  // is EMPTY: wait out uploads (up to 4 min — never press mid-upload), then
+  // rounds of Enter → Send button → click-focus-Enter, 12 s apart. Pressing on
+  // a tray that already emptied is a no-op, so the rounds can never send a
+  // second copy. blind = nothing visible to watch (an "assume" attach): three
+  // rounds, "sent" when the like button is back or after the rounds.
+  // Returns "sent", "stuck" (tile still there after 6 rounds) or "navigated".
+  async function sendStagedClip(tid, blind, onTick) {
+    const gone = () => tid && !stillOnThread(tid);
+    const likeBack = () => { const l = sendControlLabel(); return !!l && LIKE_CTL_RE.test(l) && !SEND_CTL_RE.test(l); };
+    const sendCtl = () => SEND_CTL_RE.test(sendControlLabel());
+    // "Uploading" = a progressbar in the composer's OWN band (just above the
+    // textbox). Messenger's list-paging spinners are progressbars too, far above
+    // — a stuck one of those must never hold the send.
+    const uploading = () => {
+      const bars = trayQuery('[role="progressbar"]');
+      if (!bars.length) return false;
+      const c = findComposer();
+      const cr = c ? safe(() => c.getBoundingClientRect(), null) : null;
+      if (!cr) return true;
+      return bars.some((el) => { const r = safe(() => el.getBoundingClientRect(), null); return !!r && r.bottom <= cr.top + 8 && cr.top - r.top < 420; });
+    };
+    let lastTick = Date.now();
+    const tick = () => { if (onTick && Date.now() - lastTick > 30000) { lastTick = Date.now(); try { onTick(); } catch (e) { /* bookkeeping only */ } } };
+    const waitUploads = async (capMs) => {
+      const w0 = Date.now();
+      while (Date.now() - w0 < capMs && uploading()) {
+        if (gone()) return false;
+        await sleep(1000); tick();
+      }
+      return !gone();
+    };
+    // Never press mid-upload (Messenger drops it) — but a spinner that never ends
+    // must not hold the clip forever: after 150 s press anyway.
+    if (!(await waitUploads(150000))) return "navigated";
+    const t0 = Date.now();
+    let rounds = 0;
+    // The tray right before the first press. "Sent" = the tray SHRANK (a persistent
+    // blob image / listing video outside the rows can keep it from ever being 0).
+    // "Grew" = a late stray from an earlier attempt rendered — ours was pressed once;
+    // stop pressing and let the caller's settle sweep leftovers (never send a stray).
+    let baseline = trayEls().length;
+    while (Date.now() - t0 < 5 * 60 * 1000) {
+      if (gone()) return "navigated";
+      const c = findComposer();
+      const step = rounds % 3;
+      if (step === 1 && sendCtl()) clickSend(); // the Send button — only while the control IS Send
+      else if (step === 2 && c) { safe(() => c.click()); safe(() => c.focus()); pressEnter(c); }
+      else if (c) pressEnter(c);
+      else if (sendCtl()) clickSend();
+      rounds++;
+      setStatus({ lastAction: "sending the staged clip (attempt " + rounds + ")…" });
+      const tW = Date.now();
+      let uploadResumed = false;
+      while (Date.now() - tW < 12000) {
+        await sleep(1000); tick();
+        if (gone()) return "navigated";
+        if (uploading()) { uploadResumed = true; break; } // the press queued behind a (re)started upload — wait it out
+        const n = trayEls().length;
+        if (blind ? (likeBack() || n < baseline) : (n < baseline || (n === 0 && trayRemoveBtns().length === 0))) return "sent";
+        if (!blind && n > baseline) return "sent"; // grew: a stray rendered — pressed once, leave the rest to the settle sweep
+      }
+      if (uploadResumed) { if (!(await waitUploads(150000))) return "navigated"; baseline = trayEls().length; continue; }
+      if (blind && rounds >= 3) return "sent"; // nothing to observe: attach + 3 send attempts = delivered
+      if (!blind && rounds >= 6) return "stuck";
+    }
+    return blind ? "sent" : "stuck";
   }
   // After a streamed send: let a QUEUED Enter (pressed mid-upload) fire — never
   // touch the tray while a progressbar is visible — then clear whatever is left.
@@ -1613,6 +1768,32 @@
       cdpDisabledUntil = Date.now() + 2 * 60 * 1000; // attach/detach/timeout/protocol errors
     }
     setStatus({ videoLast: "file API attach failed: " + trunc(err, 80) + " — falling back to paste" });
+  }
+  // GROUND-TRUTH outcome of a finished set (v0.21.43): seen = a video of ours is
+  // visible in the chat after the send. Three unseen in a row ⇒ the attach
+  // channel used is not taking on this machine ⇒ switch channel for 1 h.
+  let unseenStreak = 0;
+  async function noteSetOutcome(seen, via, id, name) {
+    ask({ type: "VIDEO_SEEN", seen: !!seen, via: via || "-" });
+    if (seen) { unseenStreak = 0; return; }
+    unseenStreak++;
+    vstat("set sent per protocol but NO video visible yet in " + (name || id) + " (" + unseenStreak + " in a row)");
+    if (unseenStreak < 3) return;
+    unseenStreak = 0;
+    if (via === "cdp") {
+      cdpDisabledUntil = Date.now() + 60 * 60 * 1000;
+      setStatus({ videoLast: "file-API attaches are not showing up in chats on this machine — paste attach for 1 h" });
+    } else if (via === "paste") {
+      cdpDisabledUntil = 0; cdpFailedSetToken = -1; cdpUnverifiedStreak = 0;
+      setStatus({ videoLast: "paste attaches are not showing up in chats on this machine — back to the file API" });
+    }
+    try {
+      const thrAt = (await getLocal(["videoUnseenLoggedAt"])).videoUnseenLoggedAt || 0;
+      if (Date.now() - thrAt > 24 * 3600 * 1000) {
+        await setLocal({ videoUnseenLoggedAt: Date.now() });
+        ask({ type: "LOG_EVENT", entry: { thread: name, threadId: id, buyer: "(video check)", action: "video-status", reply: "3 sets in a row sent per protocol but no video visible in the chat — attach channel (" + (via || "-") + ") not taking on this machine; switched channel" } });
+      }
+    } catch (e) { /* telemetry only */ }
   }
   let lastCdpVerifiedAt = 0;
   // Seed from the persisted stats so a content-script reload on a healthy machine
@@ -1844,8 +2025,11 @@
         return;
       }
       const cfg = await getLocal([
-        "videoEnabled", "demoVideos", "demoVideo", "videoDelaySec", "videoSentThreads", "videoAttempts",
+        "videoEnabled", "demoVideos", "demoVideo", "videoDelaySec", "videoSentThreads", "videoAttempts", "videoJustSend",
       ]);
+      // JUST-SEND is the default (v0.21.43); a machine-local `videoJustSend:false`
+      // or the dashboard's `videoJustSend:false` brings the verdict engine back.
+      let justSend = cfg.videoJustSend !== false;
 
       // LOCAL videos (uploaded per-machine, base64 dataUrls).
       let local = Array.isArray(cfg.demoVideos) ? cfg.demoVideos : [];
@@ -1864,6 +2048,7 @@
         if (Array.isArray(s.demoVideoUrls)) central = s.demoVideoUrls.filter((v) => v && v.url);
         if (s.demoVideoDelaySec != null) centralDelay = Number(s.demoVideoDelaySec);
         if (s.demoVideoBetweenSec != null) betweenSec = Number(s.demoVideoBetweenSec);
+        if (s.videoJustSend === false) justSend = false;
       } catch (e) {
         settingsOk = false;
       }
@@ -2454,6 +2639,8 @@
 
       let loadStop = false; // the loop stopped at a clip that could not be loaded (re-tried later, never skipped)
       let unverifiedStop = false; // the loop stopped at a file-API clip that never showed (one adopt visit later)
+      let setVia = "-"; // attach channel used by this set's last clip (cdp / paste) — for the ground-truth check
+      let lastSres = null; // outcome of the last streamed send ("sent" / "stuck")
       for (let i = bulkDone ? runEnd : startAt; i < files.length; i++) {
         if (files[i] && files[i].excluded) continue; // struck-out clip URL: send the rest (re-probed hourly)
         if (!files[i]) {
@@ -2506,8 +2693,9 @@
           await setLocal({ videoSentThreads: dmA });
         }
         setStatus({ lastAction: `attaching video ${i + 1}/${files.length}…`, currentThread: name });
-        let res = await attachVideo(files[i], knownCount, id, paths[i]);
+        let res = await attachVideo(files[i], knownCount, id, paths[i], { justSend });
         const resVia = lastAttachVia;
+        if (resVia && resVia !== "-") setVia = resVia;
         const resTrace = res === true ? "ok" : String(res);
         // ATTACH TRACE (ring of 12, shown in 🩺): which clip, what verdict, how
         // the tray looked — ends the guessing when a machine's attaches fail.
@@ -2550,7 +2738,7 @@
           setStatus({ lastAction: "video set interrupted (chat switched) — finishing later", currentThread: name });
           return;
         }
-        if (res === true || res === "blind") {
+        if (res === true || res === "blind" || res === "assume") {
           okCount++;
           // Count-based, +1 exactly: re-snapshotting the whole tray here would
           // absorb an undetected stray copy into the "known-good" set and let it
@@ -2566,16 +2754,8 @@
           dmP2[id] = { done: true, at: Date.now(), via: "lock", owner: TAB_UID, sent: okCount + startAt, resumeFrom: i + 1, resumeTotal: files.length };
           await setLocal({ videoSentThreads: dmP2 });
           if (streaming) {
-            if (res === "blind" && trayEls().length > 0) res = true; // the tile showed after all → normal exact-count send
-            // Let THIS clip's upload finish (Enter mid-upload is queued by FB, but
-            // a finished upload sends instantly and leaves the tray empty for the
-            // next paste — which is also what makes the next attach land on the
-            // first try instead of being rejected mid-upload).
-            const upS = Date.now();
-            while (res === true && Date.now() - upS < 75000 && trayUploads() > 0) {
-              if (!stillOnThread(id)) break;
-              await sleep(1000);
-            }
+            if ((res === "blind" || res === "assume") && trayEls().length > 0) res = true; // the tile showed after all → normal exact-count send
+            // (the upload wait lives inside sendStagedClip now — it never presses mid-upload)
             if (!stillOnThread(id)) {
               await parkTail(i + 1, `video set paused at ${i}/${files.length} (chat switched) — finishing later`);
               return;
@@ -2599,18 +2779,33 @@
               vstat("tray holds extra previews that won't clear — not sending a pile (" + (name || id) + ")");
               break;
             }
-            if (res === "blind" && composerText(findComposer())) {
+            if ((res === "blind" || res === "assume") && composerText(findComposer())) {
               // The operator started typing here: their Enter will carry the
               // staged clip; ours must not ship their half-typed text.
               await parkTail(i + 1, `video set paused at ${i}/${files.length} (you are typing) — finishing later`);
               return;
             }
             setStatus({ lastAction: `sending video ${i + 1}/${files.length}…`, currentThread: name });
-            await sendAttachedVideos(res === "blind" ? lastAttachCtlBase : null, id);
+            const sres = await sendStagedClip(id, res !== true, () => { busySince = Date.now(); refreshThreadLock(sidebarKey || id); });
+            if (sres === "navigated") {
+              await parkTail(i + 1, `video set paused at ${i + 1}/${files.length} (chat switched) — finishing later`);
+              return;
+            }
             streamedCount++;
-            // Normally 0 now. A late stray is REMOVED here (never adopted into the
-            // next message); only an unremovable tile is carried as known.
-            knownCount = await settleTrayAfterSend(id);
+            lastSres = sres;
+            if (sres === "stuck") {
+              // The tile would not go after six rounds: leave it STAGED (it is a due
+              // clip — the next clip's Enter, or the text reply's, carries it) and
+              // count it as known so the next attach is still exact.
+              knownCount = trayRemoveBtns().length;
+              vstat("clip " + (i + 1) + " stays staged — Messenger did not take the send yet; it rides the next Enter (" + (name || id) + ")");
+            } else if (res === true) {
+              // Tray verified empty by the send; a stray that renders late now can
+              // only be an older leftover — remove it, never adopt it.
+              knownCount = await settleTrayAfterSend(id);
+            } else {
+              knownCount = trayRemoveBtns().length; // blind: a tile showing now may be our own clip still uploading — carry it
+            }
             refreshThreadLock(sidebarKey || id); // uploads outlive the cross-tab lease
             if (hooks && typeof hooks.onClipSent === "function") {
               // Interleave the TEXT reply right after the first clip (the reply
@@ -2824,6 +3019,7 @@
         // that wakes AFTER another pass finished would see no owner, pass every
         // takeover check, and re-send the tail on top of the finished set.
         dmS[id] = { done: true, at: Date.now(), owner: TAB_UID, sent: okCount + startAt };
+        if (lastSres === "stuck") dmS[id].stuck = 1; // last clip left staged (Messenger would not take the send) — diagnostic only
         const amS = (await getLocal(["videoAttempts"])).videoAttempts || {};
         if (amS[id]) delete amS[id]; // full set delivered — clean fail/claim slate
         await setLocal({ videoSentThreads: dmS, videoAttempts: amS });
@@ -2832,6 +3028,25 @@
       setStatus({ lastAction: `demo video(s) sent ✓ (${okCount + startAt}/${files.length})`, currentThread: name });
       // Mirror to the local + cloud activity log (fire-and-forget; no effect on sending).
       ask({ type: "LOG_EVENT", entry: { thread: name, threadId: id, buyer: "(demo video)", action: "video", reply: (okCount + startAt) + "/" + files.length + " demo video(s) sent" } });
+      // GROUND TRUTH (v0.21.43): the protocol said "sent" — does a video of ours
+      // now show in this chat? This is the only signal that cannot lie about the
+      // attach channel. Three unseen sets in a row switch the channel (file API ↔
+      // paste) for this machine and post ONE fleet-visible row; the mark keeps
+      // `unseen:1` for the diagnostic. Never an automatic re-send (law 1) — the
+      // popup's "Resend video to OPEN chat" is the operator's manual lever.
+      // Only a set whose last send was accepted ("sent") counts, and only after the
+      // optimistic message has had time to render on a throttled page (20 s) —
+      // a "stuck" send is a SEND problem, not an attach-channel one.
+      if (okCount > 0 && lastSres === "sent" && stillOnThread(id)) {
+        await sleep(20000);
+        if (!stillOnThread(id)) return;
+        const seenInChat = chatAlreadyHasOurVideo();
+        await noteSetOutcome(seenInChat, setVia, id, name);
+        if (!seenInChat) {
+          const dmG = (await getLocal(["videoSentThreads"])).videoSentThreads || {};
+          if (dmG[id] && dmG[id].done) { dmG[id] = Object.assign({}, dmG[id], { unseen: 1 }); await setLocal({ videoSentThreads: dmG }); }
+        }
+      }
     } catch (e) {
       vstat("error: " + e.message);
       setStatus({ lastError: "video error: " + e.message });
@@ -4080,6 +4295,31 @@
         await setLocal({ videoSentThreads: vt, videoAttempts: am });
         videoLocked.delete(id); // mandatory: the in-memory lock short-circuits before storage
         send({ ok: true, cleared: had });
+      })();
+      return true;
+    }
+    if (msg && msg.type === "SEND_VIDEOS_OPEN_CHAT") {
+      // Popup: run the video engine on the OPEN chat right now (all duplicate
+      // guards intact — a chat already marked served exits in milliseconds; use
+      // "Resend video to OPEN chat" first to clear a mark). Progress shows in the
+      // popup's video status line. Refused while a scan visit is in progress.
+      (async () => {
+        const m = location.href.match(/\/t\/([^/?#]+)/);
+        const id = m ? m[1] : null;
+        if (!id) return send({ ok: false, error: "no chat open" });
+        if (busy) return send({ ok: false, error: "the bot is in the middle of a visit — try again in a minute" });
+        send({ ok: true });
+        busy = true; busySince = Date.now();
+        try {
+          const nm = safe(() => (document.title || "").replace(/\s*[|·—-]\s*Messenger.*$/i, "").trim(), "") || id;
+          setStatus({ lastAction: "manual: sending demo videos to the open chat…", currentThread: nm });
+          await maybeSendVideo(id, nm, true, id);
+        } catch (e) {
+          setStatus({ lastError: "video error: " + ((e && e.message) || e) });
+        } finally {
+          busy = false;
+          busySince = 0;
+        }
       })();
       return true;
     }

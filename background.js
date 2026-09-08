@@ -1510,7 +1510,16 @@ async function cdpSetFiles(tabId, paths) {
     if (!obj || !obj.objectId) { await recordCdp(false, "composer file input not found"); return { ok: false, error: "composer file input not found" }; }
     // Clear first: Chrome skips the change event when the same file list is set twice.
     await cdpCmd(target, "Runtime.callFunctionOn", { objectId: obj.objectId, functionDeclaration: "function(){ try { this.value = ''; } catch (e) {} return true; }" }, 5000);
-    await cdpCmd(target, "DOM.setFileInputFiles", { objectId: obj.objectId, files: paths }, 15000);
+    try {
+      await cdpCmd(target, "DOM.setFileInputFiles", { objectId: obj.objectId, files: paths }, 15000);
+    } catch (e) {
+      // A timeout / "detached while handling command" HERE may have landed AFTER
+      // Chrome applied the files: report maybeSet so the caller never stages a
+      // second copy by pasting (it waits and sends instead).
+      const m = String((e && e.message) || e);
+      await recordCdp(false, m);
+      return { ok: false, maybeSet: true, error: m };
+    }
     await recordCdp(true);
     return { ok: true };
   } catch (e) {
@@ -1754,6 +1763,7 @@ async function buildDiagnostic() {
       "fileapi: debugger=" + (chrome.debugger ? "granted" : "MISSING") +
       " ok=" + (cs.okN || 0) + "(" + ageM(cs.lastOkAt) + ") verified=" + (cs.verifiedN || 0) + "(" + ageM(cs.lastVerifiedAt) + ")" +
       (cs.blindN ? " blind=" + cs.blindN : "") +
+      " chat-seen=" + (cs.seenN || 0) + " chat-unseen=" + (cs.unseenN || 0) + (cs.unseenN ? "(" + ageM(cs.lastUnseenAt) + " via " + (cs.lastUnseenVia || "-") + ")" : "") +
       (cs.unverifiedN ? " unverified=" + cs.unverifiedN + "(" + ageM(cs.lastUnverifiedAt) + ")" : "") +
       " err=" + (cs.errN || 0) + "(" + ageM(cs.lastErrAt) + ")" +
       (cs.lastErr ? " lastErr=\"" + cut(cs.lastErr, 70) + "\"" : "") +
@@ -1770,16 +1780,18 @@ async function buildDiagnostic() {
     " act=\"" + cut(tickd.lastAction, 60) + "\" vid=\"" + cut(tickd.videoLast, 60) + "\" err=\"" + cut(tickd.lastError, 60) + "\""
   );
   const vt = st.videoSentThreads || {};
-  let vTot = 0, vSent = 0, vLock = 0, vDom = 0, vTail = 0, vRecon = 0, vDoneNoSent = 0, vResume = 0;
+  let vTot = 0, vSent = 0, vLock = 0, vDom = 0, vTail = 0, vRecon = 0, vDoneNoSent = 0, vResume = 0, vUnseen = 0, vStuck = 0;
   for (const k of Object.keys(vt)) {
     const e = vt[k]; if (!e) continue; vTot++;
     if (e.sent) vSent++;
+    if (e.unseen) vUnseen++;
+    if (e.stuck) vStuck++;
     if (e.via === "lock") vLock++; else if (e.via === "dom") vDom++; else if (e.via === "taildrop") vTail++;
     if (e.recon) vRecon++;
     if (typeof e.resumeFrom === "number") vResume++; // mid-set marker awaiting its tail
     else if (e.done && !e.sent && e.via !== "taildrop") vDoneNoSent++;
   }
-  L.push("video-marks: total=" + vTot + " sent=" + vSent + " lock=" + vLock + " dom=" + vDom + " taildrop=" + vTail + " recon=" + vRecon + " resume-pending=" + vResume + " done-no-sent=" + vDoneNoSent);
+  L.push("video-marks: total=" + vTot + " sent=" + vSent + " unseen-in-chat=" + vUnseen + " last-clip-stuck=" + vStuck + " lock=" + vLock + " dom=" + vDom + " taildrop=" + vTail + " recon=" + vRecon + " resume-pending=" + vResume + " done-no-sent=" + vDoneNoSent);
   const oldest = (m) => { let o = null; for (const k of Object.keys(m || {})) { const v = m[k]; if (typeof v === "number" && (o == null || v < o)) o = v; } return o; };
   const cd = st.cooldowns || {}; let cdFut = 0; for (const k of Object.keys(cd)) if (cd[k] > now) cdFut++;
   const rc = st.replyCounts || {}; let capped = 0;
@@ -2067,6 +2079,24 @@ chrome.runtime.onMessage.addListener((msg, _sender, sendResponse) => {
             st.verifiedN = (st.verifiedN || 0) + 1;
             st.lastVerifiedAt = Date.now();
             if (msg.blind) st.blindN = (st.blindN || 0) + 1;
+            chrome.storage.local.set({ cdpStats: st }, () => void chrome.runtime.lastError);
+          } catch (e) { /* telemetry only */ }
+          sendResponse({ ok: true });
+          break;
+        }
+        case "SLEEP": {
+          // Content-script wait timed here (service-worker timers are not subject
+          // to the hidden-page throttling that stalls a minimized Messenger window).
+          await new Promise((r) => setTimeout(r, Math.min(25000, Math.max(0, Number(msg.ms) || 0))));
+          sendResponse({ ok: true });
+          break;
+        }
+        case "VIDEO_SEEN": {
+          // Ground truth after a finished set: was a video of ours visible in the chat?
+          try {
+            const st = await new Promise((r) => chrome.storage.local.get(["cdpStats"], (x) => r((x && x.cdpStats) || {})));
+            if (msg.seen) { st.seenN = (st.seenN || 0) + 1; st.lastSeenAt = Date.now(); }
+            else { st.unseenN = (st.unseenN || 0) + 1; st.lastUnseenAt = Date.now(); st.lastUnseenVia = String(msg.via || "-"); }
             chrome.storage.local.set({ cdpStats: st }, () => void chrome.runtime.lastError);
           } catch (e) { /* telemetry only */ }
           sendResponse({ ok: true });

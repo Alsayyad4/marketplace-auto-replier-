@@ -287,6 +287,21 @@
     });
   }
 
+  /* ----- Manual: send the demo videos to the OPEN chat right now -----
+   * Same engine, same duplicate guards — a chat already marked served exits at
+   * once (clear its mark below first). Progress shows in the video status line. */
+  if ($("sendVideosNow")) {
+    $("sendVideosNow").addEventListener("click", async () => {
+      const tab = await activeTab();
+      if (!tab) { $("sendVideosStatus").textContent = "no active tab"; return; }
+      $("sendVideosStatus").textContent = "starting…";
+      chrome.tabs.sendMessage(tab.id, { type: "SEND_VIDEOS_OPEN_CHAT" }, (resp) => {
+        if (chrome.runtime.lastError || !resp) { $("sendVideosStatus").textContent = "open the chat in Messenger first"; return; }
+        $("sendVideosStatus").textContent = resp.ok ? "started — watch the video status line (re-open this popup to refresh)" : (resp.error || "failed");
+      });
+    });
+  }
+
   /* ----- Maintenance: clear the "video already sent" mark for the OPEN chat -----
    * For chats wrongly marked served (old bug eras). Operator-verified, one chat at
    * a time; the content script refuses when a sent video is actually visible. */
