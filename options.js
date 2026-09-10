@@ -51,6 +51,10 @@
     demoVideoUrls: [],
     demoVideoDelaySec: 10,
     demoVideoBetweenSec: 8,
+    videoRetryMax: 2,
+    videoLinkFallback: true,
+    videoLinkUrl: "",
+    videoLinkText: "",
     smartFollowupEnabled: false,
     smartFollowupMaxCount: 1,
     smartFollowupQuietHours: 6,
@@ -113,6 +117,10 @@
     ["smartFollowupGapHours", "number"],
     ["demoVideoDelaySec", "number"],
     ["demoVideoBetweenSec", "number"],
+    ["videoRetryMax", "number"],
+    ["videoLinkFallback", "checked"],
+    ["videoLinkUrl", "value"],
+    ["videoLinkText", "value"],
   ];
 
   function fieldsToForm() {

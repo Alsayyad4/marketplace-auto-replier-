@@ -59,6 +59,10 @@ per-machine on/off).
 | `responseDelaySec` | number | 30 | Wait before replying (human-like). |
 | `jitterSec` | number | 60 | Extra random 0–N s added to the delay. |
 | `listings` | array | [] | Inventory rows; included in the prompt. Each: `{title, model, storage, condition, price (number), videoUrl, available (bool)}`. |
+| `videoRetryMax` | number | 2 | (v0.21.47) Native attach retries per chat when nothing could be confirmed staged; `0` = none. |
+| `videoLinkFallback` | bool | true | (v0.21.47) After the retries, send the demo as a LINK via the text path (chat then marked served). |
+| `videoLinkUrl` | string | "" | Link to send; blank = the first `demoVideoUrls` entry's URL. |
+| `videoLinkText` | string | "" | Message carrying the link; `{link}` = the URL; blank = built-in FR/EN line. |
 | `followUps` | array | [] | Follow-up nudges. Each: `{name, afterMinutes (number), message, enabled (bool)}`. After the bot replies, it arms a timer; if the buyer stays quiet that long it sends `message` once. |
 
 ### Advanced settings (stored but NOT active in the current "simple" build)

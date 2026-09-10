@@ -6,6 +6,22 @@ French), built for used-iPhone sales in Montréal. Runs locally per Chrome profi
 by default; **optional cloud sync** turns it into a web app so one change reaches
 every computer.
 
+> 🎯 **v0.21.47 — videos: evidence, not assumption (+ a link fallback so no buyer is left without the demo).**
+> A 190-agent audit of the video path found the "always failing" mechanism: since .43 a clip
+> that merely *dispatched* with nothing visible was counted as sent, Enter was pressed on an
+> empty composer, and the chat was stamped **sent ✓** forever — no video, no retry. Now a clip
+> counts only when Messenger itself shows it (preview tile, or its send control flipping to
+> Send); when the control still says "empty" the channel provably staged nothing, the next
+> channel is tried at once, and the chat gets **bounded retries** (`videoRetryMax`, default 2)
+> — then the demo goes out as a **link** through the normal text path (`videoLinkFallback`,
+> on by default; text/URL configurable in the Videos tab). Chats stamped sent-but-unseen by
+> the old verdict are re-opened once for that bounded retry. The trusted chooser channel got
+> tougher (waits for the debugger infobar to settle, hit-tests the click point, falls back to
+> keyboard activation, reads the input's file list back); the bot brings its own tab to the
+> front of an unfocused window; while a machine's attach is failing it **replies first** and
+> queues the set; and a **video doctor** posts one line to the Activity feed naming the failing
+> step (window hidden / attach button covered / no chooser / file access off / clip not on disk).
+>
 > 🛡️ **v0.21.46 — safety pass over the new attach channels.** A dropped file that Messenger
 > does not catch can no longer make the tab open the video itself; the intercepted file
 > dialog stays intercepted for the full click window so it can never appear on screen;

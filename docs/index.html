@@ -243,6 +243,14 @@
           <div id="demoVideoList" class="hint" style="margin-top:8px;">No central videos yet.</div>
 
           <hr />
+          <h3 style="margin:6px 0;">🛟 When a video can't be attached natively</h3>
+          <p class="hint">Each extension retries a few times with different attach channels; after that it sends the demo as a <b>link</b> through the normal text path, so the buyer always gets it. Applies to every computer.</p>
+          <div class="row"><label><input type="checkbox" id="videoLinkFallback" /> Send the demo video as a link when native attach keeps failing</label></div>
+          <div class="row"><label>Native attach retries per chat before the link <span class="hint">0 = link right away</span></label><input type="number" id="videoRetryMax" min="0" max="10" /></div>
+          <div class="row"><label>Link to send <span class="hint">blank = the first central video's own URL</span></label><input type="text" id="videoLinkUrl" placeholder="https://…" style="min-width:320px;" /></div>
+          <div class="row"><label>Link message <span class="hint">{link} = the URL; blank = built-in FR/EN line</span></label><input type="text" id="videoLinkText" placeholder="Voici la vidéo démo 🎥 (demo video) {link}" style="min-width:320px;" /></div>
+
+          <hr />
           <h3 style="margin:6px 0;">Video URL library <span class="hint">(reference only — not auto-sent)</span></h3>
           <div class="row"><button id="addVideo">+ Add video</button></div>
           <table id="videosTable">

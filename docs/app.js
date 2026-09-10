@@ -53,6 +53,10 @@
     demoVideoUrls: [], // central demo videos (uploaded to Supabase Storage) [{name,url}]
     demoVideoDelaySec: 10,
     demoVideoBetweenSec: 8,
+    videoRetryMax: 2, // native attach retries per chat before the link fallback
+    videoLinkFallback: true, // send the demo as a LINK when native attach keeps failing
+    videoLinkUrl: "", // blank = the first central video's URL
+    videoLinkText: "", // blank = built-in FR/EN line; {link} = the URL
     smartFollowupEnabled: false,
     smartFollowupMaxCount: 1,
     smartFollowupQuietHours: 6,
@@ -77,6 +81,7 @@
     ["businessInfo", "value"], ["instructions", "value"], ["examples", "value"],
     ["closerGoals", "value"], ["priceList", "value"], ["visitConfirmMessage", "value"],
     ["demoVideoDelaySec", "number"], ["demoVideoBetweenSec", "number"],
+    ["videoRetryMax", "number"], ["videoLinkFallback", "checked"], ["videoLinkUrl", "value"], ["videoLinkText", "value"],
     ["smartFollowupEnabled", "checked"], ["smartFollowupMaxCount", "number"],
     ["smartFollowupQuietHours", "number"], ["smartFollowupGapHours", "number"],
   ];

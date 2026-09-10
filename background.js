@@ -82,6 +82,13 @@ const DEFAULTS = {
   demoVideoUrls: [], // [{ name, url }]
   demoVideoDelaySec: 10, // pause before the FIRST video (after the reply)
   demoVideoBetweenSec: 8, // pause BETWEEN videos when several are configured
+  // (v0.21.47) evidence-based delivery: native attach retries per chat before the
+  // link fallback, and the fallback itself (the demo sent as a LINK through the
+  // proven text path when no attach channel can stage a clip on that machine).
+  videoRetryMax: 2, // 0 = no native retry (link right away when nothing attaches)
+  videoLinkFallback: true,
+  videoLinkUrl: "", // blank = the first central clip's URL
+  videoLinkText: "", // blank = built-in FR/EN line; {link} is replaced by the URL
   // smart follow-up on quiet chats (proactive — off by default; all knobs configurable)
   smartFollowupEnabled: false, // master on/off for proactive follow-ups
   smartFollowupMaxCount: 1, // how many follow-ups per chat, total (e.g. 1 or 2) — anti-spam cap
@@ -1495,7 +1502,26 @@ function pageComposerPoint() {
   try { c.scrollIntoView({ block: "center" }); } catch (e) { /* best effort */ }
   const r = c.getBoundingClientRect();
   if (!r.width || !r.height) return null;
-  return { x: Math.round(r.left + Math.min(r.width / 2, 120)), y: Math.round(r.top + r.height / 2) };
+  const x = Math.round(r.left + Math.min(r.width / 2, 120)), y = Math.round(r.top + r.height / 2);
+  // (v0.21.47) hit-test: is the composer really what sits at that point (an
+  // overlay/dialog/infobar-shifted layout would swallow the drop)?
+  let hit = null, hitLabel = "";
+  try {
+    const el = document.elementFromPoint(x, y);
+    hit = !!(el && (el === c || c.contains(el) || el.contains(c)));
+    hitLabel = el ? ((el.getAttribute && el.getAttribute("aria-label")) || el.tagName || "?") : "none";
+  } catch (e) { hit = null; }
+  return { x, y, hit, hitLabel };
+}
+// (v0.21.47) Keyboard activation of the attach button found by
+// pageAttachButtonPoint (stashed on the page window): coordinate-free, so a
+// covered/shifted click point cannot miss it. Returns true when it has focus.
+function pageFocusAttachButton() {
+  const b = window.__subsellAttachBtn;
+  if (!b || !b.isConnected) return false;
+  try { b.scrollIntoView({ block: "center" }); } catch (e) { /* best effort */ }
+  try { b.focus(); } catch (e) { return false; }
+  return document.activeElement === b || b.contains(document.activeElement);
 }
 function pageAttachButtonPoint() {
   const main = document.querySelector('[role="main"]') || document;
@@ -1516,12 +1542,50 @@ function pageAttachButtonPoint() {
     if (!r.width || !r.height) continue;
     if (r.bottom < cr.top - 60 || r.top > cr.bottom + 60) continue; // the composer band, a little slack
     const al = b.getAttribute("aria-label") || "";
-    if (more.test(al)) { moreBtn = { x: Math.round(r.left + r.width / 2), y: Math.round(r.top + r.height / 2) }; continue; }
+    if (more.test(al)) { moreBtn = { x: Math.round(r.left + r.width / 2), y: Math.round(r.top + r.height / 2), el: b }; continue; }
     if (!re.test(al) || bad.test(al)) continue;
-    if (!best || r.left < best.left) best = { x: Math.round(r.left + r.width / 2), y: Math.round(r.top + r.height / 2), left: r.left, label: al };
+    if (!best || r.left < best.left) best = { x: Math.round(r.left + r.width / 2), y: Math.round(r.top + r.height / 2), left: r.left, label: al, el: b };
   }
-  if (best) return { x: best.x, y: best.y, label: best.label };
-  return moreBtn ? { x: moreBtn.x, y: moreBtn.y, more: true } : null;
+  // (v0.21.47) hit-test the click point (covered by an overlay? shifted by the
+  // debugger infobar?) and stash the element for keyboard activation.
+  const hitInfo = (p) => {
+    let hit = null, hitLabel = "";
+    try {
+      const el = document.elementFromPoint(p.x, p.y);
+      hit = !!(el && (el === p.el || p.el.contains(el) || el.contains(p.el)));
+      hitLabel = el ? ((el.getAttribute && el.getAttribute("aria-label")) || el.tagName || "?") : "none";
+    } catch (e) { hit = null; }
+    return { hit, hitLabel };
+  };
+  if (best) {
+    try { window.__subsellAttachBtn = best.el; } catch (e) { /* page world only */ }
+    const h = hitInfo(best);
+    return { x: best.x, y: best.y, label: best.label, hit: h.hit, hitLabel: h.hitLabel };
+  }
+  if (moreBtn) {
+    try { window.__subsellAttachBtn = moreBtn.el; } catch (e) { /* page world only */ }
+    const h = hitInfo(moreBtn);
+    return { x: moreBtn.x, y: moreBtn.y, more: true, hit: h.hit, hitLabel: h.hitLabel };
+  }
+  return null;
+}
+// (v0.21.47) The "SubSell started debugging this browser" infobar pushes the page
+// DOWN as it animates in right after attach — a point measured at once is stale
+// by the time the click arrives (Messenger's composer is bottom-anchored; a
+// 36-px button is missed by a click 40 px too low). Wait until the viewport
+// height is stable: two reads 200 ms apart agree, ≤ 1.6 s.
+async function settleViewport(target) {
+  let prev = -1;
+  for (let i = 0; i < 8; i++) {
+    let h = -1;
+    try {
+      const r = await cdpCmd(target, "Runtime.evaluate", { expression: "window.innerHeight", returnByValue: true }, 2000);
+      h = r && r.result ? r.result.value : -1;
+    } catch (e) { return; }
+    if (i > 0 && h === prev) return;
+    prev = h;
+    await new Promise((r) => setTimeout(r, 200));
+  }
 }
 function pageMenuAttachItemPoint() {
   const re = /attach|joindre|jointe|fichier|pi[èe]ce|\bfile\b|photo|m[ée]dia|upload|t[ée]l[ée]vers|image|vid[ée]o/i;
@@ -1550,6 +1614,9 @@ async function cdpMouseClick(target, x, y) {
 async function cdpDrop(target, paths) {
   const pt = await pageEval(target, pageComposerPoint);
   if (!pt) { await recordCdp(false, "composer not found for drop"); return { ok: false, error: "composer not found for drop" }; }
+  // (v0.21.47) a drop point that is not the composer (overlay, dialog) would land
+  // nowhere and still report ok — say so instead, the next channel gets its turn
+  if (pt.hit === false) { await recordCdp(false, "drop point covered by " + (pt.hitLabel || "?")); return { ok: false, error: "composer covered at the drop point (" + (pt.hitLabel || "?") + ")" }; }
   // SAFETY NET: a real drop that NO handler cancels makes the tab NAVIGATE to the
   // dropped file (Blink's default drop action) — the Messenger tab would become
   // a video player. Arm document-level bubble-phase listeners that allow the
@@ -1589,26 +1656,71 @@ async function cdpChooser(target, tabId, paths) {
     // The mouse events are forwarded before the ack; a late ack must not throw us
     // out while the click is still being processed by a busy page.
     const click = async (x, y) => { clickAt = Date.now(); try { await cdpMouseClick(target, x, y); } catch (e) { /* forwarded anyway */ } };
+    // (v0.21.47) KEYBOARD activation — trusted and coordinate-free: focus the
+    // button Messenger renders, press Enter (then Space). A click point covered
+    // by an overlay or shifted by the infobar cannot miss this way.
+    const keyActivate = async () => {
+      const focused = await pageEval(target, pageFocusAttachButton);
+      if (!focused) return null;
+      for (const k of [{ key: "Enter", code: "Enter", vk: 13, text: "\r" }, { key: " ", code: "Space", vk: 32, text: " " }]) {
+        clickAt = Date.now();
+        try {
+          await cdpCmd(target, "Input.dispatchKeyEvent", { type: "keyDown", key: k.key, code: k.code, windowsVirtualKeyCode: k.vk, text: k.text }, 3000);
+          await cdpCmd(target, "Input.dispatchKeyEvent", { type: "keyUp", key: k.key, code: k.code, windowsVirtualKeyCode: k.vk }, 3000);
+        } catch (e) { /* forwarded anyway */ }
+        const p = await waitOpened(3000);
+        if (p) return p;
+      }
+      return null;
+    };
     let viaMenu = false;
     if (bt.more) {
       // compact bar: the attach control lives in the "+" menu
       await click(bt.x, bt.y);
-      await new Promise((r) => setTimeout(r, 700));
-      const item = await pageEval(target, pageMenuAttachItemPoint);
+      // (v0.21.47) wait for the menu to actually render (was a fixed 700 ms)
+      let item = null;
+      for (let i = 0; i < 6 && !item; i++) {
+        await new Promise((r) => setTimeout(r, 400));
+        item = await pageEval(target, pageMenuAttachItemPoint);
+      }
       if (!item) { await escape(); await recordCdp(false, "attach item not found in the more-actions menu"); return { ok: false, error: "attach item not found in the more-actions menu" }; }
       bt = item; viaMenu = true;
+    } else {
+      // (v0.21.47) re-measure right before the click — the infobar may still have been settling
+      const again = await pageEval(target, pageAttachButtonPoint);
+      if (again && !again.more) bt = again;
     }
     await click(bt.x, bt.y);
-    const params = await waitOpened(ACTIVATION_MS); // ≥ the 5 s transient-activation window: a late chooser is still caught, never shown
+    let params = await waitOpened(ACTIVATION_MS); // ≥ the 5 s transient-activation window: a late chooser is still caught, never shown
+    let how = "click";
+    if ((!params || params.backendNodeId == null) && !viaMenu) {
+      // the click opened no chooser (point covered? hit-test off?): keyboard next
+      await escape();
+      params = await keyActivate();
+      how = "keyboard";
+    }
     if (!params || params.backendNodeId == null) {
       await escape(); // whatever the click opened instead (menu, popover, lightbox) must not stay over the page
-      await recordCdp(false, "no file chooser after clicking " + (bt.label || "attach"));
-      return { ok: false, error: "no file chooser opened after clicking the attach button (" + (bt.label || "?") + ")" };
+      const why = "no file chooser after clicking " + (bt.label || "attach") + (bt.hit === false ? " (point covered by " + (bt.hitLabel || "?") + ")" : "");
+      await recordCdp(false, why);
+      return { ok: false, error: "no file chooser opened after clicking the attach button (" + (bt.label || "?") + ")" + (bt.hit === false ? " — point covered by " + (bt.hitLabel || "?") : "") };
     }
     await cdpCmd(target, "DOM.setFileInputFiles", { files: paths, backendNodeId: params.backendNodeId }, 15000);
+    // (v0.21.47) STAGED READ-BACK: the input's own file list, render-free evidence
+    // that Messenger's input now holds the clip (null = could not be read).
+    let staged = null;
+    try {
+      const rn = await cdpCmd(target, "DOM.resolveNode", { backendNodeId: params.backendNodeId }, 3000);
+      const oid = rn && rn.object && rn.object.objectId;
+      if (oid) {
+        const fl = await cdpCmd(target, "Runtime.callFunctionOn", { objectId: oid, functionDeclaration: "function(){ return this.files ? this.files.length : -1; }", returnByValue: true }, 3000);
+        const n = fl && fl.result ? fl.result.value : -1;
+        if (typeof n === "number" && n >= 0) staged = n > 0;
+      }
+    } catch (e) { staged = null; }
     void viaMenu;
     await recordCdp(true);
-    return { ok: true, channel: "chooser" };
+    return { ok: true, channel: "chooser", staged, how };
   } finally {
     // never switch the interception off inside the activation window of a click
     const left = clickAt ? ACTIVATION_MS - (Date.now() - clickAt) : 0;
@@ -1625,6 +1737,7 @@ async function cdpSetFiles(tabId, paths, channel) {
   try {
     await new Promise((res, rej) => chrome.debugger.attach(target, "1.3", () => (chrome.runtime.lastError ? rej(new Error(chrome.runtime.lastError.message)) : res())));
     attached = true;
+    await settleViewport(target); // (v0.21.47) let the debugger infobar finish shifting the page
     // EXISTENCE PROBE (v0.21.38): stage the paths on a DETACHED input first and
     // read the resulting File sizes. Chrome does not validate paths in
     // DOM.setFileInputFiles — a clip deleted from disk becomes a 0-byte File,
@@ -1672,6 +1785,58 @@ async function cdpSetFiles(tabId, paths, channel) {
     await recordCdp(false, m);
     // "Not allowed" = the extension's "Allow access to file URLs" toggle is OFF on this machine.
     return { ok: false, error: m, fileAccess: /not allowed/i.test(m) ? "denied" : undefined };
+  } finally {
+    if (attached) { try { chrome.debugger.detach(target, () => void chrome.runtime.lastError); } catch (e) { /* already gone */ } }
+  }
+}
+
+// (v0.21.47) VIDEO DOCTOR (browser side): read-only facts about the attach path
+// on THIS tab — window/tab visibility, whether the attach button is found and
+// really sits under its click point, whether a persistent composer input exists,
+// whether the file API may read files (the "Allow access to file URLs" toggle)
+// and whether a downloaded clip is actually on disk. Nothing is clicked, nothing
+// is staged in the composer. Never throws.
+async function cdpDoctor(tabId) {
+  if (!chrome.debugger) return { ok: false, error: "debugger API unavailable" };
+  if (!tabId) return { ok: false, error: "no tab" };
+  const target = { tabId };
+  const F = [];
+  let attached = false;
+  try {
+    try {
+      const t = await new Promise((r) => chrome.tabs.get(tabId, (x) => { void chrome.runtime.lastError; r(x || null); }));
+      const w = t && chrome.windows ? await new Promise((r) => chrome.windows.get(t.windowId, (x) => { void chrome.runtime.lastError; r(x || null); })) : null;
+      F.push("tab=" + (t ? (t.active ? "active" : "BACKGROUND") : "?") + " win=" + (w ? w.state + (w.focused ? "/focused" : "") : "?"));
+    } catch (e) { F.push("tab=?"); }
+    await new Promise((res, rej) => chrome.debugger.attach(target, "1.3", () => (chrome.runtime.lastError ? rej(new Error(chrome.runtime.lastError.message)) : res())));
+    attached = true;
+    await settleViewport(target);
+    const bt = await pageEval(target, pageAttachButtonPoint);
+    F.push("attachBtn=" + (bt
+      ? (bt.more ? "via-more-menu" : "\"" + String(bt.label || "").slice(0, 28) + "\"") + "@" + bt.x + "," + bt.y + (bt.hit === false ? " COVERED-by:" + String(bt.hitLabel || "?").slice(0, 24) : bt.hit ? " hit-ok" : "")
+      : "NOT-FOUND"));
+    const cp = await pageEval(target, pageComposerPoint);
+    F.push("composerPt=" + (cp ? cp.x + "," + cp.y + (cp.hit === false ? " COVERED-by:" + String(cp.hitLabel || "?").slice(0, 24) : "") : "none"));
+    const ev = await cdpCmd(target, "Runtime.evaluate", { expression: "!!(" + pageFindComposerFileInput.toString() + ")()", returnByValue: true }, 8000);
+    F.push("persistentInput=" + (ev && ev.result && ev.result.value ? "found" : "none"));
+    try {
+      const vd = await new Promise((r) => chrome.storage.local.get(["videoDisk"], (x) => r((x && x.videoDisk) || {})));
+      const first = Object.keys(vd).map((k) => vd[k]).find((e) => e && e.path);
+      if (first) {
+        const pr = await cdpCmd(target, "Runtime.evaluate", { expression: "(function(){var i=document.createElement('input');i.type='file';return i;})()", returnByValue: false }, 5000);
+        const pid = pr && pr.result && pr.result.objectId;
+        await cdpCmd(target, "DOM.setFileInputFiles", { objectId: pid, files: [first.path] }, 8000);
+        const sz = await cdpCmd(target, "Runtime.callFunctionOn", { objectId: pid, functionDeclaration: "function(){ return this.files.length ? (this.files[0].size||0) : -1; }", returnByValue: true }, 5000);
+        const n = sz && sz.result ? sz.result.value : -1;
+        F.push("fileAccess=ok diskClip=" + (n > 0 ? Math.round(n / 1048576) + "MB" : n === 0 ? "0-BYTES(missing)" : "?"));
+      } else F.push("diskClip=NONE-YET");
+    } catch (e) {
+      const m = String((e && e.message) || e);
+      F.push("fileAccess=" + (/not allowed/i.test(m) ? "DENIED(turn ON 'Allow access to file URLs')" : "err:" + m.slice(0, 40)));
+    }
+    return { ok: true, text: F.join(" ") };
+  } catch (e) {
+    return { ok: false, error: String((e && e.message) || e) + (F.length ? " | " + F.join(" ") : "") };
   } finally {
     if (attached) { try { chrome.debugger.detach(target, () => void chrome.runtime.lastError); } catch (e) { /* already gone */ } }
   }
@@ -1853,6 +2018,7 @@ async function buildDiagnostic() {
         "videoCatchUp", "autoCatchUp01213", "autoCatchUp01217", "videoEnabled", "demoVideos",
         "videoCache", "replyLog", "sudBase", "sudDirName", "sudLastCheck", "sudStatus", "cdpStats", "videoDisk", "winRestoreN", "winRestoreAt", "attachPref",
         "cooldowns", "replyCounts", "lastHandled", "videoAttachTrace",
+        "attachChannelStats", "attachMiss", "videoDoctorLast", "tabActivateN", "tabActivateAt",
       ],
       (x) => r(x || {})
     )
@@ -1915,6 +2081,21 @@ async function buildDiagnostic() {
       (cs.lastErr ? " lastErr=\"" + cut(cs.lastErr, 70) + "\"" : "") +
       (/not allowed/i.test(cs.lastErr || "") && (cs.lastErrAt || 0) > (cs.lastOkAt || 0) ? " ⚠ turn ON 'Allow access to file URLs' for SubSell in chrome://extensions" : "") +
       " | disk=" + onDisk + " clip(s)" + (missing ? " missing=" + missing : "") + (pending ? " downloading=" + pending : "") + (failed ? " failed=" + failed : "")
+    );
+  }
+  {
+    // (v0.21.47) per-channel evidence + machine attach health + the last doctor line
+    const acs = st.attachChannelStats || {};
+    const am2 = st.attachMiss || {};
+    L.push(
+      "attach: missStreak=" + (am2.streak || 0) + (am2.at ? "(" + ageM(am2.at) + ")" : "") +
+      " channels=" + ["chooser", "drop", "input", "paste"].map((k) => {
+        const e = acs[k];
+        return e ? k + ":" + (e.dispatched || 0) + "d/" + (e.tile || 0) + "t/" + (e.blind || 0) + "b/" + (e.none || 0) + "n/" + (e.unverified || 0) + "u" : k + ":-";
+      }).join(" ") +
+      " retryMax=" + (settings.videoRetryMax != null ? settings.videoRetryMax : "?") + " linkFallback=" + (settings.videoLinkFallback === false ? "off" : "on") +
+      " tabActivated=" + (st.tabActivateN || 0) + (st.tabActivateAt ? "(" + ageM(st.tabActivateAt) + ")" : "") +
+      (st.videoDoctorLast ? " | doctor(" + ageM(st.videoDoctorLast.at) + "): " + cut(st.videoDoctorLast.text, 400) : "")
     );
   }
   const c = rollWindows(await getCounters(), now);
@@ -2218,6 +2399,12 @@ chrome.runtime.onMessage.addListener((msg, _sender, sendResponse) => {
           sendResponse(await cdpSetFiles(tabId, msg.paths, msg.channel || "input"));
           break;
         }
+        case "CDP_DOCTOR": {
+          // (v0.21.47) read-only attach-path facts for the video doctor / 🩺 probe
+          const tabId = _sender && _sender.tab && _sender.tab.id;
+          sendResponse(await cdpDoctor(tabId));
+          break;
+        }
         case "CDP_VERIFIED": {
           // Content saw the preview appear after a file-API attach (protocol ok ≠ staged).
           // blind:true = staged per the composer's send control, tile not rendered.
@@ -2409,7 +2596,7 @@ async function heartbeat() {
   // gets minimized anyway, restore it here every minute (never focused, so the
   // desktop is not stolen). Local `keepWindowsRestored:false` turns this off.
   try {
-    const kw = await new Promise((r) => chrome.storage.local.get(["keepWindowsRestored", "winRestoreN"], (x) => r(x || {})));
+    const kw = await new Promise((r) => chrome.storage.local.get(["keepWindowsRestored", "winRestoreN", "tabActivateN"], (x) => r(x || {})));
     if (kw.keepWindowsRestored !== false && chrome.windows) {
       const wids = Array.from(new Set(tabs.map((t) => t.windowId).filter((w) => w != null)));
       let n = 0;
@@ -2423,6 +2610,24 @@ async function heartbeat() {
       if (n) {
         chrome.storage.local.set({ winRestoreN: (kw.winRestoreN || 0) + n, winRestoreAt: Date.now() }, () => void chrome.runtime.lastError);
         LOG("restored", n, "minimized Messenger window(s)");
+      }
+      // (v0.21.47) A restored window whose ACTIVE tab is not Messenger still
+      // leaves the bot's tab hidden (no rendering, throttled, tiles never paint).
+      // When that window is not the one the operator is working in (not
+      // focused), bring the bot's tab to the front of it. Never touches a
+      // focused window; never flips between two Messenger tabs in one window.
+      let act = 0;
+      for (const t of tabs) {
+        if (t.active) continue;
+        if (tabs.some((o) => o.windowId === t.windowId && o.active)) continue;
+        const w = await new Promise((r) => chrome.windows.get(t.windowId, (x) => { void chrome.runtime.lastError; r(x || null); }));
+        if (!w || w.focused) continue;
+        await new Promise((r) => chrome.tabs.update(t.id, { active: true }, () => { void chrome.runtime.lastError; r(); }));
+        act++;
+      }
+      if (act) {
+        chrome.storage.local.set({ tabActivateN: (kw.tabActivateN || 0) + act, tabActivateAt: Date.now() }, () => void chrome.runtime.lastError);
+        LOG("brought", act, "Messenger tab(s) to the front of their window");
       }
     }
   } catch (e) { /* best effort */ }
