@@ -1474,7 +1474,121 @@ async function recordCdp(ok, err) {
 }
 // Attach `paths` to the composer's file input of `tabId` through the debugger
 // protocol. Attached for ~1-3s only; always detaches. Never throws.
-async function cdpSetFiles(tabId, paths) {
+// ---- TRUSTED-INPUT ATTACH CHANNELS (v0.21.45) ----
+// A Messenger build that creates its file input ON DEMAND (only when the attach
+// button is clicked) has no persistent input to set: DOM.setFileInputFiles on
+// whatever input exists reports ok and stages nothing (PC-zctal: ok=27,
+// verified=0, chat-unseen=31, pastes dead too). Two channels mirror a real user
+// and work regardless of how the composer is built:
+//  "drop"    — a TRUSTED drag-and-drop of the real file onto the composer
+//              (Input.dispatchDragEvent with DragData.files);
+//  "chooser" — a TRUSTED click on the attach button (Input.dispatchMouseEvent =
+//              user activation) while the file chooser is intercepted
+//              (Page.setInterceptFileChooserDialog → Page.fileChooserOpened
+//              names the input Messenger itself just created → set the files on
+//              THAT input by backendNodeId; no dialog is ever shown).
+// The content script learns per machine which channel produces a visible clip.
+function pageComposerPoint() {
+  const main = document.querySelector('[role="main"]') || document;
+  const c = main.querySelector('[contenteditable="true"][role="textbox"]') || main.querySelector('[contenteditable="true"]');
+  if (!c) return null;
+  try { c.scrollIntoView({ block: "center" }); } catch (e) { /* best effort */ }
+  const r = c.getBoundingClientRect();
+  if (!r.width || !r.height) return null;
+  return { x: Math.round(r.left + Math.min(r.width / 2, 120)), y: Math.round(r.top + r.height / 2) };
+}
+function pageAttachButtonPoint() {
+  const main = document.querySelector('[role="main"]') || document;
+  const c = main.querySelector('[contenteditable="true"][role="textbox"]') || main.querySelector('[contenteditable="true"]');
+  if (!c) return null;
+  const cr = c.getBoundingClientRect();
+  const re = /attach|joindre|jointe|fichier|pi[èe]ce|\bfile\b|photo|m[ée]dia|upload|t[ée]l[ée]vers|image|vid[ée]o/i;
+  const bad = /sticker|autocollant|gif|emoji|like|j'?aime|voice|vocal|audio|micro|record|enregistr|send|envoyer|listing|annonce/i;
+  const more = /more actions|plus d.actions|ouvrir plus|open more|more options|plus d.options/i;
+  let best = null, moreBtn = null;
+  for (const b of main.querySelectorAll('[role="button"][aria-label], button[aria-label], [aria-label][tabindex]')) {
+    const r = b.getBoundingClientRect();
+    if (!r.width || !r.height) continue;
+    if (r.bottom < cr.top - 60 || r.top > cr.bottom + 60) continue; // the composer band, a little slack
+    const al = b.getAttribute("aria-label") || "";
+    if (more.test(al)) { moreBtn = { x: Math.round(r.left + r.width / 2), y: Math.round(r.top + r.height / 2) }; continue; }
+    if (!re.test(al) || bad.test(al)) continue;
+    if (!best || r.left < best.left) best = { x: Math.round(r.left + r.width / 2), y: Math.round(r.top + r.height / 2), left: r.left, label: al };
+  }
+  if (best) return { x: best.x, y: best.y, label: best.label };
+  return moreBtn ? { x: moreBtn.x, y: moreBtn.y, more: true } : null;
+}
+function pageMenuAttachItemPoint() {
+  const re = /attach|joindre|jointe|fichier|pi[èe]ce|\bfile\b|photo|m[ée]dia|upload|t[ée]l[ée]vers|image|vid[ée]o/i;
+  const bad = /sticker|autocollant|gif|emoji|like|j'?aime|voice|vocal|audio|micro|record|enregistr|listing|annonce|poll|sondage|location|position/i;
+  const roots = Array.from(document.querySelectorAll('[role="menu"], [role="dialog"], [role="listbox"]'));
+  for (const root of roots) {
+    for (const it of root.querySelectorAll('[role="menuitem"], [role="menuitemradio"], [role="option"], [role="button"]')) {
+      const t = ((it.getAttribute("aria-label") || "") + " " + (it.innerText || "")).trim();
+      if (!re.test(t) || bad.test(t)) continue;
+      const r = it.getBoundingClientRect();
+      if (!r.width || !r.height) continue;
+      return { x: Math.round(r.left + r.width / 2), y: Math.round(r.top + r.height / 2), label: t.slice(0, 40) };
+    }
+  }
+  return null;
+}
+async function pageEval(target, fn) {
+  const r = await cdpCmd(target, "Runtime.evaluate", { expression: "(" + fn.toString() + ")()", returnByValue: true }, 8000);
+  return r && r.result ? r.result.value : null;
+}
+async function cdpMouseClick(target, x, y) {
+  await cdpCmd(target, "Input.dispatchMouseEvent", { type: "mouseMoved", x, y }, 3000);
+  await cdpCmd(target, "Input.dispatchMouseEvent", { type: "mousePressed", x, y, button: "left", clickCount: 1 }, 3000);
+  await cdpCmd(target, "Input.dispatchMouseEvent", { type: "mouseReleased", x, y, button: "left", clickCount: 1 }, 3000);
+}
+async function cdpDrop(target, paths) {
+  const pt = await pageEval(target, pageComposerPoint);
+  if (!pt) { await recordCdp(false, "composer not found for drop"); return { ok: false, error: "composer not found for drop" }; }
+  const data = { items: [], files: paths, dragOperationsMask: 1 };
+  await cdpCmd(target, "Input.dispatchDragEvent", { type: "dragEnter", x: pt.x, y: pt.y, data }, 5000);
+  await cdpCmd(target, "Input.dispatchDragEvent", { type: "dragOver", x: pt.x, y: pt.y, data }, 5000);
+  await cdpCmd(target, "Input.dispatchDragEvent", { type: "drop", x: pt.x, y: pt.y, data }, 5000);
+  await recordCdp(true);
+  return { ok: true, channel: "drop" };
+}
+async function cdpChooser(target, tabId, paths) {
+  let bt = await pageEval(target, pageAttachButtonPoint);
+  if (!bt) { await recordCdp(false, "attach button not found"); return { ok: false, error: "attach button not found" }; }
+  let listener = null;
+  try {
+    await cdpCmd(target, "Page.enable", {}, 5000);
+    await cdpCmd(target, "Page.setInterceptFileChooserDialog", { enabled: true }, 5000);
+    const opened = new Promise((resolve) => {
+      listener = (src, method, params) => { if (src && src.tabId === tabId && method === "Page.fileChooserOpened") resolve(params || {}); };
+      chrome.debugger.onEvent.addListener(listener);
+    });
+    const waitOpened = (ms) => Promise.race([opened, new Promise((r) => setTimeout(() => r(null), ms))]);
+    let viaMenu = false;
+    if (bt.more) {
+      // compact bar: the attach control lives in the "+" menu
+      await cdpMouseClick(target, bt.x, bt.y);
+      await new Promise((r) => setTimeout(r, 700));
+      const item = await pageEval(target, pageMenuAttachItemPoint);
+      if (!item) { await recordCdp(false, "attach item not found in the more-actions menu"); return { ok: false, error: "attach item not found in the more-actions menu" }; }
+      bt = item; viaMenu = true;
+    }
+    await cdpMouseClick(target, bt.x, bt.y);
+    const params = await waitOpened(4000);
+    if (!params || params.backendNodeId == null) {
+      if (viaMenu) { try { await cdpCmd(target, "Input.dispatchKeyEvent", { type: "keyDown", key: "Escape", code: "Escape", windowsVirtualKeyCode: 27 }, 2000); await cdpCmd(target, "Input.dispatchKeyEvent", { type: "keyUp", key: "Escape", code: "Escape", windowsVirtualKeyCode: 27 }, 2000); } catch (e) { /* best effort */ } }
+      await recordCdp(false, "no file chooser after clicking " + (bt.label || "attach"));
+      return { ok: false, error: "no file chooser opened after clicking the attach button (" + (bt.label || "?") + ")" };
+    }
+    await cdpCmd(target, "DOM.setFileInputFiles", { files: paths, backendNodeId: params.backendNodeId }, 15000);
+    await recordCdp(true);
+    return { ok: true, channel: "chooser" };
+  } finally {
+    if (listener) { try { chrome.debugger.onEvent.removeListener(listener); } catch (e) { /* gone */ } }
+    try { await cdpCmd(target, "Page.setInterceptFileChooserDialog", { enabled: false }, 2000); } catch (e) { /* detached */ }
+  }
+}
+async function cdpSetFiles(tabId, paths, channel) {
   if (!chrome.debugger) { await recordCdp(false, "debugger API unavailable"); return { ok: false, error: "debugger API unavailable (permission not granted yet — reload the extension)" }; }
   if (!tabId || !Array.isArray(paths) || !paths.length) return { ok: false, error: "bad request" };
   const target = { tabId };
@@ -1505,6 +1619,8 @@ async function cdpSetFiles(tabId, paths) {
         }
       }
     } catch (e) { /* probe unsupported here — proceed exactly as before */ }
+    if (channel === "drop") return await cdpDrop(target, paths);
+    if (channel === "chooser") return await cdpChooser(target, tabId, paths);
     const ev = await cdpCmd(target, "Runtime.evaluate", { expression: "(" + pageFindComposerFileInput.toString() + ")()", returnByValue: false }, 8000);
     const obj = ev && ev.result;
     if (!obj || !obj.objectId) { await recordCdp(false, "composer file input not found"); return { ok: false, error: "composer file input not found" }; }
@@ -1706,7 +1822,7 @@ async function buildDiagnostic() {
         "cloudConfig", "cloudConfigAt", "cloudAuth", "cloudStale", "lastMirror", "debugTick",
         "videoSentThreads", "videoAttempts", "videoUrlFails", "waitingSince", "videoPending",
         "videoCatchUp", "autoCatchUp01213", "autoCatchUp01217", "videoEnabled", "demoVideos",
-        "videoCache", "replyLog", "sudBase", "sudDirName", "sudLastCheck", "cdpStats", "videoDisk", "winRestoreN", "winRestoreAt",
+        "videoCache", "replyLog", "sudBase", "sudDirName", "sudLastCheck", "sudStatus", "cdpStats", "videoDisk", "winRestoreN", "winRestoreAt", "attachPref",
         "cooldowns", "replyCounts", "lastHandled", "videoAttachTrace",
       ],
       (x) => r(x || {})
@@ -1764,6 +1880,7 @@ async function buildDiagnostic() {
       " ok=" + (cs.okN || 0) + "(" + ageM(cs.lastOkAt) + ") verified=" + (cs.verifiedN || 0) + "(" + ageM(cs.lastVerifiedAt) + ")" +
       (cs.blindN ? " blind=" + cs.blindN : "") +
       " chat-seen=" + (cs.seenN || 0) + " chat-unseen=" + (cs.unseenN || 0) + (cs.unseenN ? "(" + ageM(cs.lastUnseenAt) + " via " + (cs.lastUnseenVia || "-") + ")" : "") +
+      " channel=" + (st.attachPref && st.attachPref.channel ? st.attachPref.channel + "(" + (st.attachPref.hits || 0) + " hits, " + ageM(st.attachPref.at) + ")" : "learning") +
       (cs.unverifiedN ? " unverified=" + cs.unverifiedN + "(" + ageM(cs.lastUnverifiedAt) + ")" : "") +
       " err=" + (cs.errN || 0) + "(" + ageM(cs.lastErrAt) + ")" +
       (cs.lastErr ? " lastErr=\"" + cut(cs.lastErr, 70) + "\"" : "") +
@@ -1816,7 +1933,7 @@ async function buildDiagnostic() {
     " urlStrikesActive=" + strikes +
     " catchUp=" + (cu.armed ? "ARMED(" + ageM(cu.at) + ")" : "off") +
     " auto13=" + (st.autoCatchUp01213 ? "done" : "-") + " auto17=" + (st.autoCatchUp01217 ? "done" : "-") +
-    " | sud: base=" + (st.sudBase ? "set" : "-") + " dir=" + cut(st.sudDirName, 24) + " lastCheck=" + ageM(st.sudLastCheck) +
+    " | sud: base=" + (st.sudBase ? "set" : "-") + " dir=" + cut(st.sudDirName, 24) + " lastCheck=" + ageM(st.sudLastCheck) + (st.sudBase ? "" : " why=\"" + cut(st.sudStatus, 110) + "\"") +
     " | winRestored=" + (st.winRestoreN || 0) + (st.winRestoreN ? "(" + ageM(st.winRestoreAt) + ")" : "")
   );
   const trA = Array.isArray(st.videoAttachTrace) ? st.videoAttachTrace : [];
@@ -2069,7 +2186,7 @@ chrome.runtime.onMessage.addListener((msg, _sender, sendResponse) => {
         case "CDP_SET_FILES": {
           // Content asks to attach real files to ITS tab's composer via the debugger protocol.
           const tabId = _sender && _sender.tab && _sender.tab.id;
-          sendResponse(await cdpSetFiles(tabId, msg.paths));
+          sendResponse(await cdpSetFiles(tabId, msg.paths, msg.channel || "input"));
           break;
         }
         case "CDP_VERIFIED": {

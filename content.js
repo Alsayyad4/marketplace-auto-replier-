@@ -1208,6 +1208,7 @@
       return dt;
     };
     const attempts = [];
+    let pasteFnRef = null; // the synthetic paste, also used as the last just-send channel
     if (useCdp) {
       const cdpFn = async () => {
         setStatus({ lastAction: "attaching video via Chrome file API…" });
@@ -1235,6 +1236,7 @@
         return true;
       };
       pasteFn.via = "paste";
+      pasteFnRef = pasteFn;
       attempts.push(pasteFn); // optimistic — fired even while a previous upload runs
       if (trayUploads() > 0) attempts.push(pasteFn); // settled retry — only for the case it was written for (an upload running at ladder start)
       const dragFn = async () => {
@@ -1288,35 +1290,72 @@
     if (opts && opts.justSend) {
       const beforeEls0 = new Set(trayEls());
       const beforeBtns0 = new Set(trayRemoveBtns());
-      let dispatched = false;
-      for (const attempt of attempts) {
-        if (!(attempt.isCdp || attempt.via === "paste")) break; // never drag/input here
-        if (tid && !stillOnThread(tid)) return "aborted";
-        let fired = false;
-        try { fired = !!(await Promise.resolve(safe(attempt, false))); } catch (e) { fired = false; }
-        if (fired) { dispatched = true; lastAttachVia = attempt.via || "-"; break; }
-        // the file-API CALL failed (input not found / file missing / no debugger):
-        // nothing reached the composer, so ONE paste is safe; a paste that could
-        // not fire (no File) ends the attempt
-      }
-      if (!dispatched) return false; // clean failure — retried on a later visit
+      const tileNow = () => trayEls().some((el) => !beforeEls0.has(el));
+      const canCdp = !!diskPath && cdpUsableNow() && !!composer && !composerText(composer);
+      // ATTACH CHANNELS (v0.21.45): "drop" (trusted drag-and-drop of the real file
+      // onto the composer), "chooser" (trusted click on the attach button with the
+      // file chooser intercepted — the input Messenger itself creates gets the
+      // file), "input" (set a persistent input directly), "paste" (synthetic).
+      // The machine's LEARNED channel is used alone; with no preference yet, and
+      // only while nothing has ever been confirmed sent on this machine (nothing
+      // staged = nothing to duplicate), the channels are tried in turn within
+      // this one attach, 20 s each, until a tile shows — that channel becomes the
+      // preference (cleared again after 3 sets with no video visible in the chat).
+      const pref = await getAttachPref();
+      const cs = (await getLocal(["cdpStats"])).cdpStats || {};
+      let order = pref ? [pref.channel] : ["drop", "chooser", "input", "paste"];
+      if (!canCdp) order = order.filter((c) => c === "paste");
+      if (!order.length) order = ["paste"];
+      const escalate = !pref && !(cs.seenN > 0);
       const JUST_SEND_WAIT_MS = 75000;
       const t0 = Date.now();
-      let seenAt = 0;
-      setStatus({ lastAction: "clip handed to the composer (" + lastAttachVia + ") — waiting for the upload…" });
+      let dispatched = null;
+      for (const ch of order) {
+        if (tid && !stillOnThread(tid)) return dispatched ? "navigated" : "aborted";
+        let fired = false;
+        if (ch === "paste") {
+          try { fired = pasteFnRef ? !!(await pasteFnRef()) : false; } catch (e) { fired = false; }
+        } else {
+          const r = await ask({ type: "CDP_SET_FILES", paths: [diskPath], channel: ch });
+          if (r && (r.ok || r.maybeSet)) fired = true;
+          else {
+            if (r && r.missing) forgetDiskPaths([diskPath]);
+            if (r && (r.fileAccess === "denied" || /unavailable|permission/i.test((r && r.error) || ""))) noteCdpFail(r);
+            setStatus({ videoLast: "attach via " + ch + " not possible here: " + trunc((r && r.error) || "?", 70) });
+          }
+        }
+        if (!fired) continue;
+        dispatched = ch;
+        lastAttachVia = ch;
+        setStatus({ lastAction: "clip handed to the composer (" + ch + ") — waiting for the upload…" });
+        const w0 = Date.now();
+        const windowMs = escalate ? 20000 : JUST_SEND_WAIT_MS;
+        let seenAt = 0;
+        while (Date.now() - w0 < windowMs) {
+          await sleep(1000);
+          if (tid && !stillOnThread(tid)) {
+            for (const b of trayRemoveBtns()) if (!beforeBtns0.has(b)) safe(() => b.click()); // de-stray the wrong chat
+            return "navigated";
+          }
+          const seen = tileNow();
+          if (seen && !seenAt) { seenAt = Date.now(); await rememberAttachPref(ch); }
+          if (seen && trayUploads() === 0 && Date.now() - seenAt > 2000) return true; // tile visible, upload done
+          // staged per the composer's own control but no tile after 45 s: stop waiting for one
+          if (!seen && ctlBase && stagedPerControl(ctlBase) === true && !composerText(composer) && Date.now() - w0 > 45000) break;
+        }
+        if (tileNow()) return true; // visible (upload may still run — the caller waits it out)
+        if (!escalate) break;
+      }
+      if (!dispatched) return false; // no channel could even dispatch — clean failure, retried later
+      // Nothing visible from any channel: keep the rest of the budget (a late tile
+      // still counts), then send blind. A preferred channel that shows nothing
+      // three sets in a row is forgotten so the channels are re-tried.
       while (Date.now() - t0 < JUST_SEND_WAIT_MS) {
         await sleep(1000);
-        if (tid && !stillOnThread(tid)) {
-          for (const b of trayRemoveBtns()) if (!beforeBtns0.has(b)) safe(() => b.click()); // de-stray the wrong chat
-          return "navigated";
-        }
-        const seen = trayEls().some((el) => !beforeEls0.has(el));
-        if (seen && !seenAt) seenAt = Date.now();
-        if (seen && trayUploads() === 0 && Date.now() - seenAt > 2000) return true; // tile visible, upload done
-        // staged per the composer's own control but no tile after 45 s: stop waiting for one
-        if (!seen && ctlBase && stagedPerControl(ctlBase) === true && !composerText(composer) && Date.now() - t0 > 45000) break;
+        if (tid && !stillOnThread(tid)) return "navigated";
+        if (tileNow()) { await rememberAttachPref(dispatched); return true; }
       }
-      if (trayEls().some((el) => !beforeEls0.has(el))) return true; // tile visible (upload may still run — the caller waits it out)
+      if (pref) await notePrefMiss();
       return "assume";
     }
 
@@ -1769,9 +1808,28 @@
     }
     setStatus({ videoLast: "file API attach failed: " + trunc(err, 80) + " — falling back to paste" });
   }
+  // ATTACH CHANNEL PREFERENCE (v0.21.45): the channel that last produced a VISIBLE
+  // clip on this machine (drop / chooser / input / paste). Learned per machine;
+  // forgotten after 3 sets in a row with no tile, or 3 sets with no video visible
+  // in the chat — the channels are then tried in turn again.
+  async function getAttachPref() {
+    const p = (await getLocal(["attachPref"])).attachPref;
+    return p && p.channel ? p : null;
+  }
+  async function rememberAttachPref(channel) {
+    const p = (await getLocal(["attachPref"])).attachPref || {};
+    await setLocal({ attachPref: { channel, at: Date.now(), hits: (p.channel === channel ? (p.hits || 0) : 0) + 1, misses: 0 } });
+  }
+  async function notePrefMiss() {
+    const p = (await getLocal(["attachPref"])).attachPref;
+    if (!p || !p.channel) return;
+    const misses = (p.misses || 0) + 1;
+    if (misses >= 3) { await setLocal({ attachPref: null }); setStatus({ videoLast: "attach channel '" + p.channel + "' stopped showing clips — re-learning" }); }
+    else await setLocal({ attachPref: Object.assign({}, p, { misses }) });
+  }
   // GROUND-TRUTH outcome of a finished set (v0.21.43): seen = a video of ours is
-  // visible in the chat after the send. Three unseen in a row ⇒ the attach
-  // channel used is not taking on this machine ⇒ switch channel for 1 h.
+  // visible in the chat after the send. Three unseen in a row ⇒ the learned
+  // attach channel is forgotten (the next set tries the channels again).
   let unseenStreak = 0;
   async function noteSetOutcome(seen, via, id, name) {
     ask({ type: "VIDEO_SEEN", seen: !!seen, via: via || "-" });
@@ -1780,13 +1838,8 @@
     vstat("set sent per protocol but NO video visible yet in " + (name || id) + " (" + unseenStreak + " in a row)");
     if (unseenStreak < 3) return;
     unseenStreak = 0;
-    if (via === "cdp") {
-      cdpDisabledUntil = Date.now() + 60 * 60 * 1000;
-      setStatus({ videoLast: "file-API attaches are not showing up in chats on this machine — paste attach for 1 h" });
-    } else if (via === "paste") {
-      cdpDisabledUntil = 0; cdpFailedSetToken = -1; cdpUnverifiedStreak = 0;
-      setStatus({ videoLast: "paste attaches are not showing up in chats on this machine — back to the file API" });
-    }
+    await setLocal({ attachPref: null });
+    setStatus({ videoLast: "no video visible in 3 chats in a row (via " + (via || "-") + ") — re-learning the attach channel" });
     try {
       const thrAt = (await getLocal(["videoUnseenLoggedAt"])).videoUnseenLoggedAt || 0;
       if (Date.now() - thrAt > 24 * 3600 * 1000) {

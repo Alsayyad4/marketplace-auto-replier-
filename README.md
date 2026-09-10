@@ -6,6 +6,21 @@ French), built for used-iPhone sales in Montréal. Runs locally per Chrome profi
 by default; **optional cloud sync** turns it into a web app so one change reaches
 every computer.
 
+> 🎯 **v0.21.45 — attach like a human: trusted drag-and-drop and a trusted click on the attach button; the machine learns which one works.**
+> The first diagnostic from a machine on .44 (PC-zctal) showed the actual cause on that
+> account: the file API call "succeeded" 27 times, a preview never appeared once, and no
+> video was ever visible in the chat afterwards; synthetic pastes were dead too. That
+> Messenger build has **no persistent file input** — it creates one only when the attach
+> button is clicked — so setting files on whatever input exists does nothing. Two new
+> attach channels act exactly like a person, through Chrome's debugger: **drop** the real
+> file onto the composer with a trusted drag event, or **click the attach button** with a
+> trusted mouse event while the file chooser is intercepted, and hand the file to the
+> input Messenger itself just created (no dialog ever opens). With no experience yet on a
+> machine, the channels are tried in turn (drop, chooser, direct input, paste) until a
+> preview appears; the one that works is remembered per machine and re-learned if it
+> stops working or no video shows in three chats in a row. The diagnostic now says
+> `channel=drop(12 hits)` or `learning`, and prints *why* a machine cannot self-update.
+>
 > 🪟 **v0.21.44 — the extension keeps its own windows un-minimized; no Chrome flags to add.**
 > The operator asked for zero manual setup. Every minute the background worker looks
 > for a Messenger window that has been minimized and restores it (without focusing it),
