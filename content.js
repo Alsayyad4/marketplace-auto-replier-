@@ -1303,13 +1303,17 @@
       // preference (cleared again after 3 sets with no video visible in the chat).
       const pref = await getAttachPref();
       const cs = (await getLocal(["cdpStats"])).cdpStats || {};
-      let order = pref ? [pref.channel] : ["drop", "chooser", "input", "paste"];
+      let order = pref ? [pref.channel] : ["chooser", "drop", "input", "paste"];
       if (!canCdp) order = order.filter((c) => c === "paste");
       if (!order.length) order = ["paste"];
-      const escalate = !pref && !(cs.seenN > 0);
+      let escalate = !pref && !(cs.seenN > 0);
       const JUST_SEND_WAIT_MS = 75000;
       const t0 = Date.now();
+      let lastTick = Date.now();
+      const tick = () => { if (opts.onTick && Date.now() - lastTick > 30000) { lastTick = Date.now(); try { opts.onTick(); } catch (e) { /* bookkeeping only */ } } };
+      const stagedBlind = () => !!(ctlBase && stagedPerControl(ctlBase) === true && !composerText(composer)); // Messenger's own control says "staged"
       let dispatched = null;
+      let prefDispatchFailed = false;
       for (const ch of order) {
         if (tid && !stillOnThread(tid)) return dispatched ? "navigated" : "aborted";
         let fired = false;
@@ -1317,14 +1321,15 @@
           try { fired = pasteFnRef ? !!(await pasteFnRef()) : false; } catch (e) { fired = false; }
         } else {
           const r = await ask({ type: "CDP_SET_FILES", paths: [diskPath], channel: ch });
-          if (r && (r.ok || r.maybeSet)) fired = true;
+          if (r && r.ok) fired = true;
+          else if (r && r.maybeSet) { fired = true; escalate = false; } // the file MAY be in: never a second channel on top
           else {
             if (r && r.missing) forgetDiskPaths([diskPath]);
             if (r && (r.fileAccess === "denied" || /unavailable|permission/i.test((r && r.error) || ""))) noteCdpFail(r);
             setStatus({ videoLast: "attach via " + ch + " not possible here: " + trunc((r && r.error) || "?", 70) });
           }
         }
-        if (!fired) continue;
+        if (!fired) { if (pref && ch === pref.channel) prefDispatchFailed = true; continue; }
         dispatched = ch;
         lastAttachVia = ch;
         setStatus({ lastAction: "clip handed to the composer (" + ch + ") — waiting for the upload…" });
@@ -1332,7 +1337,7 @@
         const windowMs = escalate ? 20000 : JUST_SEND_WAIT_MS;
         let seenAt = 0;
         while (Date.now() - w0 < windowMs) {
-          await sleep(1000);
+          await sleep(1000); tick();
           if (tid && !stillOnThread(tid)) {
             for (const b of trayRemoveBtns()) if (!beforeBtns0.has(b)) safe(() => b.click()); // de-stray the wrong chat
             return "navigated";
@@ -1340,22 +1345,26 @@
           const seen = tileNow();
           if (seen && !seenAt) { seenAt = Date.now(); await rememberAttachPref(ch); }
           if (seen && trayUploads() === 0 && Date.now() - seenAt > 2000) return true; // tile visible, upload done
-          // staged per the composer's own control but no tile after 45 s: stop waiting for one
-          if (!seen && ctlBase && stagedPerControl(ctlBase) === true && !composerText(composer) && Date.now() - w0 > 45000) break;
+          if (!seen && stagedBlind()) { escalate = false; if (Date.now() - w0 > 45000) break; } // staged (blind): no further channel, give the tile 45 s
         }
         if (tileNow()) return true; // visible (upload may still run — the caller waits it out)
         if (!escalate) break;
       }
-      if (!dispatched) return false; // no channel could even dispatch — clean failure, retried later
-      // Nothing visible from any channel: keep the rest of the budget (a late tile
-      // still counts), then send blind. A preferred channel that shows nothing
-      // three sets in a row is forgotten so the channels are re-tried.
+      if (!dispatched) {
+        // no channel could even dispatch — clean failure, retried later; a learned
+        // channel that can no longer dispatch (button renamed…) is forgotten after 3
+        if (prefDispatchFailed) await notePrefMiss();
+        return false;
+      }
+      // Nothing visible: keep the rest of the budget (a late tile still counts),
+      // then send blind. A preferred channel that shows nothing three sets in a
+      // row is forgotten so the channels are re-tried.
       while (Date.now() - t0 < JUST_SEND_WAIT_MS) {
-        await sleep(1000);
+        await sleep(1000); tick();
         if (tid && !stillOnThread(tid)) return "navigated";
         if (tileNow()) { await rememberAttachPref(dispatched); return true; }
       }
-      if (pref) await notePrefMiss();
+      if (pref && dispatched === pref.channel) await notePrefMiss();
       return "assume";
     }
 
@@ -2746,7 +2755,7 @@
           await setLocal({ videoSentThreads: dmA });
         }
         setStatus({ lastAction: `attaching video ${i + 1}/${files.length}…`, currentThread: name });
-        let res = await attachVideo(files[i], knownCount, id, paths[i], { justSend });
+        let res = await attachVideo(files[i], knownCount, id, paths[i], { justSend, onTick: () => { busySince = Date.now(); refreshThreadLock(sidebarKey || id); } });
         const resVia = lastAttachVia;
         if (resVia && resVia !== "-") setVia = resVia;
         const resTrace = res === true ? "ok" : String(res);

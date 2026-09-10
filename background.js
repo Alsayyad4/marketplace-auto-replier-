@@ -1502,11 +1502,16 @@ function pageAttachButtonPoint() {
   const c = main.querySelector('[contenteditable="true"][role="textbox"]') || main.querySelector('[contenteditable="true"]');
   if (!c) return null;
   const cr = c.getBoundingClientRect();
+  // Only controls in the COMPOSER BAR's own subtree (never a message bubble's
+  // "Open photo"/"Play video" link sitting just above it, never the header).
+  const composerUp = [];
+  for (let n = c.parentElement, i = 0; n && n !== main && i < 8; n = n.parentElement, i++) composerUp.push(n);
   const re = /attach|joindre|jointe|fichier|pi[èe]ce|\bfile\b|photo|m[ée]dia|upload|t[ée]l[ée]vers|image|vid[ée]o/i;
-  const bad = /sticker|autocollant|gif|emoji|like|j'?aime|voice|vocal|audio|micro|record|enregistr|send|envoyer|listing|annonce/i;
+  const bad = /sticker|autocollant|gif|emoji|like|j'?aime|pouce|thumb|voice|vocal|audio|micro|record|enregistr|press enter|entr[eé]e pour|^send$|^envoyer$|listing|annonce|call|appel/i;
   const more = /more actions|plus d.actions|ouvrir plus|open more|more options|plus d.options/i;
   let best = null, moreBtn = null;
-  for (const b of main.querySelectorAll('[role="button"][aria-label], button[aria-label], [aria-label][tabindex]')) {
+  for (const b of main.querySelectorAll('[role="button"][aria-label], button[aria-label]')) {
+    if (!composerUp.some((u) => u.contains(b))) continue;
     const r = b.getBoundingClientRect();
     if (!r.width || !r.height) continue;
     if (r.bottom < cr.top - 60 || r.top > cr.bottom + 60) continue; // the composer band, a little slack
@@ -1545,6 +1550,15 @@ async function cdpMouseClick(target, x, y) {
 async function cdpDrop(target, paths) {
   const pt = await pageEval(target, pageComposerPoint);
   if (!pt) { await recordCdp(false, "composer not found for drop"); return { ok: false, error: "composer not found for drop" }; }
+  // SAFETY NET: a real drop that NO handler cancels makes the tab NAVIGATE to the
+  // dropped file (Blink's default drop action) — the Messenger tab would become
+  // a video player. Arm document-level bubble-phase listeners that allow the
+  // drop (dragover) and cancel its default (drop); they run AFTER Messenger's
+  // own handlers, so a staged clip is unaffected. Auto-removed after 8 s.
+  await cdpCmd(target, "Runtime.evaluate", {
+    expression: "(function(){var ov=function(e){e.preventDefault();};var dr=function(e){e.preventDefault();};document.addEventListener('dragover',ov);document.addEventListener('drop',dr);setTimeout(function(){document.removeEventListener('dragover',ov);document.removeEventListener('drop',dr);},8000);return true;})()",
+    returnByValue: true,
+  }, 5000);
   const data = { items: [], files: paths, dragOperationsMask: 1 };
   await cdpCmd(target, "Input.dispatchDragEvent", { type: "dragEnter", x: pt.x, y: pt.y, data }, 5000);
   await cdpCmd(target, "Input.dispatchDragEvent", { type: "dragOver", x: pt.x, y: pt.y, data }, 5000);
@@ -1556,6 +1570,14 @@ async function cdpChooser(target, tabId, paths) {
   let bt = await pageEval(target, pageAttachButtonPoint);
   if (!bt) { await recordCdp(false, "attach button not found"); return { ok: false, error: "attach button not found" }; }
   let listener = null;
+  let clickAt = 0; // the interception must stay ON for the whole activation window after ANY click
+  const ACTIVATION_MS = 6000;
+  const escape = async () => {
+    try {
+      await cdpCmd(target, "Input.dispatchKeyEvent", { type: "keyDown", key: "Escape", code: "Escape", windowsVirtualKeyCode: 27 }, 2000);
+      await cdpCmd(target, "Input.dispatchKeyEvent", { type: "keyUp", key: "Escape", code: "Escape", windowsVirtualKeyCode: 27 }, 2000);
+    } catch (e) { /* best effort */ }
+  };
   try {
     await cdpCmd(target, "Page.enable", {}, 5000);
     await cdpCmd(target, "Page.setInterceptFileChooserDialog", { enabled: true }, 5000);
@@ -1564,26 +1586,33 @@ async function cdpChooser(target, tabId, paths) {
       chrome.debugger.onEvent.addListener(listener);
     });
     const waitOpened = (ms) => Promise.race([opened, new Promise((r) => setTimeout(() => r(null), ms))]);
+    // The mouse events are forwarded before the ack; a late ack must not throw us
+    // out while the click is still being processed by a busy page.
+    const click = async (x, y) => { clickAt = Date.now(); try { await cdpMouseClick(target, x, y); } catch (e) { /* forwarded anyway */ } };
     let viaMenu = false;
     if (bt.more) {
       // compact bar: the attach control lives in the "+" menu
-      await cdpMouseClick(target, bt.x, bt.y);
+      await click(bt.x, bt.y);
       await new Promise((r) => setTimeout(r, 700));
       const item = await pageEval(target, pageMenuAttachItemPoint);
-      if (!item) { await recordCdp(false, "attach item not found in the more-actions menu"); return { ok: false, error: "attach item not found in the more-actions menu" }; }
+      if (!item) { await escape(); await recordCdp(false, "attach item not found in the more-actions menu"); return { ok: false, error: "attach item not found in the more-actions menu" }; }
       bt = item; viaMenu = true;
     }
-    await cdpMouseClick(target, bt.x, bt.y);
-    const params = await waitOpened(4000);
+    await click(bt.x, bt.y);
+    const params = await waitOpened(ACTIVATION_MS); // ≥ the 5 s transient-activation window: a late chooser is still caught, never shown
     if (!params || params.backendNodeId == null) {
-      if (viaMenu) { try { await cdpCmd(target, "Input.dispatchKeyEvent", { type: "keyDown", key: "Escape", code: "Escape", windowsVirtualKeyCode: 27 }, 2000); await cdpCmd(target, "Input.dispatchKeyEvent", { type: "keyUp", key: "Escape", code: "Escape", windowsVirtualKeyCode: 27 }, 2000); } catch (e) { /* best effort */ } }
+      await escape(); // whatever the click opened instead (menu, popover, lightbox) must not stay over the page
       await recordCdp(false, "no file chooser after clicking " + (bt.label || "attach"));
       return { ok: false, error: "no file chooser opened after clicking the attach button (" + (bt.label || "?") + ")" };
     }
     await cdpCmd(target, "DOM.setFileInputFiles", { files: paths, backendNodeId: params.backendNodeId }, 15000);
+    void viaMenu;
     await recordCdp(true);
     return { ok: true, channel: "chooser" };
   } finally {
+    // never switch the interception off inside the activation window of a click
+    const left = clickAt ? ACTIVATION_MS - (Date.now() - clickAt) : 0;
+    if (left > 0) await new Promise((r) => setTimeout(r, left));
     if (listener) { try { chrome.debugger.onEvent.removeListener(listener); } catch (e) { /* gone */ } }
     try { await cdpCmd(target, "Page.setInterceptFileChooserDialog", { enabled: false }, 2000); } catch (e) { /* detached */ }
   }

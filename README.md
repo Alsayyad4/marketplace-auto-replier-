@@ -6,6 +6,13 @@ French), built for used-iPhone sales in Montréal. Runs locally per Chrome profi
 by default; **optional cloud sync** turns it into a web app so one change reaches
 every computer.
 
+> 🛡️ **v0.21.46 — safety pass over the new attach channels.** A dropped file that Messenger
+> does not catch can no longer make the tab open the video itself; the intercepted file
+> dialog stays intercepted for the full click window so it can never appear on screen;
+> only controls inside the composer bar are ever clicked and anything a click opens by
+> mistake is closed; two channels can no longer stage the same clip twice; and a
+> learned channel that stops working is forgotten and re-learned.
+>
 > 🎯 **v0.21.45 — attach like a human: trusted drag-and-drop and a trusted click on the attach button; the machine learns which one works.**
 > The first diagnostic from a machine on .44 (PC-zctal) showed the actual cause on that
 > account: the file API call "succeeded" 27 times, a preview never appeared once, and no
