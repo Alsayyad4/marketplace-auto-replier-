@@ -55,6 +55,7 @@
     videoLinkFallback: true,
     videoLinkUrl: "",
     videoLinkText: "",
+    videoForeground: true,
     smartFollowupEnabled: false,
     smartFollowupMaxCount: 1,
     smartFollowupQuietHours: 6,
@@ -121,6 +122,7 @@
     ["videoLinkFallback", "checked"],
     ["videoLinkUrl", "value"],
     ["videoLinkText", "value"],
+    ["videoForeground", "checked"],
   ];
 
   function fieldsToForm() {

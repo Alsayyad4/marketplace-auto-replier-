@@ -89,6 +89,10 @@ const DEFAULTS = {
   videoLinkFallback: true,
   videoLinkUrl: "", // blank = the first central clip's URL
   videoLinkText: "", // blank = built-in FR/EN line; {link} is replaced by the URL
+  // (v0.21.48) bring the Messenger window to the front while a video set attaches,
+  // uploads and sends (Chrome defers media loading in a hidden tab), then hand
+  // focus back. Off = never touch window focus (videos may then wait for a click).
+  videoForeground: true,
   // smart follow-up on quiet chats (proactive — off by default; all knobs configurable)
   smartFollowupEnabled: false, // master on/off for proactive follow-ups
   smartFollowupMaxCount: 1, // how many follow-ups per chat, total (e.g. 1 or 2) — anti-spam cap
@@ -1761,6 +1765,9 @@ async function cdpSetFiles(tabId, paths, channel) {
         }
       }
     } catch (e) { /* probe unsupported here — proceed exactly as before */ }
+    // (v0.21.48) user activation first: a hidden tab's uploader does not start
+    // without one (the chooser channel's own click already provides it)
+    if (channel !== "chooser") await cdpActivationPulse(target);
     if (channel === "drop") return await cdpDrop(target, paths);
     if (channel === "chooser") return await cdpChooser(target, tabId, paths);
     const ev = await cdpCmd(target, "Runtime.evaluate", { expression: "(" + pageFindComposerFileInput.toString() + ")()", returnByValue: false }, 8000);
@@ -1788,6 +1795,111 @@ async function cdpSetFiles(tabId, paths, channel) {
   } finally {
     if (attached) { try { chrome.debugger.detach(target, () => void chrome.runtime.lastError); } catch (e) { /* already gone */ } }
   }
+}
+
+// ---- (v0.21.48) OBLIGATORY VISIBILITY + TRUSTED SEND ----
+// Field report: "sometimes it is not sending the video, but as soon as I click on
+// the page it starts uploading; sometimes it uploads but does not send." A tab
+// that is hidden (window minimized, covered, or another tab active) gets no
+// rendering, throttled timers and DEFERRED MEDIA LOADING from Chrome — so
+// Messenger's uploader (which decodes the clip for its thumbnail) waits until a
+// human makes the tab visible or gives it a real user gesture. The bot now does
+// both itself: it brings its own window to the front for the length of a video
+// set (and hands focus back), and it presses Send with REAL input events through
+// the debugger protocol, which are user activations for the page.
+const fgPrev = {}; // tabId -> the window that was focused before we took the front (this profile only)
+const fgTimers = {};
+async function videoForeground(tab, on, holdMs) {
+  if (!tab || !chrome.windows) return { ok: false, error: "no tab / windows API" };
+  const wget = (id) => new Promise((r) => chrome.windows.get(id, (x) => { void chrome.runtime.lastError; r(x || null); }));
+  const wupd = (id, info) => new Promise((r) => chrome.windows.update(id, info, () => { void chrome.runtime.lastError; r(); }));
+  try {
+    if (on) {
+      const last = await new Promise((r) => chrome.windows.getLastFocused({}, (w) => { void chrome.runtime.lastError; r(w || null); }));
+      if (last && last.id !== tab.windowId && last.focused) fgPrev[tab.id] = last.id;
+      await wupd(tab.windowId, { state: "normal", focused: true });
+      await new Promise((r) => chrome.tabs.update(tab.id, { active: true }, () => { void chrome.runtime.lastError; r(); }));
+      chrome.storage.local.get(["fgN"], (x) => { void chrome.runtime.lastError; chrome.storage.local.set({ fgN: ((x && x.fgN) || 0) + 1, fgAt: Date.now() }, () => void chrome.runtime.lastError); });
+      if (fgTimers[tab.id]) { clearTimeout(fgTimers[tab.id]); delete fgTimers[tab.id]; }
+      if (holdMs) fgTimers[tab.id] = setTimeout(() => { delete fgTimers[tab.id]; videoForeground(tab, false); }, Math.min(Number(holdMs) || 0, 300000)); // a watcher hold hands back by itself
+      return { ok: true };
+    }
+    if (fgTimers[tab.id]) { clearTimeout(fgTimers[tab.id]); delete fgTimers[tab.id]; }
+    const prev = fgPrev[tab.id];
+    delete fgPrev[tab.id];
+    if (prev != null && prev !== tab.windowId && (await wget(prev))) await wupd(prev, { focused: true });
+    return { ok: true };
+  } catch (e) {
+    return { ok: false, error: String((e && e.message) || e) };
+  }
+}
+// Page-world helpers for the trusted send.
+function pageFocusComposer() {
+  const main = document.querySelector('[role="main"]') || document;
+  const c = main.querySelector('[contenteditable="true"][role="textbox"]') || main.querySelector('[contenteditable="true"]');
+  if (!c) return false;
+  try { c.focus(); } catch (e) { return false; }
+  return document.activeElement === c || c.contains(document.activeElement);
+}
+function pageSendControlPoint() {
+  const main = document.querySelector('[role="main"]') || document;
+  const c = main.querySelector('[contenteditable="true"][role="textbox"]') || main.querySelector('[contenteditable="true"]');
+  if (!c) return null;
+  const cr = c.getBoundingClientRect();
+  if (!cr.height) return null;
+  const sendRe = /press enter|entr[eé]e pour|^send$|^envoyer$|envoyer un message/i;
+  let best = null, bestLeft = -Infinity;
+  for (const b of main.querySelectorAll('[role="button"][aria-label], button[aria-label]')) {
+    const r = b.getBoundingClientRect();
+    if (!r.width || !r.height) continue;
+    if (r.bottom < cr.top - 8 || r.top > cr.bottom + 8) continue;
+    if (r.left < cr.right - 4) continue;
+    if (r.left > bestLeft) { bestLeft = r.left; best = b; }
+  }
+  if (!best) return null;
+  const al = (best.getAttribute("aria-label") || "").trim();
+  if (!sendRe.test(al)) return { label: al, notSend: true };
+  const r = best.getBoundingClientRect();
+  const x = Math.round(r.left + r.width / 2), y = Math.round(r.top + r.height / 2);
+  const el = document.elementFromPoint(x, y);
+  return { x, y, label: al, hit: !!(el && (el === best || best.contains(el) || el.contains(best))) };
+}
+async function cdpSend(tabId, mode) {
+  if (!chrome.debugger) return { ok: false, error: "debugger API unavailable" };
+  if (!tabId) return { ok: false, error: "no tab" };
+  const target = { tabId };
+  let attached = false;
+  try {
+    await new Promise((res, rej) => chrome.debugger.attach(target, "1.3", () => (chrome.runtime.lastError ? rej(new Error(chrome.runtime.lastError.message)) : res())));
+    attached = true;
+    await settleViewport(target);
+    if (mode === "click") {
+      const p = await pageEval(target, pageSendControlPoint);
+      if (!p || p.notSend) return { ok: false, error: "send control not showing (" + ((p && p.label) || "none") + ")" };
+      if (p.hit === false) return { ok: false, error: "send control covered" };
+      await cdpMouseClick(target, p.x, p.y);
+      return { ok: true, how: "click", label: p.label };
+    }
+    const focused = await pageEval(target, pageFocusComposer);
+    if (!focused) return { ok: false, error: "composer not focusable" };
+    await cdpCmd(target, "Input.dispatchKeyEvent", { type: "keyDown", key: "Enter", code: "Enter", windowsVirtualKeyCode: 13, nativeVirtualKeyCode: 13, text: "\r" }, 3000);
+    await cdpCmd(target, "Input.dispatchKeyEvent", { type: "keyUp", key: "Enter", code: "Enter", windowsVirtualKeyCode: 13, nativeVirtualKeyCode: 13 }, 3000);
+    return { ok: true, how: "enter" };
+  } catch (e) {
+    return { ok: false, error: String((e && e.message) || e) };
+  } finally {
+    if (attached) { try { chrome.debugger.detach(target, () => void chrome.runtime.lastError); } catch (e) { /* already gone */ } }
+  }
+}
+// A trusted click on the composer itself: user activation for the page (lifts
+// deferred media loading on a hidden tab) and focus for the paste/drop channels.
+async function cdpActivationPulse(target) {
+  try {
+    const pt = await pageEval(target, pageComposerPoint);
+    if (!pt || pt.hit === false) return false;
+    await cdpMouseClick(target, pt.x, pt.y);
+    return true;
+  } catch (e) { return false; }
 }
 
 // (v0.21.47) VIDEO DOCTOR (browser side): read-only facts about the attach path
@@ -2018,7 +2130,7 @@ async function buildDiagnostic() {
         "videoCatchUp", "autoCatchUp01213", "autoCatchUp01217", "videoEnabled", "demoVideos",
         "videoCache", "replyLog", "sudBase", "sudDirName", "sudLastCheck", "sudStatus", "cdpStats", "videoDisk", "winRestoreN", "winRestoreAt", "attachPref",
         "cooldowns", "replyCounts", "lastHandled", "videoAttachTrace",
-        "attachChannelStats", "attachMiss", "videoDoctorLast", "tabActivateN", "tabActivateAt",
+        "attachChannelStats", "attachMiss", "videoDoctorLast", "tabActivateN", "tabActivateAt", "fgN", "fgAt", "winSlot",
       ],
       (x) => r(x || {})
     )
@@ -2095,6 +2207,7 @@ async function buildDiagnostic() {
       }).join(" ") +
       " retryMax=" + (settings.videoRetryMax != null ? settings.videoRetryMax : "?") + " linkFallback=" + (settings.videoLinkFallback === false ? "off" : "on") +
       " tabActivated=" + (st.tabActivateN || 0) + (st.tabActivateAt ? "(" + ageM(st.tabActivateAt) + ")" : "") +
+      " foreground=" + (settings.videoForeground === false ? "off" : "on") + " fg=" + (st.fgN || 0) + (st.fgAt ? "(" + ageM(st.fgAt) + ")" : "") + " slot=" + (st.winSlot != null ? st.winSlot : "-") +
       (st.videoDoctorLast ? " | doctor(" + ageM(st.videoDoctorLast.at) + "): " + cut(st.videoDoctorLast.text, 400) : "")
     );
   }
@@ -2405,6 +2518,17 @@ chrome.runtime.onMessage.addListener((msg, _sender, sendResponse) => {
           sendResponse(await cdpDoctor(tabId));
           break;
         }
+        case "CDP_SEND": {
+          // (v0.21.48) trusted Enter / trusted click on Send in the sender's tab
+          const tabId = _sender && _sender.tab && _sender.tab.id;
+          sendResponse(await cdpSend(tabId, msg.mode === "click" ? "click" : "enter"));
+          break;
+        }
+        case "VIDEO_FOREGROUND": {
+          // (v0.21.48) bring the sender's window/tab to the front (on) or hand focus back (off)
+          sendResponse(await videoForeground(_sender && _sender.tab, !!msg.on, msg.hold));
+          break;
+        }
         case "CDP_VERIFIED": {
           // Content saw the preview appear after a file-API attach (protocol ok ≠ staged).
           // blind:true = staged per the composer's send control, tile not rendered.
@@ -2596,7 +2720,7 @@ async function heartbeat() {
   // gets minimized anyway, restore it here every minute (never focused, so the
   // desktop is not stolen). Local `keepWindowsRestored:false` turns this off.
   try {
-    const kw = await new Promise((r) => chrome.storage.local.get(["keepWindowsRestored", "winRestoreN", "tabActivateN"], (x) => r(x || {})));
+    const kw = await new Promise((r) => chrome.storage.local.get(["keepWindowsRestored", "winRestoreN", "tabActivateN", "keepWindowsCascaded", "winSlot"], (x) => r(x || {})));
     if (kw.keepWindowsRestored !== false && chrome.windows) {
       const wids = Array.from(new Set(tabs.map((t) => t.windowId).filter((w) => w != null)));
       let n = 0;
@@ -2628,6 +2752,27 @@ async function heartbeat() {
       if (act) {
         chrome.storage.local.set({ tabActivateN: (kw.tabActivateN || 0) + act, tabActivateAt: Date.now() }, () => void chrome.runtime.lastError);
         LOG("brought", act, "Messenger tab(s) to the front of their window");
+      }
+      // (v0.21.48) CASCADE: Chrome treats a window as hidden only when it is
+      // COMPLETELY covered. Windows all restored at the screen origin cover each
+      // other; give every Messenger window (one per profile) its own diagonal
+      // slot so a strip of each stays exposed — no throttling, no deferred
+      // media, even when the bot is not in front. A window the operator moved
+      // (left/top > 60) is left where it is. Local keepWindowsCascaded:false disables.
+      if (kw.keepWindowsCascaded !== false) {
+        let slot = kw.winSlot;
+        if (typeof slot !== "number") { slot = Math.floor(Math.random() * 10); chrome.storage.local.set({ winSlot: slot }, () => void chrome.runtime.lastError); }
+        let k = 0;
+        for (const wid of wids) {
+          const w = await new Promise((r) => chrome.windows.get(wid, (x) => { void chrome.runtime.lastError; r(x || null); }));
+          if (!w || w.state !== "normal") { k++; continue; }
+          const wantL = 40 * ((slot + k) % 10), wantT = 32 * ((slot + k) % 10);
+          k++;
+          const L = w.left || 0, T = w.top || 0;
+          if (Math.abs(L - wantL) < 4 && Math.abs(T - wantT) < 4) continue;
+          if (L > 60 || T > 60) continue; // placed by the operator
+          await new Promise((r) => chrome.windows.update(wid, { left: wantL, top: wantT }, () => { void chrome.runtime.lastError; r(); }));
+        }
       }
     }
   } catch (e) { /* best effort */ }

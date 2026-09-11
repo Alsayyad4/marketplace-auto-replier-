@@ -237,6 +237,7 @@
         </div>
         <hr />
         <label>🛟 When a video can't be attached natively <span class="hint">the bot retries a few times with different attach channels, then sends the demo as a LINK so the buyer still gets it. Same fields as the web app (fleet-wide).</span></label>
+        <label class="check"><input type="checkbox" id="videoForeground" /> Bring the Messenger window to the front while a video attaches, uploads and sends <span class="hint">Chrome does not start a video upload in a hidden tab — this is what used to wait for a click on the page. Focus is handed back afterwards.</span></label>
         <label class="check"><input type="checkbox" id="videoLinkFallback" /> Send the demo video as a link when native attach keeps failing</label>
         <div><label>Native attach retries per chat before the link <span class="hint">0 = link right away</span></label><input type="number" id="videoRetryMax" min="0" max="10" /></div>
         <div><label>Link to send <span class="hint">blank = the first central video's own URL</span></label><input type="text" id="videoLinkUrl" placeholder="https://…" /></div>

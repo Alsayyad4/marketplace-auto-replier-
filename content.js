@@ -1654,9 +1654,13 @@
     while (Date.now() - t0 < 5 * 60 * 1000) {
       if (gone()) return "navigated";
       const c = findComposer();
-      const step = rounds % 3;
-      if (step === 1 && sendCtl()) clickSend(); // the Send button — only while the control IS Send
-      else if (step === 2 && c) { safe(() => c.click()); safe(() => c.focus()); pressEnter(c); }
+      // (v0.21.48) rounds alternate synthetic and TRUSTED presses: a real Enter /
+      // a real click on Send delivered through the debugger protocol is exactly
+      // what Lexical gets from a human, and it is a user activation for the page.
+      const step = rounds % 4;
+      if (step === 1) { if (!(await cdpPress("enter"))) { if (sendCtl()) clickSend(); else if (c) pressEnter(c); } }
+      else if (step === 2) { if (sendCtl()) clickSend(); else if (c) pressEnter(c); } // the Send button — only while the control IS Send
+      else if (step === 3) { if (!(await cdpPress("click"))) { if (c) { safe(() => c.click()); safe(() => c.focus()); pressEnter(c); } } }
       else if (c) pressEnter(c);
       else if (sendCtl()) clickSend();
       rounds++;
@@ -1672,11 +1676,137 @@
         if (!blind && n > baseline) return "sent"; // grew: a stray rendered — pressed once, leave the rest to the settle sweep
       }
       if (uploadResumed) { if (!(await waitUploads(150000))) return "navigated"; baseline = trayEls().length; continue; }
-      if (blind && rounds >= 3) return "sent"; // nothing to observe: attach + 3 send attempts = delivered
-      if (!blind && rounds >= 6) return "stuck";
+      // (v0.21.48) a blind clip is "sent" ONLY when the control went back to like
+      // or the tray shrank — never by round count (that read an upload that had
+      // not even started as delivered). Whatever stays staged is "stuck": the
+      // staged-clip watcher keeps pressing until it leaves.
+      if (blind && rounds >= 4) return "stuck";
+      if (!blind && rounds >= 8) return "stuck";
     }
-    return blind ? "sent" : "stuck";
+    return "stuck";
   }
+  // "Uploading" = a progressbar in the composer's OWN band (just above the
+  // textbox). Messenger's list-paging spinners are progressbars too, far above.
+  function uploadingInBand() {
+    const bars = trayQuery('[role="progressbar"]');
+    if (!bars.length) return false;
+    const c = findComposer();
+    const cr = c ? safe(() => c.getBoundingClientRect(), null) : null;
+    if (!cr) return true;
+    return bars.some((el) => { const r = safe(() => el.getBoundingClientRect(), null); return !!r && r.bottom <= cr.top + 8 && cr.top - r.top < 420; });
+  }
+  // (v0.21.48) TRUSTED press through the debugger protocol: "enter" focuses the
+  // composer and sends a real Enter; "click" clicks the Send control at its
+  // centre (the background re-finds it in the page). Either is a user
+  // activation for the page — which lifts Chrome's deferred media load on a
+  // hidden tab, the reason an attached clip's upload used to wait for a click.
+  async function cdpPress(mode) {
+    if (!cdpAvailable()) return false;
+    try {
+      const r = await Promise.race([ask({ type: "CDP_SEND", mode }), sleep(15000).then(() => null)]);
+      return !!(r && r.ok);
+    } catch (e) { return false; }
+  }
+  // (v0.21.48) STAGED-CLIP WATCHER — the "obligatory send". Field report: a clip
+  // sits attached in the composer, its upload only starts when the operator
+  // clicks the page (Chrome defers media loading and pauses rendering in a
+  // hidden/occluded tab), and once it finishes nobody presses Send. Every scan
+  // tick — and the moment the tab becomes visible — this looks at the OPEN chat:
+  // a clip WE handed over (a recent in-flight / stuck / retry mark for this chat),
+  // no text typed by anyone, upload finished ⇒ press send (synthetic Enter →
+  // trusted Enter → Send button → trusted click), one press per 15 s, counted
+  // delivered when the tile leaves. An upload still running on a hidden tab ⇒
+  // bring the window to the front so it can run. Never touches an attachment
+  // the operator staged (no mark of ours ⇒ not ours).
+  const stagedSweep = {}; // threadId -> {at, n, mutedUntil, fgAt}
+  let lastSettings = {};
+  async function sweepStagedClip(trigger) {
+    try {
+      const m = location.href.match(/\/t\/([^/?#]+)/);
+      if (!m) return;
+      const id = m[1];
+      const btns = trayRemoveBtns();
+      if (!btns.length) return;
+      const c = findComposer();
+      if (!c || composerText(c)) return; // an operator draft is theirs to send
+      const now = Date.now();
+      const sw = stagedSweep[id] || (stagedSweep[id] = { at: 0, n: 0, mutedUntil: 0, fgAt: 0 });
+      if (sw.mutedUntil > now) return;
+      const st = await getLocal(["videoSentThreads", "videoAttempts", "threadLocks"]);
+      const vt = st.videoSentThreads || {};
+      const mk = vt[id] || (adoptedAlias[id] != null ? vt[adoptedAlias[id]] : null);
+      const at = (st.videoAttempts || {})[id];
+      const recent = (t) => typeof t === "number" && now - t < 6 * 3600 * 1000;
+      // ours = a set in flight / left stuck / a partial tail / a bounded-retry chat.
+      // A plain confirmed mark is NOT enough: an attachment the operator staged
+      // later in a served chat must never be sent by us.
+      const ours = !!((mk && recent(mk.at) && (mk.via === "lock" || mk.stuck || mk.unverifiedTail || typeof mk.resumeFrom === "number"))
+        || (at && (recent(at.failAt) || recent(at.claimAt))));
+      if (!ours) return;
+      const lk = (st.threadLocks || {})[id];
+      if (lk && lk.tab !== TAB_UID && now - (lk.at || 0) < LOCK_MS) return; // another tab is working this chat right now
+      if (uploadingInBand()) {
+        // The upload is running — or waiting to run: a hidden tab may never let
+        // it start. Bring the window to the front (once a minute per chat).
+        if (document.visibilityState !== "visible" && lastSettings.videoForeground !== false && now - sw.fgAt > 60000) {
+          sw.fgAt = now;
+          ask({ type: "VIDEO_FOREGROUND", on: true, hold: 120000 });
+          setStatus({ lastAction: "watcher: a clip is uploading on a hidden tab — bringing the window to the front" });
+        }
+        return;
+      }
+      if (now - sw.at < 15000) return;
+      sw.at = now; sw.n++;
+      const before = btns.length;
+      const step = sw.n % 4;
+      setStatus({ lastAction: "watcher: sending a staged clip (" + trigger + ", try " + sw.n + ")" });
+      if (step === 1) { if (!(await cdpPress("enter"))) pressEnter(c); }
+      else if (step === 2) { if (!clickSend()) pressEnter(c); }
+      else if (step === 3) { if (!(await cdpPress("click"))) { safe(() => c.click()); safe(() => c.focus()); pressEnter(c); } }
+      else pressEnter(c);
+      await sleep(6000);
+      if (!stillOnThread(id)) return;
+      if (uploadingInBand()) return; // the press queued behind a (re)started upload — next tick
+      const afterN = trayRemoveBtns().length;
+      if (afterN < before) {
+        const n = before - afterN;
+        const vt2 = (await getLocal(["videoSentThreads"])).videoSentThreads || {};
+        const cur = vt2[id];
+        let partial = false;
+        if (cur && cur.done) {
+          cur.sent = (cur.sent || 0) + n;
+          delete cur.stuck; delete cur.unverifiedTail;
+          cur.at = now;
+          partial = typeof cur.resumeFrom === "number" && cur.resumeTotal != null && cur.resumeFrom < cur.resumeTotal;
+          if (!partial && cur.via === "lock" && typeof cur.resumeFrom !== "number") delete cur.via;
+          if (!partial && cur.gaveUp) delete cur.gaveUp;
+        } else {
+          vt2[id] = { done: true, at: now, sent: n, recon: 1, via: "watch" }; // a retry-state chat: served now
+        }
+        await setLocal({ videoSentThreads: vt2 });
+        if (!partial) {
+          const am = (await getLocal(["videoAttempts"])).videoAttempts || {};
+          if (am[id]) { delete am[id]; await setLocal({ videoAttempts: am }); }
+          clearVideoPending(id);
+          if (adoptedAlias[id] != null) clearVideoPending(adoptedAlias[id]);
+          videoLocked.add(id);
+        }
+        sw.n = 0;
+        noteAttachMiss(false);
+        vstat("watcher sent " + n + " staged demo clip(s) in the open chat ✓");
+        ask({ type: "LOG_EVENT", entry: { thread: safe(() => (document.title || "").replace(/\s*[|·—-]\s*Messenger.*$/i, "").trim(), "") || id, threadId: id, buyer: "(demo video)", action: "video", reply: n + " staged demo clip(s) sent by the watcher (upload had finished, nobody had pressed send)" } });
+      } else if (sw.n >= 12) {
+        sw.mutedUntil = now + 6 * 3600 * 1000;
+        sw.n = 0;
+        vstat("watcher: a staged clip in the open chat would not send after 12 tries — leaving it (check the chat)");
+      }
+    } catch (e) { /* the watcher must never break the scan */ }
+  }
+  document.addEventListener("visibilitychange", () => {
+    if (document.visibilityState !== "visible" || busy) return;
+    busy = true; busySince = Date.now();
+    sweepStagedClip("visible").catch(() => { /* logged inside */ }).then(() => { busy = false; busySince = 0; });
+  });
   // After a streamed send: let a QUEUED Enter (pressed mid-upload) fire — never
   // touch the tray while a progressbar is visible — then clear whatever is left.
   // A tile still there once the send has cleared is a late-rendered stray from an
@@ -2212,6 +2342,7 @@
   }
   async function maybeSendVideo(id, name, immediate, sidebarKey, deferSend, hooks) {
     videoSendDeferred = false;
+    let fgOn = false; // (v0.21.48) this visit brought the window to the front — hand focus back at the end
     try {
       // Terminal exits must clear the pending queue under BOTH keys: deferral
       // writes videoPending[sidebarId] (v0.21.14) but this engine runs on the
@@ -2761,6 +2892,18 @@
       // resumed at N with nothing ever confirmed used to terminal-stamp sent:N.
       const sentBase = resumeFrom != null && done[id] && typeof done[id].sent === "number" ? Math.min(done[id].sent, startAt) : startAt;
       console.debug("[SubSell] video: LOCKED chat + sending clips " + (startAt + 1) + "–" + files.length + " to", id);
+      // (v0.21.48) OBLIGATORY VISIBILITY. Chrome defers media loading and pauses
+      // rendering in a hidden/occluded tab, so Messenger's uploader never starts
+      // until a human clicks the page — the operator's "as soon as I click on the
+      // page it starts uploading". For the length of this set the window comes
+      // to the front and the tab is activated; focus is handed back afterwards.
+      // Setting videoForeground (default on).
+      if (sCfg.videoForeground !== false && document.visibilityState !== "visible") {
+        fgOn = true;
+        setStatus({ lastAction: "bringing this window to the front for the video set…", currentThread: name });
+        try { await Promise.race([ask({ type: "VIDEO_FOREGROUND", on: true }), sleep(5000)]); } catch (e) { /* best effort */ }
+        await sleep(800);
+      }
 
       // ONE-MESSAGE DELIVERY: attach every clip back-to-back (each verified),
       // then a single Enter sends the whole set as ONE message. A clip that
@@ -3353,6 +3496,8 @@
           if (qkE && videoPending[qkE] == null && videoPending[id] == null) { videoPending[qkE] = Date.now(); persistDedup(); }
         }
       } catch (e2) { /* best effort */ }
+    } finally {
+      if (fgOn) { fgOn = false; ask({ type: "VIDEO_FOREGROUND", on: false }); } // hand focus back
     }
   }
 
@@ -4205,8 +4350,10 @@
     busy = true;
     busySince = Date.now();
     try {
+      await sweepStagedClip("scan"); // (v0.21.48) obligatory send of a clip left staged in the open chat
       const anchors = conversationAnchors();
       const settings = (await ask({ type: "GET_SETTINGS" })).settings || {};
+      lastSettings = settings;
 
       // CONSTANT VERIFICATION — every scan, every rendered row: any chat whose
       // preview reads like a waiting buyer goes on the never-miss ledger (first-seen

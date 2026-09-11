@@ -63,6 +63,7 @@ per-machine on/off).
 | `videoLinkFallback` | bool | true | (v0.21.47) After the retries, send the demo as a LINK via the text path (chat then marked served). |
 | `videoLinkUrl` | string | "" | Link to send; blank = the first `demoVideoUrls` entry's URL. |
 | `videoLinkText` | string | "" | Message carrying the link; `{link}` = the URL; blank = built-in FR/EN line. |
+| `videoForeground` | bool | true | (v0.21.48) Bring the Messenger window to the front while a video set attaches/uploads/sends, then hand focus back. |
 | `followUps` | array | [] | Follow-up nudges. Each: `{name, afterMinutes (number), message, enabled (bool)}`. After the bot replies, it arms a timer; if the buyer stays quiet that long it sends `message` once. |
 
 ### Advanced settings (stored but NOT active in the current "simple" build)

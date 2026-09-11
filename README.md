@@ -6,6 +6,18 @@ French), built for used-iPhone sales in Montréal. Runs locally per Chrome profi
 by default; **optional cloud sync** turns it into a web app so one change reaches
 every computer.
 
+> 📺 **v0.21.48 — obligatory send: the bot owns visibility and the Send key.** Operator: "it
+> doesn't send, but as soon as I click on the page it starts uploading; sometimes it uploads
+> and never sends." Chrome defers media loading and pauses rendering in a hidden/covered tab,
+> so Messenger's uploader waited for a human. Now, for the length of a video set, the
+> extension brings its own window to the front and activates the tab (then hands focus back
+> — `videoForeground`, on by default), gives the page a real user activation through the
+> debugger protocol before staging, presses Send with **trusted** Enter/click events, never
+> calls a blind send "sent" by round count, and a **staged-clip watcher** checks the open
+> chat on every scan tick and whenever the tab becomes visible: our clip staged, upload
+> finished, nobody pressed send ⇒ it presses (and it foregrounds the window when an upload
+> is stalled hidden). Messenger windows are also cascaded so no window is ever fully covered.
+>
 > 🎯 **v0.21.47 — videos: evidence, not assumption (+ a link fallback so no buyer is left without the demo).**
 > A 190-agent audit of the video path found the "always failing" mechanism: since .43 a clip
 > that merely *dispatched* with nothing visible was counted as sent, Enter was pressed on an

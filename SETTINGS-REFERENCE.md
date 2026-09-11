@@ -93,6 +93,11 @@ endpoint serves that object to the extension.
 - `videoLinkUrl` — string (default blank = the first central video's own URL).
 - `videoLinkText` — string (default blank = built-in `Voici la vidéo démo 🎥 (demo video) {link}`);
   `{link}` is replaced by the URL.
+- `videoForeground` — bool (default `true`). (v0.21.48) While a video set attaches, uploads
+  and sends, the extension brings its own Messenger window to the front and activates the
+  tab (Chrome never starts a video upload in a hidden/covered tab — that is what used to
+  wait for a click on the page), then hands focus back to the window that had it.
+  The staged-clip watcher also uses it when an upload is stalled on a hidden tab.
 
 ## NOT web-managed (per-machine, stay in the extension)
 

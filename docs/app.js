@@ -57,6 +57,7 @@
     videoLinkFallback: true, // send the demo as a LINK when native attach keeps failing
     videoLinkUrl: "", // blank = the first central video's URL
     videoLinkText: "", // blank = built-in FR/EN line; {link} = the URL
+    videoForeground: true, // bring the Messenger window to the front while a video set attaches/uploads/sends
     smartFollowupEnabled: false,
     smartFollowupMaxCount: 1,
     smartFollowupQuietHours: 6,
@@ -81,7 +82,7 @@
     ["businessInfo", "value"], ["instructions", "value"], ["examples", "value"],
     ["closerGoals", "value"], ["priceList", "value"], ["visitConfirmMessage", "value"],
     ["demoVideoDelaySec", "number"], ["demoVideoBetweenSec", "number"],
-    ["videoRetryMax", "number"], ["videoLinkFallback", "checked"], ["videoLinkUrl", "value"], ["videoLinkText", "value"],
+    ["videoRetryMax", "number"], ["videoLinkFallback", "checked"], ["videoLinkUrl", "value"], ["videoLinkText", "value"], ["videoForeground", "checked"],
     ["smartFollowupEnabled", "checked"], ["smartFollowupMaxCount", "number"],
     ["smartFollowupQuietHours", "number"], ["smartFollowupGapHours", "number"],
   ];
