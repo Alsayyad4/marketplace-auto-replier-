@@ -287,35 +287,6 @@
     });
   }
 
-  /* ----- (v0.21.49) KEEP THIS TAB AWAKE -----
-   * Tab capture makes Chrome treat the Messenger tab as VISIBLE (it renders, its
-   * timers are not throttled, media loads) even while the window is minimized
-   * or covered and the mouse is elsewhere — exactly what a video upload needs.
-   * Chrome only lets an extension start a capture right after a click on it,
-   * so: have the Messenger tab open, click here. Lasts until Chrome restarts or
-   * the extension updates (then click again). Nothing is recorded anywhere. */
-  if ($("keepAwake")) {
-    $("keepAwake").addEventListener("click", async () => {
-      const tab = await activeTab();
-      if (!tab) { $("keepAwakeStatus").textContent = "open the Messenger tab first, then click"; return; }
-      if (!chrome.tabCapture || !chrome.tabCapture.getMediaStreamId) { $("keepAwakeStatus").textContent = "not available yet — reload the extension once (chrome://extensions → ↻)"; return; }
-      $("keepAwakeStatus").textContent = "starting…";
-      chrome.tabCapture.getMediaStreamId({ targetTabId: tab.id }, (streamId) => {
-        if (chrome.runtime.lastError || !streamId) { $("keepAwakeStatus").textContent = "Chrome refused: " + ((chrome.runtime.lastError && chrome.runtime.lastError.message) || "no stream id"); return; }
-        chrome.runtime.sendMessage({ type: "AWAKE_START", streamId, tabId: tab.id }, (r) => {
-          if (chrome.runtime.lastError) { $("keepAwakeStatus").textContent = "failed: " + chrome.runtime.lastError.message; return; }
-          $("keepAwakeStatus").textContent = r && r.ok ? "awake ✓ — stays on until Chrome restarts or the extension updates (then click again)" : "failed: " + ((r && r.error) || "no answer");
-        });
-      });
-    });
-    chrome.runtime.sendMessage({ type: "AWAKE_STATUS" }, async (r) => {
-      if (chrome.runtime.lastError || !r || !Array.isArray(r.tabs)) return;
-      const tab = await activeTab();
-      if (tab && r.tabs.indexOf(tab.id) !== -1) $("keepAwakeStatus").textContent = "awake ✓ (this tab)";
-      else if (r.tabs.length) $("keepAwakeStatus").textContent = r.tabs.length + " tab(s) awake on this computer";
-    });
-  }
-
   /* ----- Manual: send the demo videos to the OPEN chat right now -----
    * Same engine, same duplicate guards — a chat already marked served exits at
    * once (clear its mark below first). Progress shows in the video status line. */

@@ -57,7 +57,10 @@
     videoLinkFallback: true, // send the demo as a LINK when native attach keeps failing
     videoLinkUrl: "", // blank = the first central video's URL
     videoLinkText: "", // blank = built-in FR/EN line; {link} = the URL
-    videoForeground: true, // bring the Messenger window to the front while a video set attaches/uploads/sends
+    videoForeground: false, // bring the Messenger window to the front while a video set attaches/uploads/sends (power feature, off)
+    videoPip: false, // picture-in-picture keep-awake window during a set (power feature, off)
+    videoTrustedChannels: false, // real click on the attach button / real drop / real Enter (can open real dialogs — off)
+    videoActivateTab: false, // switch an unfocused window to the Messenger tab (off)
     smartFollowupEnabled: false,
     smartFollowupMaxCount: 1,
     smartFollowupQuietHours: 6,
@@ -82,7 +85,8 @@
     ["businessInfo", "value"], ["instructions", "value"], ["examples", "value"],
     ["closerGoals", "value"], ["priceList", "value"], ["visitConfirmMessage", "value"],
     ["demoVideoDelaySec", "number"], ["demoVideoBetweenSec", "number"],
-    ["videoRetryMax", "number"], ["videoLinkFallback", "checked"], ["videoLinkUrl", "value"], ["videoLinkText", "value"], ["videoForeground", "checked"],
+    ["videoRetryMax", "number"], ["videoLinkFallback", "checked"], ["videoLinkUrl", "value"], ["videoLinkText", "value"],
+    ["videoForeground", "checked"], ["videoPip", "checked"], ["videoTrustedChannels", "checked"], ["videoActivateTab", "checked"],
     ["smartFollowupEnabled", "checked"], ["smartFollowupMaxCount", "number"],
     ["smartFollowupQuietHours", "number"], ["smartFollowupGapHours", "number"],
   ];

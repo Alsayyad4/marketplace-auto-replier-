@@ -6,6 +6,16 @@ French), built for used-iPhone sales in Montréal. Runs locally per Chrome profi
 by default; **optional cloud sync** turns it into a web app so one change reaches
 every computer.
 
+> 🤫 **v0.21.51 — QUIET BUILD.** Operator: "it is detecting virus while installing, opening random
+> files, doing crazy stuff on the computer." Cause: the trusted-input channels — a real click on
+> Messenger's attach button opens a **real Windows "Open" dialog** on builds where Chrome's dialog
+> interception does not apply, and an uncaught real file drop opens the video in the tab — plus
+> windows pulled to the front, tabs switched, windows cascaded and picture-in-picture windows.
+> All of that is now **off by default** (dashboard → Videos → Power features, one switch each);
+> the `tabCapture`/`offscreen` permission and the 🔋 button are removed. What stays is invisible:
+> evidence-based verdicts, bounded retries, the link fallback, the staged-clip watcher (plain
+> DOM presses), the page shim, and the existing un-minimize.
+>
 > 🖼️ **v0.21.50 — zero manual work: automatic picture-in-picture keeps the page awake.** Operator:
 > "will not do any manual work." Chrome keeps a page painting (frames tick, media loads) while it
 > owns a Picture-in-Picture window, and PiP only needs a user activation — which the extension now

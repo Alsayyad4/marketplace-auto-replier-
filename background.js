@@ -92,7 +92,12 @@ const DEFAULTS = {
   // (v0.21.48) bring the Messenger window to the front while a video set attaches,
   // uploads and sends (Chrome defers media loading in a hidden tab), then hand
   // focus back. Off = never touch window focus (videos may then wait for a click).
-  videoForeground: true,
+  videoForeground: false, // (v0.21.51) OFF by default — windows pulled to the front looked like "crazy stuff"
+  // (v0.21.51) power features, all OFF by default (quiet build after the field report
+  // "opening random files, doing crazy stuff on the computer"):
+  videoPip: false, // picture-in-picture keep-awake window during a video set
+  videoTrustedChannels: false, // real click on the attach button / real file drop / trusted Enter — can open real dialogs on some builds
+  videoActivateTab: false, // switch an unfocused window to the Messenger tab
   // smart follow-up on quiet chats (proactive — off by default; all knobs configurable)
   smartFollowupEnabled: false, // master on/off for proactive follow-ups
   smartFollowupMaxCount: 1, // how many follow-ups per chat, total (e.g. 1 or 2) — anti-spam cap
@@ -1765,9 +1770,10 @@ async function cdpSetFiles(tabId, paths, channel) {
         }
       }
     } catch (e) { /* probe unsupported here — proceed exactly as before */ }
-    // (v0.21.48) user activation first: a hidden tab's uploader does not start
-    // without one (the chooser channel's own click already provides it)
-    if (channel !== "chooser") await cdpActivationPulse(target);
+    // (v0.21.48) user activation first for the drop (a hidden tab's uploader does
+    // not start without one; the chooser's own click provides it). (v0.21.51)
+    // the quiet "input" channel clicks nothing at all.
+    if (channel === "drop") await cdpActivationPulse(target);
     if (channel === "drop") return await cdpDrop(target, paths);
     if (channel === "chooser") return await cdpChooser(target, tabId, paths);
     const ev = await cdpCmd(target, "Runtime.evaluate", { expression: "(" + pageFindComposerFileInput.toString() + ")()", returnByValue: false }, 8000);
@@ -1902,38 +1908,9 @@ async function visShim(tabId, on, holdMs) {
     return r && r.ok ? { ok: true, installed: !!r.installed } : { ok: false, error: (r && r.error) || "shim not applied" };
   } catch (e) { return { ok: false, error: String((e && e.message) || e) }; }
 }
-// ---- (v0.21.49) KEEP AWAKE (tab capture) ----
-// A tab that is being CAPTURED is treated by Chrome as visible: it keeps
-// rendering, timers are not throttled, media loads, and the page reads
-// document.visibilityState === "visible" — even with the window minimized and
-// the mouse elsewhere. Chrome only lets an extension start a capture right
-// after the user clicked it (the popup 🔋 button, on the Messenger tab); the
-// tiny 2-fps stream lives in the offscreen document until Chrome restarts or
-// the extension updates.
-async function ensureOffscreen() {
-  if (!chrome.offscreen) throw new Error("offscreen API unavailable (Chrome 109+ needed)");
-  let has = false;
-  try { has = chrome.offscreen.hasDocument ? await chrome.offscreen.hasDocument() : false; } catch (e) { has = false; }
-  if (has) return;
-  try {
-    await chrome.offscreen.createDocument({
-      url: "offscreen.html",
-      reasons: ["USER_MEDIA"],
-      justification: "Keep the Messenger tab rendering (tab capture) so demo videos upload and send while the window is minimized or covered.",
-    });
-  } catch (e) {
-    if (!/single offscreen|already exists|already has/i.test(String((e && e.message) || e))) throw e;
-  }
-}
-async function awakeList() {
-  try {
-    if (!chrome.offscreen) return [];
-    const has = chrome.offscreen.hasDocument ? await chrome.offscreen.hasDocument() : false;
-    if (!has) return [];
-    const r = await chrome.runtime.sendMessage({ type: "AWAKE_LIST" });
-    return r && Array.isArray(r.tabs) ? r.tabs : [];
-  } catch (e) { return []; }
-}
+// (v0.21.51) the .49 tab-capture "keep awake" (tabCapture + offscreen document)
+// is REMOVED: it needed a click per machine, and the extra permission drew
+// download/AV suspicion for nothing.
 // Page-world helpers for the trusted send.
 function pageFocusComposer() {
   const main = document.querySelector('[role="main"]') || document;
@@ -2254,7 +2231,7 @@ async function buildDiagnostic() {
         "videoCatchUp", "autoCatchUp01213", "autoCatchUp01217", "videoEnabled", "demoVideos",
         "videoCache", "replyLog", "sudBase", "sudDirName", "sudLastCheck", "sudStatus", "cdpStats", "videoDisk", "winRestoreN", "winRestoreAt", "attachPref",
         "cooldowns", "replyCounts", "lastHandled", "videoAttachTrace",
-        "attachChannelStats", "attachMiss", "videoDoctorLast", "tabActivateN", "tabActivateAt", "fgN", "fgAt", "winSlot", "fgFail", "awakeN", "awakeAt", "pipN", "pipAt", "pipFail",
+        "attachChannelStats", "attachMiss", "videoDoctorLast", "tabActivateN", "tabActivateAt", "fgN", "fgAt", "winSlot", "fgFail", "pipN", "pipAt", "pipFail",
       ],
       (x) => r(x || {})
     )
@@ -2334,7 +2311,7 @@ async function buildDiagnostic() {
       " foreground=" + (settings.videoForeground === false ? "off" : "on") + " fg=" + (st.fgN || 0) + (st.fgAt ? "(" + ageM(st.fgAt) + ")" : "") +
       (st.fgFail && st.fgFail.n ? " fgFail=" + st.fgFail.n + "(" + ageM(st.fgFail.at) + ")" : "") +
       " pip=" + (st.pipN || 0) + (st.pipAt ? "(" + ageM(st.pipAt) + ")" : "") + (st.pipFail && st.pipFail.n ? " pipFail=" + st.pipFail.n + "(" + ageM(st.pipFail.at) + ":" + cut(st.pipFail.why, 40) + ")" : "") +
-      " awake=" + (await awakeList()).length + "tab(s)" + (st.awakeN ? " clicks=" + st.awakeN + "(" + ageM(st.awakeAt) + ")" : "") +
+      " trusted=" + (settings.videoTrustedChannels === true ? "on" : "off") + " pipMode=" + (settings.videoPip === true ? "on" : "off") + " activateTab=" + (settings.videoActivateTab === true ? "on" : "off") +
       " slot=" + (st.winSlot != null ? st.winSlot : "-") +
       (st.videoDoctorLast ? " | doctor(" + ageM(st.videoDoctorLast.at) + "): " + cut(st.videoDoctorLast.text, 400) : "")
     );
@@ -2669,24 +2646,6 @@ chrome.runtime.onMessage.addListener((msg, _sender, sendResponse) => {
           sendResponse(await visShim(tabId, !!msg.on, msg.hold));
           break;
         }
-        case "AWAKE_START": {
-          // (v0.21.49) popup obtained a tab-capture stream id (user click): consume it in the offscreen page
-          try {
-            await ensureOffscreen();
-            const r = await chrome.runtime.sendMessage({ type: "AWAKE_CONSUME", streamId: msg.streamId, tabId: msg.tabId });
-            if (r && r.ok) chrome.storage.local.get(["awakeN"], (x) => { void chrome.runtime.lastError; chrome.storage.local.set({ awakeN: ((x && x.awakeN) || 0) + 1, awakeAt: Date.now() }, () => void chrome.runtime.lastError); });
-            sendResponse(r || { ok: false, error: "no answer from the capture page (if offscreen.html is missing, reinstall from the zip once)" });
-          } catch (e) { sendResponse({ ok: false, error: String((e && e.message) || e) }); }
-          break;
-        }
-        case "AWAKE_STATUS": {
-          sendResponse({ ok: true, tabs: await awakeList() });
-          break;
-        }
-        case "AWAKE_ENDED": {
-          sendResponse({ ok: true });
-          break;
-        }
         case "CDP_VERIFIED": {
           // Content saw the preview appear after a file-API attach (protocol ok ≠ staged).
           // blind:true = staged per the composer's send control, tile not rendered.
@@ -2900,6 +2859,7 @@ async function heartbeat() {
       // focused window; never flips between two Messenger tabs in one window.
       let act = 0;
       for (const t of tabs) {
+        if (settings.videoActivateTab !== true) break; // (v0.21.51) off unless the dashboard turns it on
         if (t.active) continue;
         if (tabs.some((o) => o.windowId === t.windowId && o.active)) continue;
         const w = await new Promise((r) => chrome.windows.get(t.windowId, (x) => { void chrome.runtime.lastError; r(x || null); }));
@@ -2917,7 +2877,7 @@ async function heartbeat() {
       // slot so a strip of each stays exposed — no throttling, no deferred
       // media, even when the bot is not in front. A window the operator moved
       // (left/top > 60) is left where it is. Local keepWindowsCascaded:false disables.
-      if (kw.keepWindowsCascaded !== false) {
+      if (kw.keepWindowsCascaded === true) { // (v0.21.51) opt-in only — moving windows looked like "crazy stuff"
         let slot = kw.winSlot;
         if (typeof slot !== "number") { slot = Math.floor(Math.random() * 10); chrome.storage.local.set({ winSlot: slot }, () => void chrome.runtime.lastError); }
         let k = 0;
@@ -2992,7 +2952,6 @@ const SUD_RAW = "https://raw.githubusercontent.com/alsayyad4/marketplace-auto-re
 const SUD_FILES = [
   "background.js", "content.js", "options.html", "options.js", "popup.html",
   "popup.js", "managed_schema.json", "icon16.png", "icon48.png", "icon128.png",
-  "offscreen.html", "offscreen.js", // (v0.21.49) keep-awake capture page
   "manifest.json", // MUST be last: the disk-watcher only reloads once this lands
 ];
 // Every folder layout a normal install can produce inside Downloads. Extract-All

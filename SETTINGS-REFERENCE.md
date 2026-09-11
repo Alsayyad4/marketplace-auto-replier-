@@ -93,20 +93,21 @@ endpoint serves that object to the extension.
 - `videoLinkUrl` — string (default blank = the first central video's own URL).
 - `videoLinkText` — string (default blank = built-in `Voici la vidéo démo 🎥 (demo video) {link}`);
   `{link}` is replaced by the URL.
-- `videoForeground` — bool (default `true`). (v0.21.48) While a video set attaches, uploads
-  and sends, the extension brings its own Messenger window to the front and activates the
-  tab (Chrome never starts a video upload in a hidden/covered tab — that is what used to
-  wait for a click on the page), then hands focus back to the window that had it.
-  The staged-clip watcher also uses it when an upload is stalled on a hidden tab.
+- **Power features** (v0.21.51: all default `false` — the quiet build; each makes the computer
+  visibly do something, turn on one at a time only if videos still do not upload on a
+  minimized window):
+  - `videoForeground` — bring the Messenger window to the front for a video set, hand focus back after.
+  - `videoPip` — open a small picture-in-picture "SubSell" window during a set to keep the page awake (no click).
+  - `videoActivateTab` — switch an unfocused Chrome window to the Messenger tab.
+  - `videoTrustedChannels` — real click on the attach button ("chooser"), real file drop ("drop"),
+    trusted Enter/Send. ⚠ On some Messenger builds the click opens a **real "Open file" dialog**
+    on the computer and an uncaught drop opens the video in the tab — this is what the operator
+    saw as "opening random files". Leave OFF unless a diagnostic shows the quiet channels stage nothing.
 
 ## NOT web-managed (per-machine, stay in the extension)
 
 These live in each computer's local storage and are **not** in the config JSON:
 - `enabled` — on/off toggle per machine.
-- **🔋 Keep this tab awake** (popup button, v0.21.49) — per tab, per Chrome session: a tab
-  capture that makes Chrome treat the Messenger tab as *visible* (renders, no throttling,
-  media loads) even minimized/covered. Chrome requires a click on the extension to start it;
-  it ends when Chrome restarts or the extension updates.
 - `machineLabel` — how this computer/account shows up in the web app's **Activity** log (Settings → "This computer's label"). Falls back to a stable random id.
 - `videoEnabled` (bool), `videoDelaySec` (number, default 10), `demoVideos` (uploaded
   mp4 files as base64) — the actual demo video is uploaded per machine (too big to serve

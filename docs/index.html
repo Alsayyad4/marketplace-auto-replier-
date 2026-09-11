@@ -245,7 +245,11 @@
           <hr />
           <h3 style="margin:6px 0;">🛟 When a video can't be attached natively</h3>
           <p class="hint">Each extension retries a few times with different attach channels; after that it sends the demo as a <b>link</b> through the normal text path, so the buyer always gets it. Applies to every computer.</p>
-          <div class="row"><label><input type="checkbox" id="videoForeground" /> Bring the Messenger window to the front while a video attaches, uploads and sends <span class="hint">(Chrome does not start a video upload in a hidden tab — this is what used to wait for a click on the page; focus is handed back afterwards)</span></label></div>
+          <h3 style="margin:14px 0 4px;">⚙️ Power features <span class="hint">(all OFF by default — each one makes the computer visibly do something; turn on one at a time only if videos still do not upload on a minimized window)</span></h3>
+          <div class="row"><label><input type="checkbox" id="videoForeground" /> Bring the Messenger window to the front while a video attaches, uploads and sends <span class="hint">(focus is handed back afterwards)</span></label></div>
+          <div class="row"><label><input type="checkbox" id="videoPip" /> Open a small picture-in-picture window during a video set to keep the page awake <span class="hint">(no click needed; a floating "SubSell" window shows for the set)</span></label></div>
+          <div class="row"><label><input type="checkbox" id="videoActivateTab" /> Switch an unfocused Chrome window to the Messenger tab</label></div>
+          <div class="row"><label><input type="checkbox" id="videoTrustedChannels" /> Trusted input: real click on the attach button / real file drop / real Enter <span class="hint">(⚠ on some Messenger builds this opens a real "Open file" dialog on the computer — leave OFF unless told otherwise)</span></label></div>
           <div class="row"><label><input type="checkbox" id="videoLinkFallback" /> Send the demo video as a link when native attach keeps failing</label></div>
           <div class="row"><label>Native attach retries per chat before the link <span class="hint">0 = link right away</span></label><input type="number" id="videoRetryMax" min="0" max="10" /></div>
           <div class="row"><label>Link to send <span class="hint">blank = the first central video's own URL</span></label><input type="text" id="videoLinkUrl" placeholder="https://…" style="min-width:320px;" /></div>

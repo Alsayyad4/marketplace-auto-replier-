@@ -1350,8 +1350,16 @@
       // never re-dispatched in this visit — the flush Enter + bounded retry policy
       // in maybeSendVideo take it from there).
       const pref = await getAttachPref();
-      const ALL = ["chooser", "drop", "input", "paste"];
-      let order = pref ? [pref.channel].concat(ALL.filter((c) => c !== pref.channel)) : ALL.slice();
+      // (v0.21.51 SAFE MODE) the TRUSTED channels — a real click on Messenger's
+      // attach button ("chooser") and a real file drop ("drop") — are OFF unless
+      // the dashboard's videoTrustedChannels is on: on a build where the dialog
+      // interception does not apply, that click opens a real Windows "Open"
+      // dialog on the machine, and an uncaught drop makes the tab open the file
+      // (the operator's "opening random files"). Default = the quiet channels:
+      // the persistent input via the file API, then the synthetic paste.
+      const trusted = lastSettings.videoTrustedChannels === true;
+      const ALL = trusted ? ["chooser", "drop", "input", "paste"] : ["input", "paste"];
+      let order = pref && ALL.indexOf(pref.channel) !== -1 ? [pref.channel].concat(ALL.filter((c) => c !== pref.channel)) : ALL.slice();
       if (!canCdp) order = order.filter((c) => c === "paste");
       if (!order.length) order = ["paste"];
       // No learned channel and the last set(s) on this machine showed nothing:
@@ -1702,6 +1710,7 @@
   // hidden tab, the reason an attached clip's upload used to wait for a click.
   async function cdpPress(mode) {
     if (!cdpAvailable()) return false;
+    if (lastSettings.videoTrustedChannels !== true) return false; // (v0.21.51) quiet by default: synthetic presses only
     try {
       const r = await Promise.race([ask({ type: "CDP_SEND", mode }), sleep(15000).then(() => null)]);
       return !!(r && r.ok);
@@ -1819,12 +1828,13 @@
           ask({ type: "VIS_SHIM", on: true, hold: 120000 }); // (v0.21.49) the page reads "visible" + frames tick, 2 min
           // (v0.21.50) keep the page painting through a PiP window for 2 min (no
           // click needed); window focus only if PiP is refused
-          const pipOk = await enterPipForSet("upload en cours…");
+          // (v0.21.51) PiP / window focus only when the dashboard turned them on
+          const pipOk = lastSettings.videoPip === true ? await enterPipForSet("upload en cours…") : false;
           if (pipOk) {
             if (pipHoldTimer) clearTimeout(pipHoldTimer);
             pipHoldTimer = setTimeout(() => { pipHoldTimer = null; if (!busy) exitPipForSet(); }, 120000);
             setStatus({ lastAction: "watcher: a clip is uploading on a hidden tab — keeping the page awake (picture-in-picture)" });
-          } else if (lastSettings.videoForeground !== false) {
+          } else if (lastSettings.videoForeground === true) {
             ask({ type: "VIDEO_FOREGROUND", on: true, hold: 120000 });
             setStatus({ lastAction: "watcher: a clip is uploading on a hidden tab — bringing the window to the front" });
           }
@@ -2988,12 +2998,15 @@
       // window opened on the extension's own trusted activation: frames tick,
       // media loads, nothing to click, works minimized. Window focus (layer 3)
       // only when PiP is refused.
-      if (document.visibilityState !== "visible") {
+      // (v0.21.51 SAFE MODE) both are OFF unless the dashboard turns them on
+      // (videoPip / videoForeground): a floating window and windows pulled to the
+      // front read as "the computer doing crazy stuff" on the operator's desktop.
+      if (sCfg.videoPip === true && document.visibilityState !== "visible") {
         pipOn = await enterPipForSet(name || id);
         if (pipOn) setStatus({ lastAction: "page kept awake (picture-in-picture) for the video set…", currentThread: name });
       }
       // LAYER 3 — the window comes to the front (verified, one retry).
-      if (!pipOn && sCfg.videoForeground !== false && document.visibilityState !== "visible") {
+      if (!pipOn && sCfg.videoForeground === true && document.visibilityState !== "visible") {
         fgOn = true;
         setStatus({ lastAction: "bringing this window to the front for the video set…", currentThread: name });
         try { await Promise.race([ask({ type: "VIDEO_FOREGROUND", on: true }), sleep(5000)]); } catch (e) { /* best effort */ }
