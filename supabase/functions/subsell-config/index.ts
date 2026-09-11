@@ -1,12 +1,12 @@
 // SubSell config endpoint (Supabase Edge Function)
-// Public GET: /config?key=<config_key>  ->  returns that user's settings JSON,
+// Public GET: /subsell-config?key=<config_key>  ->  returns that user's settings JSON,
 // which is exactly what the Chrome extension's "Remote config URL" expects.
 //
 // Deploy (IMPORTANT: --no-verify-jwt so the extension can fetch it with no login):
-//   supabase functions deploy config --no-verify-jwt
+//   supabase functions deploy subsell-config --no-verify-jwt
 //
 // Resulting URL the user pastes into the extension:
-//   https://<project-ref>.supabase.co/functions/v1/config?key=<their config_key>
+//   https://<project-ref>.supabase.co/functions/v1/subsell-config?key=<their config_key>
 
 import { createClient } from "https://esm.sh/@supabase/supabase-js@2";
 

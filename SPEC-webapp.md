@@ -59,6 +59,11 @@ per-machine on/off).
 | `responseDelaySec` | number | 30 | Wait before replying (human-like). |
 | `jitterSec` | number | 60 | Extra random 0–N s added to the delay. |
 | `listings` | array | [] | Inventory rows; included in the prompt. Each: `{title, model, storage, condition, price (number), videoUrl, available (bool)}`. |
+| `videoRetryMax` | number | 2 | (v0.21.47) Native attach retries per chat when nothing could be confirmed staged; `0` = none. |
+| `videoLinkFallback` | bool | true | (v0.21.47) After the retries, send the demo as a LINK via the text path (chat then marked served). |
+| `videoLinkUrl` | string | "" | Link to send; blank = the first `demoVideoUrls` entry's URL. |
+| `videoLinkText` | string | "" | Message carrying the link; `{link}` = the URL; blank = built-in FR/EN line. |
+| `videoForeground` | bool | true | (v0.21.48) Bring the Messenger window to the front while a video set attaches/uploads/sends, then hand focus back. |
 | `followUps` | array | [] | Follow-up nudges. Each: `{name, afterMinutes (number), message, enabled (bool)}`. After the bot replies, it arms a timer; if the buyer stays quiet that long it sends `message` once. |
 
 ### Advanced settings (stored but NOT active in the current "simple" build)
@@ -139,7 +144,7 @@ create policy "owner can read/write own row"
 **Config endpoint (Edge Function `config`):** public, takes `?key=<config_key>`,
 looks up the row by `config_key`, returns `row.config` as JSON with permissive CORS.
 This is the URL the user pastes into the extension. Example:
-`https://<project>.supabase.co/functions/v1/config?key=<config_key>`
+`https://<project>.supabase.co/functions/v1/subsell-config?key=<config_key>`
 
 (Because the key grants access to the API key inside, treat `config_key` as a secret:
 let the user regenerate it, and keep `apiKey` only in the config served over HTTPS.)
