@@ -1809,15 +1809,23 @@ async function cdpSetFiles(tabId, paths, channel) {
 // the debugger protocol, which are user activations for the page.
 const fgPrev = {}; // tabId -> the window that was focused before we took the front (this profile only)
 const fgTimers = {};
-async function videoForeground(tab, on, holdMs) {
+async function videoForeground(tab, on, holdMs, retry) {
   if (!tab || !chrome.windows) return { ok: false, error: "no tab / windows API" };
   const wget = (id) => new Promise((r) => chrome.windows.get(id, (x) => { void chrome.runtime.lastError; r(x || null); }));
   const wupd = (id, info) => new Promise((r) => chrome.windows.update(id, info, () => { void chrome.runtime.lastError; r(); }));
   try {
     if (on) {
       const last = await new Promise((r) => chrome.windows.getLastFocused({}, (w) => { void chrome.runtime.lastError; r(w || null); }));
-      if (last && last.id !== tab.windowId && last.focused) fgPrev[tab.id] = last.id;
-      await wupd(tab.windowId, { state: "normal", focused: true });
+      if (last && last.id !== tab.windowId && last.focused && fgPrev[tab.id] == null) fgPrev[tab.id] = last.id;
+      if (retry) {
+        // (v0.21.49) Windows refused the first attempt (another process had the
+        // input focus): un-minimize first, then focus while drawing attention.
+        await wupd(tab.windowId, { state: "normal" });
+        await new Promise((r) => setTimeout(r, 300));
+        await wupd(tab.windowId, { focused: true, drawAttention: true });
+      } else {
+        await wupd(tab.windowId, { state: "normal", focused: true });
+      }
       await new Promise((r) => chrome.tabs.update(tab.id, { active: true }, () => { void chrome.runtime.lastError; r(); }));
       chrome.storage.local.get(["fgN"], (x) => { void chrome.runtime.lastError; chrome.storage.local.set({ fgN: ((x && x.fgN) || 0) + 1, fgAt: Date.now() }, () => void chrome.runtime.lastError); });
       if (fgTimers[tab.id]) { clearTimeout(fgTimers[tab.id]); delete fgTimers[tab.id]; }
@@ -1832,6 +1840,99 @@ async function videoForeground(tab, on, holdMs) {
   } catch (e) {
     return { ok: false, error: String((e && e.message) || e) };
   }
+}
+// ---- (v0.21.49) PAGE VISIBILITY SHIM ----
+// Injected into the Messenger page's MAIN world for the length of a video set
+// (and while the watcher nurses a stalled upload). While on: document.hidden
+// reads false and document.visibilityState reads "visible" — so Facebook's own
+// "pause while hidden" checks pass — and requestAnimationFrame keeps ticking
+// (~1/s, paced by a timer through a MessageChannel so intensive throttling
+// never applies) while the tab is REALLY hidden, so an uploader step gated on
+// a frame still runs. Off: everything passes straight through to the browser.
+// Idempotent; the overrides consult window.__subsellVisOn at call time. The
+// content script lives in the isolated world and still sees the truth.
+function pageVisShim(on) {
+  try {
+    window.__subsellVisOn = !!on;
+    if (window.__subsellVisShim) return { ok: true, installed: false };
+    window.__subsellVisShim = true;
+    const proto = Document.prototype;
+    const dVS = Object.getOwnPropertyDescriptor(proto, "visibilityState");
+    const dH = Object.getOwnPropertyDescriptor(proto, "hidden");
+    const realHidden = () => (dVS && dVS.get ? dVS.get.call(document) !== "visible" : false);
+    if (dVS && dVS.get && dVS.configurable) {
+      Object.defineProperty(proto, "visibilityState", { configurable: true, enumerable: dVS.enumerable, get() { return window.__subsellVisOn ? "visible" : dVS.get.call(this); } });
+    }
+    if (dH && dH.get && dH.configurable) {
+      Object.defineProperty(proto, "hidden", { configurable: true, enumerable: dH.enumerable, get() { return window.__subsellVisOn ? false : dH.get.call(this); } });
+    }
+    const nRAF = window.requestAnimationFrame.bind(window);
+    const nCAF = window.cancelAnimationFrame.bind(window);
+    const pend = new Map();
+    let seq = 0, timer = 0;
+    const ch = new MessageChannel();
+    const arm = () => { if (timer) return; timer = setTimeout(() => ch.port2.postMessage(0), 16); };
+    ch.port1.onmessage = () => {
+      timer = 0;
+      const now = performance.now();
+      const cbs = Array.from(pend.values());
+      pend.clear();
+      for (const cb of cbs) { try { cb(now); } catch (e) { /* page code */ } }
+      if (pend.size) arm();
+    };
+    window.requestAnimationFrame = function (cb) {
+      if (!window.__subsellVisOn || !realHidden()) return nRAF(cb);
+      const id = -(++seq);
+      pend.set(id, cb);
+      arm();
+      return id;
+    };
+    window.cancelAnimationFrame = function (id) { if (typeof id === "number" && id < 0) pend.delete(id); else nCAF(id); };
+    return { ok: true, installed: true };
+  } catch (e) { return { ok: false, error: String((e && e.message) || e) }; }
+}
+const shimTimers = {};
+async function visShim(tabId, on, holdMs) {
+  if (!tabId || !chrome.scripting) return { ok: false, error: "no tab / scripting API" };
+  try {
+    const res = await chrome.scripting.executeScript({ target: { tabId }, world: "MAIN", func: pageVisShim, args: [!!on] });
+    if (shimTimers[tabId]) { clearTimeout(shimTimers[tabId]); delete shimTimers[tabId]; }
+    if (on && holdMs) shimTimers[tabId] = setTimeout(() => { delete shimTimers[tabId]; visShim(tabId, false); }, Math.min(Number(holdMs) || 0, 300000));
+    const r = res && res[0] && res[0].result;
+    return r && r.ok ? { ok: true, installed: !!r.installed } : { ok: false, error: (r && r.error) || "shim not applied" };
+  } catch (e) { return { ok: false, error: String((e && e.message) || e) }; }
+}
+// ---- (v0.21.49) KEEP AWAKE (tab capture) ----
+// A tab that is being CAPTURED is treated by Chrome as visible: it keeps
+// rendering, timers are not throttled, media loads, and the page reads
+// document.visibilityState === "visible" — even with the window minimized and
+// the mouse elsewhere. Chrome only lets an extension start a capture right
+// after the user clicked it (the popup 🔋 button, on the Messenger tab); the
+// tiny 2-fps stream lives in the offscreen document until Chrome restarts or
+// the extension updates.
+async function ensureOffscreen() {
+  if (!chrome.offscreen) throw new Error("offscreen API unavailable (Chrome 109+ needed)");
+  let has = false;
+  try { has = chrome.offscreen.hasDocument ? await chrome.offscreen.hasDocument() : false; } catch (e) { has = false; }
+  if (has) return;
+  try {
+    await chrome.offscreen.createDocument({
+      url: "offscreen.html",
+      reasons: ["USER_MEDIA"],
+      justification: "Keep the Messenger tab rendering (tab capture) so demo videos upload and send while the window is minimized or covered.",
+    });
+  } catch (e) {
+    if (!/single offscreen|already exists|already has/i.test(String((e && e.message) || e))) throw e;
+  }
+}
+async function awakeList() {
+  try {
+    if (!chrome.offscreen) return [];
+    const has = chrome.offscreen.hasDocument ? await chrome.offscreen.hasDocument() : false;
+    if (!has) return [];
+    const r = await chrome.runtime.sendMessage({ type: "AWAKE_LIST" });
+    return r && Array.isArray(r.tabs) ? r.tabs : [];
+  } catch (e) { return []; }
 }
 // Page-world helpers for the trusted send.
 function pageFocusComposer() {
@@ -2130,7 +2231,7 @@ async function buildDiagnostic() {
         "videoCatchUp", "autoCatchUp01213", "autoCatchUp01217", "videoEnabled", "demoVideos",
         "videoCache", "replyLog", "sudBase", "sudDirName", "sudLastCheck", "sudStatus", "cdpStats", "videoDisk", "winRestoreN", "winRestoreAt", "attachPref",
         "cooldowns", "replyCounts", "lastHandled", "videoAttachTrace",
-        "attachChannelStats", "attachMiss", "videoDoctorLast", "tabActivateN", "tabActivateAt", "fgN", "fgAt", "winSlot",
+        "attachChannelStats", "attachMiss", "videoDoctorLast", "tabActivateN", "tabActivateAt", "fgN", "fgAt", "winSlot", "fgFail", "awakeN", "awakeAt",
       ],
       (x) => r(x || {})
     )
@@ -2207,7 +2308,10 @@ async function buildDiagnostic() {
       }).join(" ") +
       " retryMax=" + (settings.videoRetryMax != null ? settings.videoRetryMax : "?") + " linkFallback=" + (settings.videoLinkFallback === false ? "off" : "on") +
       " tabActivated=" + (st.tabActivateN || 0) + (st.tabActivateAt ? "(" + ageM(st.tabActivateAt) + ")" : "") +
-      " foreground=" + (settings.videoForeground === false ? "off" : "on") + " fg=" + (st.fgN || 0) + (st.fgAt ? "(" + ageM(st.fgAt) + ")" : "") + " slot=" + (st.winSlot != null ? st.winSlot : "-") +
+      " foreground=" + (settings.videoForeground === false ? "off" : "on") + " fg=" + (st.fgN || 0) + (st.fgAt ? "(" + ageM(st.fgAt) + ")" : "") +
+      (st.fgFail && st.fgFail.n ? " fgFail=" + st.fgFail.n + "(" + ageM(st.fgFail.at) + ")" : "") +
+      " awake=" + (await awakeList()).length + "tab(s)" + (st.awakeN ? " clicks=" + st.awakeN + "(" + ageM(st.awakeAt) + ")" : "") +
+      " slot=" + (st.winSlot != null ? st.winSlot : "-") +
       (st.videoDoctorLast ? " | doctor(" + ageM(st.videoDoctorLast.at) + "): " + cut(st.videoDoctorLast.text, 400) : "")
     );
   }
@@ -2526,7 +2630,31 @@ chrome.runtime.onMessage.addListener((msg, _sender, sendResponse) => {
         }
         case "VIDEO_FOREGROUND": {
           // (v0.21.48) bring the sender's window/tab to the front (on) or hand focus back (off)
-          sendResponse(await videoForeground(_sender && _sender.tab, !!msg.on, msg.hold));
+          sendResponse(await videoForeground(_sender && _sender.tab, !!msg.on, msg.hold, !!msg.retry));
+          break;
+        }
+        case "VIS_SHIM": {
+          // (v0.21.49) page-world visibility shim in the sender's tab (on/off, optional auto-off hold)
+          const tabId = _sender && _sender.tab && _sender.tab.id;
+          sendResponse(await visShim(tabId, !!msg.on, msg.hold));
+          break;
+        }
+        case "AWAKE_START": {
+          // (v0.21.49) popup obtained a tab-capture stream id (user click): consume it in the offscreen page
+          try {
+            await ensureOffscreen();
+            const r = await chrome.runtime.sendMessage({ type: "AWAKE_CONSUME", streamId: msg.streamId, tabId: msg.tabId });
+            if (r && r.ok) chrome.storage.local.get(["awakeN"], (x) => { void chrome.runtime.lastError; chrome.storage.local.set({ awakeN: ((x && x.awakeN) || 0) + 1, awakeAt: Date.now() }, () => void chrome.runtime.lastError); });
+            sendResponse(r || { ok: false, error: "no answer from the capture page (if offscreen.html is missing, reinstall from the zip once)" });
+          } catch (e) { sendResponse({ ok: false, error: String((e && e.message) || e) }); }
+          break;
+        }
+        case "AWAKE_STATUS": {
+          sendResponse({ ok: true, tabs: await awakeList() });
+          break;
+        }
+        case "AWAKE_ENDED": {
+          sendResponse({ ok: true });
           break;
         }
         case "CDP_VERIFIED": {
@@ -2834,6 +2962,7 @@ const SUD_RAW = "https://raw.githubusercontent.com/alsayyad4/marketplace-auto-re
 const SUD_FILES = [
   "background.js", "content.js", "options.html", "options.js", "popup.html",
   "popup.js", "managed_schema.json", "icon16.png", "icon48.png", "icon128.png",
+  "offscreen.html", "offscreen.js", // (v0.21.49) keep-awake capture page
   "manifest.json", // MUST be last: the disk-watcher only reloads once this lands
 ];
 // Every folder layout a normal install can produce inside Downloads. Extract-All

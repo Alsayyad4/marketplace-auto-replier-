@@ -1748,10 +1748,13 @@
       if (uploadingInBand()) {
         // The upload is running — or waiting to run: a hidden tab may never let
         // it start. Bring the window to the front (once a minute per chat).
-        if (document.visibilityState !== "visible" && lastSettings.videoForeground !== false && now - sw.fgAt > 60000) {
+        if (document.visibilityState !== "visible" && now - sw.fgAt > 60000) {
           sw.fgAt = now;
-          ask({ type: "VIDEO_FOREGROUND", on: true, hold: 120000 });
-          setStatus({ lastAction: "watcher: a clip is uploading on a hidden tab — bringing the window to the front" });
+          ask({ type: "VIS_SHIM", on: true, hold: 120000 }); // (v0.21.49) the page reads "visible" + frames tick, 2 min
+          if (lastSettings.videoForeground !== false) {
+            ask({ type: "VIDEO_FOREGROUND", on: true, hold: 120000 });
+            setStatus({ lastAction: "watcher: a clip is uploading on a hidden tab — bringing the window to the front" });
+          }
         }
         return;
       }
@@ -2343,6 +2346,7 @@
   async function maybeSendVideo(id, name, immediate, sidebarKey, deferSend, hooks) {
     videoSendDeferred = false;
     let fgOn = false; // (v0.21.48) this visit brought the window to the front — hand focus back at the end
+    let shimOn = false; // (v0.21.49) this visit switched the page visibility shim on — off at the end
     try {
       // Terminal exits must clear the pending queue under BOTH keys: deferral
       // writes videoPending[sidebarId] (v0.21.14) but this engine runs on the
@@ -2898,11 +2902,31 @@
       // page it starts uploading". For the length of this set the window comes
       // to the front and the tab is activated; focus is handed back afterwards.
       // Setting videoForeground (default on).
+      // (v0.21.49) LAYER 1 — the page shim: for this set the page itself reads
+      // "visible" and keeps its animation frames ticking even while the tab is
+      // really hidden. Needs no focus, no window movement. (A tab kept awake by
+      // capture — popup 🔋 — is genuinely visible and skips all of this.)
+      if (document.visibilityState !== "visible") {
+        shimOn = true;
+        try { await Promise.race([ask({ type: "VIS_SHIM", on: true }), sleep(4000)]); } catch (e) { /* best effort */ }
+      }
+      // LAYER 2 — the window comes to the front (verified, one retry).
       if (sCfg.videoForeground !== false && document.visibilityState !== "visible") {
         fgOn = true;
         setStatus({ lastAction: "bringing this window to the front for the video set…", currentThread: name });
         try { await Promise.race([ask({ type: "VIDEO_FOREGROUND", on: true }), sleep(5000)]); } catch (e) { /* best effort */ }
-        await sleep(800);
+        await sleep(1500);
+        if (document.visibilityState !== "visible") {
+          // Windows may refuse the foreground to a process without recent input:
+          // once more, un-minimizing first and drawing attention.
+          try { await Promise.race([ask({ type: "VIDEO_FOREGROUND", on: true, retry: true }), sleep(5000)]); } catch (e) { /* best effort */ }
+          await sleep(1500);
+          if (document.visibilityState !== "visible") {
+            const ff = (await getLocal(["fgFail"])).fgFail || {};
+            await setLocal({ fgFail: { n: (ff.n || 0) + 1, at: Date.now() } });
+            setStatus({ videoLast: "window could not be brought to the front (another app kept it) — page shim + trusted input carry the set; 🔋 Keep awake makes this tab visible for good" });
+          }
+        }
       }
 
       // ONE-MESSAGE DELIVERY: attach every clip back-to-back (each verified),
@@ -3498,6 +3522,7 @@
       } catch (e2) { /* best effort */ }
     } finally {
       if (fgOn) { fgOn = false; ask({ type: "VIDEO_FOREGROUND", on: false }); } // hand focus back
+      if (shimOn) { shimOn = false; ask({ type: "VIS_SHIM", on: false }); } // the page reads the truth again
     }
   }
 

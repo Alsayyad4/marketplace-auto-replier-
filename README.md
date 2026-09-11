@@ -6,6 +6,15 @@ French), built for used-iPhone sales in Montréal. Runs locally per Chrome profi
 by default; **optional cloud sync** turns it into a web app so one change reaches
 every computer.
 
+> 🔋 **v0.21.49 — minimized Chrome, mouse elsewhere: three layers.** (1) During a video set the
+> extension injects a **page visibility shim** into Messenger (the page reads "visible" and its
+> animation frames keep ticking while the tab is really hidden — no focus needed). (2) The
+> foreground step now **verifies** it got the window in front and retries with attention-drawing
+> if Windows refused. (3) A popup button **🔋 Keep this tab awake** starts a tiny tab capture:
+> Chrome then treats the tab as genuinely visible — full rendering, no throttling, media loads —
+> even with the window minimized, until Chrome restarts or the extension updates (Chrome requires
+> that one click). Nothing is recorded anywhere.
+>
 > 📺 **v0.21.48 — obligatory send: the bot owns visibility and the Send key.** Operator: "it
 > doesn't send, but as soon as I click on the page it starts uploading; sometimes it uploads
 > and never sends." Chrome defers media loading and pauses rendering in a hidden/covered tab,

@@ -103,6 +103,10 @@ endpoint serves that object to the extension.
 
 These live in each computer's local storage and are **not** in the config JSON:
 - `enabled` — on/off toggle per machine.
+- **🔋 Keep this tab awake** (popup button, v0.21.49) — per tab, per Chrome session: a tab
+  capture that makes Chrome treat the Messenger tab as *visible* (renders, no throttling,
+  media loads) even minimized/covered. Chrome requires a click on the extension to start it;
+  it ends when Chrome restarts or the extension updates.
 - `machineLabel` — how this computer/account shows up in the web app's **Activity** log (Settings → "This computer's label"). Falls back to a stable random id.
 - `videoEnabled` (bool), `videoDelaySec` (number, default 10), `demoVideos` (uploaded
   mp4 files as base64) — the actual demo video is uploaded per machine (too big to serve
