@@ -2002,6 +2002,29 @@ async function cdpActivationPulse(target) {
     return true;
   } catch (e) { return false; }
 }
+// (v0.21.50) Stand-alone activation for the content script's picture-in-picture
+// request: the composer click when it is safe, else a harmless Shift key press
+// (a keydown is an activation-triggering input too). Never the attach button
+// (it would open a real file dialog).
+async function cdpActivate(tabId) {
+  if (!chrome.debugger) return { ok: false, error: "debugger API unavailable" };
+  if (!tabId) return { ok: false, error: "no tab" };
+  const target = { tabId };
+  let attached = false;
+  try {
+    await new Promise((res, rej) => chrome.debugger.attach(target, "1.3", () => (chrome.runtime.lastError ? rej(new Error(chrome.runtime.lastError.message)) : res())));
+    attached = true;
+    await settleViewport(target);
+    if (await cdpActivationPulse(target)) return { ok: true, how: "click" };
+    await cdpCmd(target, "Input.dispatchKeyEvent", { type: "keyDown", key: "Shift", code: "ShiftLeft", windowsVirtualKeyCode: 16, modifiers: 8 }, 3000);
+    await cdpCmd(target, "Input.dispatchKeyEvent", { type: "keyUp", key: "Shift", code: "ShiftLeft", windowsVirtualKeyCode: 16 }, 3000);
+    return { ok: true, how: "key" };
+  } catch (e) {
+    return { ok: false, error: String((e && e.message) || e) };
+  } finally {
+    if (attached) { try { chrome.debugger.detach(target, () => void chrome.runtime.lastError); } catch (e) { /* already gone */ } }
+  }
+}
 
 // (v0.21.47) VIDEO DOCTOR (browser side): read-only facts about the attach path
 // on THIS tab — window/tab visibility, whether the attach button is found and
@@ -2231,7 +2254,7 @@ async function buildDiagnostic() {
         "videoCatchUp", "autoCatchUp01213", "autoCatchUp01217", "videoEnabled", "demoVideos",
         "videoCache", "replyLog", "sudBase", "sudDirName", "sudLastCheck", "sudStatus", "cdpStats", "videoDisk", "winRestoreN", "winRestoreAt", "attachPref",
         "cooldowns", "replyCounts", "lastHandled", "videoAttachTrace",
-        "attachChannelStats", "attachMiss", "videoDoctorLast", "tabActivateN", "tabActivateAt", "fgN", "fgAt", "winSlot", "fgFail", "awakeN", "awakeAt",
+        "attachChannelStats", "attachMiss", "videoDoctorLast", "tabActivateN", "tabActivateAt", "fgN", "fgAt", "winSlot", "fgFail", "awakeN", "awakeAt", "pipN", "pipAt", "pipFail",
       ],
       (x) => r(x || {})
     )
@@ -2310,6 +2333,7 @@ async function buildDiagnostic() {
       " tabActivated=" + (st.tabActivateN || 0) + (st.tabActivateAt ? "(" + ageM(st.tabActivateAt) + ")" : "") +
       " foreground=" + (settings.videoForeground === false ? "off" : "on") + " fg=" + (st.fgN || 0) + (st.fgAt ? "(" + ageM(st.fgAt) + ")" : "") +
       (st.fgFail && st.fgFail.n ? " fgFail=" + st.fgFail.n + "(" + ageM(st.fgFail.at) + ")" : "") +
+      " pip=" + (st.pipN || 0) + (st.pipAt ? "(" + ageM(st.pipAt) + ")" : "") + (st.pipFail && st.pipFail.n ? " pipFail=" + st.pipFail.n + "(" + ageM(st.pipFail.at) + ":" + cut(st.pipFail.why, 40) + ")" : "") +
       " awake=" + (await awakeList()).length + "tab(s)" + (st.awakeN ? " clicks=" + st.awakeN + "(" + ageM(st.awakeAt) + ")" : "") +
       " slot=" + (st.winSlot != null ? st.winSlot : "-") +
       (st.videoDoctorLast ? " | doctor(" + ageM(st.videoDoctorLast.at) + "): " + cut(st.videoDoctorLast.text, 400) : "")
@@ -2631,6 +2655,12 @@ chrome.runtime.onMessage.addListener((msg, _sender, sendResponse) => {
         case "VIDEO_FOREGROUND": {
           // (v0.21.48) bring the sender's window/tab to the front (on) or hand focus back (off)
           sendResponse(await videoForeground(_sender && _sender.tab, !!msg.on, msg.hold, !!msg.retry));
+          break;
+        }
+        case "CDP_ACTIVATE": {
+          // (v0.21.50) a trusted activation for the sender's page (picture-in-picture needs one)
+          const tabId = _sender && _sender.tab && _sender.tab.id;
+          sendResponse(await cdpActivate(tabId));
           break;
         }
         case "VIS_SHIM": {

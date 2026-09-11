@@ -1718,6 +1718,72 @@
   // delivered when the tile leaves. An upload still running on a hidden tab ⇒
   // bring the window to the front so it can run. Never touches an attachment
   // the operator staged (no mark of ours ⇒ not ours).
+  // (v0.21.50) AUTOMATIC PICTURE-IN-PICTURE — the gesture-free "keep awake".
+  // Chrome keeps a page PAINTING (animation frames tick, media loads, no
+  // "disable rendering" optimisation) for as long as the page owns a
+  // Picture-in-Picture window — the same rule that keeps a captured tab alive.
+  // PiP needs a user activation, and a trusted click the extension dispatches
+  // itself through the debugger protocol (CDP_ACTIVATE) IS one. So for the
+  // length of a video set on a hidden/minimized tab a tiny always-on-top PiP
+  // window shows "SubSell · envoi vidéo…" and closes when the set ends. Nothing
+  // to click; works with the window minimized and the mouse anywhere. Chrome
+  // allows one PiP window at a time per browser — another profile's set simply
+  // takes it over (the first upload keeps running; the page shim covers the rest).
+  let pipVideo = null, pipCanvas = null, pipTimer = null, pipSince = 0;
+  function pipDraw(label) {
+    try {
+      const g = pipCanvas.getContext("2d");
+      g.fillStyle = "#17171c"; g.fillRect(0, 0, 320, 180);
+      g.fillStyle = "#ffffff"; g.font = "bold 22px system-ui, Segoe UI, sans-serif"; g.fillText("SubSell", 18, 44);
+      g.fillStyle = "#8ec5ff"; g.font = "15px system-ui, Segoe UI, sans-serif";
+      g.fillText("Envoi de la vidéo démo…", 18, 82);
+      g.fillStyle = "#d0d0d8"; g.fillText(trunc(label || "", 30), 18, 108);
+      const s = Math.max(0, Math.round((Date.now() - pipSince) / 1000));
+      g.fillStyle = "#7a7a88"; g.font = "13px system-ui, Segoe UI, sans-serif";
+      g.fillText("ne pas fermer · " + Math.floor(s / 60) + ":" + String(s % 60).padStart(2, "0"), 18, 156);
+    } catch (e) { /* cosmetic */ }
+  }
+  async function enterPipForSet(label) {
+    try {
+      if (!document.pictureInPictureEnabled || !HTMLVideoElement.prototype.requestPictureInPicture) return false;
+      if (document.pictureInPictureElement && document.pictureInPictureElement === pipVideo) { pipDraw(label); return true; }
+      // the activation: a trusted click on the composer (or a harmless Shift key)
+      const act = await Promise.race([ask({ type: "CDP_ACTIVATE" }), sleep(12000).then(() => null)]);
+      if (!(act && act.ok)) { setStatus({ videoLast: "no trusted activation for picture-in-picture (" + trunc((act && act.error) || "no answer", 60) + ")" }); return false; }
+      if (!pipCanvas) { pipCanvas = document.createElement("canvas"); pipCanvas.width = 320; pipCanvas.height = 180; }
+      pipSince = Date.now();
+      pipDraw(label);
+      if (!pipVideo || !pipVideo.isConnected) {
+        pipVideo = document.createElement("video");
+        pipVideo.muted = true; pipVideo.playsInline = true; pipVideo.autoplay = true;
+        pipVideo.setAttribute("aria-hidden", "true");
+        pipVideo.style.cssText = "position:fixed;left:-9999px;top:-9999px;width:2px;height:2px;opacity:0;pointer-events:none;";
+        pipVideo.srcObject = pipCanvas.captureStream(2);
+        (document.body || document.documentElement).appendChild(pipVideo);
+      }
+      try { await pipVideo.play(); } catch (e) { /* muted autoplay is allowed; ignore */ }
+      if (pipVideo.readyState < 1) {
+        await new Promise((r) => { const t = setTimeout(r, 2500); pipVideo.addEventListener("loadedmetadata", () => { clearTimeout(t); r(); }, { once: true }); });
+      }
+      await pipVideo.requestPictureInPicture();
+      if (pipTimer) clearInterval(pipTimer);
+      pipTimer = setInterval(() => pipDraw(label), 1000);
+      safe(() => chrome.storage.local.get(["pipN"], (r) => { if (chrome.runtime.lastError) return; chrome.storage.local.set({ pipN: ((r && r.pipN) || 0) + 1, pipAt: Date.now() }, () => void chrome.runtime.lastError); }));
+      return true;
+    } catch (e) {
+      setStatus({ videoLast: "picture-in-picture refused (" + trunc((e && e.message) || e, 60) + ") — using window focus instead" });
+      safe(() => chrome.storage.local.get(["pipFail"], (r) => { if (chrome.runtime.lastError) return; chrome.storage.local.set({ pipFail: { n: (((r && r.pipFail) || {}).n || 0) + 1, at: Date.now(), why: trunc((e && e.message) || e, 80) } }, () => void chrome.runtime.lastError); }));
+      return false;
+    }
+  }
+  async function exitPipForSet() {
+    try {
+      if (pipTimer) { clearInterval(pipTimer); pipTimer = null; }
+      if (document.pictureInPictureElement && document.pictureInPictureElement === pipVideo) await document.exitPictureInPicture();
+      if (pipVideo) { try { pipVideo.pause(); } catch (e) { /* ignore */ } }
+    } catch (e) { /* best effort */ }
+  }
+  let pipHoldTimer = null;
   const stagedSweep = {}; // threadId -> {at, n, mutedUntil, fgAt}
   let lastSettings = {};
   async function sweepStagedClip(trigger) {
@@ -1751,7 +1817,14 @@
         if (document.visibilityState !== "visible" && now - sw.fgAt > 60000) {
           sw.fgAt = now;
           ask({ type: "VIS_SHIM", on: true, hold: 120000 }); // (v0.21.49) the page reads "visible" + frames tick, 2 min
-          if (lastSettings.videoForeground !== false) {
+          // (v0.21.50) keep the page painting through a PiP window for 2 min (no
+          // click needed); window focus only if PiP is refused
+          const pipOk = await enterPipForSet("upload en cours…");
+          if (pipOk) {
+            if (pipHoldTimer) clearTimeout(pipHoldTimer);
+            pipHoldTimer = setTimeout(() => { pipHoldTimer = null; if (!busy) exitPipForSet(); }, 120000);
+            setStatus({ lastAction: "watcher: a clip is uploading on a hidden tab — keeping the page awake (picture-in-picture)" });
+          } else if (lastSettings.videoForeground !== false) {
             ask({ type: "VIDEO_FOREGROUND", on: true, hold: 120000 });
             setStatus({ lastAction: "watcher: a clip is uploading on a hidden tab — bringing the window to the front" });
           }
@@ -2308,7 +2381,7 @@
   async function videoDoctor() {
     const F = [];
     const c = findComposer();
-    F.push("vis=" + document.visibilityState + (safe(() => document.hasFocus(), false) ? "/focus" : ""));
+    F.push("vis=" + document.visibilityState + (safe(() => document.hasFocus(), false) ? "/focus" : "") + " pip=" + (document.pictureInPictureEnabled ? (document.pictureInPictureElement ? "on" : "off") : "DISABLED"));
     F.push("composer=" + (c ? (composerText(c) ? "has-text" : "empty") : "NONE"));
     const ctl = sendControlLabel();
     F.push("ctl=\"" + trunc(ctl || "-", 24) + "\"" + (ctl && LIKE_CTL_RE.test(ctl) && !SEND_CTL_RE.test(ctl) ? "(like)" : ctl && SEND_CTL_RE.test(ctl) ? "(send)" : "(?)"));
@@ -2347,6 +2420,7 @@
     videoSendDeferred = false;
     let fgOn = false; // (v0.21.48) this visit brought the window to the front — hand focus back at the end
     let shimOn = false; // (v0.21.49) this visit switched the page visibility shim on — off at the end
+    let pipOn = false; // (v0.21.50) this visit opened the keep-awake picture-in-picture window — closed at the end
     try {
       // Terminal exits must clear the pending queue under BOTH keys: deferral
       // writes videoPending[sidebarId] (v0.21.14) but this engine runs on the
@@ -2910,8 +2984,16 @@
         shimOn = true;
         try { await Promise.race([ask({ type: "VIS_SHIM", on: true }), sleep(4000)]); } catch (e) { /* best effort */ }
       }
-      // LAYER 2 — the window comes to the front (verified, one retry).
-      if (sCfg.videoForeground !== false && document.visibilityState !== "visible") {
+      // LAYER 2 — (v0.21.50) keep the page PAINTING with a picture-in-picture
+      // window opened on the extension's own trusted activation: frames tick,
+      // media loads, nothing to click, works minimized. Window focus (layer 3)
+      // only when PiP is refused.
+      if (document.visibilityState !== "visible") {
+        pipOn = await enterPipForSet(name || id);
+        if (pipOn) setStatus({ lastAction: "page kept awake (picture-in-picture) for the video set…", currentThread: name });
+      }
+      // LAYER 3 — the window comes to the front (verified, one retry).
+      if (!pipOn && sCfg.videoForeground !== false && document.visibilityState !== "visible") {
         fgOn = true;
         setStatus({ lastAction: "bringing this window to the front for the video set…", currentThread: name });
         try { await Promise.race([ask({ type: "VIDEO_FOREGROUND", on: true }), sleep(5000)]); } catch (e) { /* best effort */ }
@@ -3522,6 +3604,7 @@
       } catch (e2) { /* best effort */ }
     } finally {
       if (fgOn) { fgOn = false; ask({ type: "VIDEO_FOREGROUND", on: false }); } // hand focus back
+      if (pipOn) { pipOn = false; exitPipForSet(); } // the PiP window closes with the set
       if (shimOn) { shimOn = false; ask({ type: "VIS_SHIM", on: false }); } // the page reads the truth again
     }
   }

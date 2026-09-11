@@ -6,6 +6,15 @@ French), built for used-iPhone sales in Montréal. Runs locally per Chrome profi
 by default; **optional cloud sync** turns it into a web app so one change reaches
 every computer.
 
+> 🖼️ **v0.21.50 — zero manual work: automatic picture-in-picture keeps the page awake.** Operator:
+> "will not do any manual work." Chrome keeps a page painting (frames tick, media loads) while it
+> owns a Picture-in-Picture window, and PiP only needs a user activation — which the extension now
+> gives the page itself with a trusted click through the debugger protocol. So on a hidden or
+> minimized tab every video set opens a tiny always-on-top "SubSell · envoi vidéo…" PiP window
+> and closes it when the set ends; the staged-clip watcher does the same for a stalled upload.
+> Nothing to click. Window focus is now only the fallback when PiP is refused; the 🔋 capture
+> button stays optional.
+>
 > 🔋 **v0.21.49 — minimized Chrome, mouse elsewhere: three layers.** (1) During a video set the
 > extension injects a **page visibility shim** into Messenger (the page reads "visible" and its
 > animation frames keep ticking while the tab is really hidden — no focus needed). (2) The
