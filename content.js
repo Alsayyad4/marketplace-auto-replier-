@@ -2970,8 +2970,17 @@
         // so the 3-strikes/24h attach pause could never actually trigger — chats
         // with a flaky clip retried every 20 min forever (both diagnostics showed
         // pausedAttach=0 despite repeated attach failures).
-        if (am[id] && am[id].fails) am[id] = { fails: am[id].fails, failAt: am[id].failAt, why: am[id].why };
-        else delete am[id];
+        // (v0.21.52) blindTries MUST survive this rebuild. It is the bounded-retry
+        // count zeroEvidenceExit compares against videoRetryMax; dropping it here
+        // made `tries` read 1 on every visit, so `tries <= maxTries` was true for
+        // ever - the chat was retried every few minutes indefinitely and the link
+        // fallback below it was unreachable code. The field diagnostic showed it
+        // live: twelve failed attempts over 17 minutes still reporting "retry 1".
+        // Note blindTries can exist with no fails (the adopt path at ~:274 sets it
+        // alone), so the delete branch has to check for it too.
+        if (am[id] && (am[id].fails || am[id].blindTries)) {
+          am[id] = { fails: am[id].fails, failAt: am[id].failAt, why: am[id].why, blindTries: am[id].blindTries };
+        } else delete am[id];
         await setLocal({ videoSentThreads: dm, videoAttempts: am });
       }
       const startAt = resumeFrom != null ? Math.min(resumeFrom, files.length) : 0;

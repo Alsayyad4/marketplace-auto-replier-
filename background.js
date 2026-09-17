@@ -2350,7 +2350,11 @@ async function buildDiagnostic() {
   const am = st.videoAttempts || {}; let pLoad = 0, pAttach = 0, claims = 0;
   for (const k of Object.keys(am)) {
     const e = am[k]; if (!e) continue;
-    if ((e.fails || 0) >= 3 && now - (e.failAt || 0) < 24 * 3600 * 1000) { if (e.why === "attach") pAttach++; else pLoad++; }
+    // (v0.21.52) zeroEvidenceExit records why="blind", not "attach", so every
+    // attach failure used to be printed under loadFails - i.e. "the clip would
+    // not download" - and three incidents were diagnosed against that wrong
+    // column while the real count read attachFails=0.
+    if ((e.fails || 0) >= 3 && now - (e.failAt || 0) < 24 * 3600 * 1000) { if (e.why === "attach" || e.why === "blind") pAttach++; else pLoad++; }
     if (e.claimAt && now - e.claimAt < 5 * 60 * 1000) claims++;
   }
   const uf = st.videoUrlFails || {}; let strikes = 0;
@@ -2741,12 +2745,29 @@ chrome.runtime.onMessage.addListener((msg, _sender, sendResponse) => {
  * this just guarantees progress when it is not. Alarms also wake the MV3 worker.
  * Note: alarms fire at most once/minute — that's the floor Chrome allows. */
 const HEARTBEAT_ALARM = "subsell-heartbeat";
-chrome.alarms.create(HEARTBEAT_ALARM, { periodInMinutes: 1 });
+// (v0.21.52) MV3 restarts this worker constantly - the 1-minute heartbeat and
+// cloud alarms alone re-run this file about once a minute - and
+// chrome.alarms.create REPLACES a same-named alarm and RESTARTS its countdown.
+// A 10-minute alarm re-created every minute therefore never fires: that is why
+// the self-updater and the remote-config pull had never run on any machine
+// (the field diagnostic printed `sud: lastCheck=-` and all four alarms sitting
+// at exactly their full period). Create each one only when it is not there.
+function ensureAlarm(name, opts) {
+  try {
+    chrome.alarms.get(name, (a) => {
+      void chrome.runtime.lastError;
+      if (!a) { try { chrome.alarms.create(name, opts); } catch (e) { /* another worker won the race */ } }
+    });
+  } catch (e) {
+    try { chrome.alarms.create(name, opts); } catch (e2) { /* best effort */ }
+  }
+}
+ensureAlarm(HEARTBEAT_ALARM, { periodInMinutes: 1 });
 
 // Re-pull the shared remote config every 10 min (and once now), so edits to your
 // permanent link reach every machine without re-entering anything.
 const CONFIG_ALARM = "subsell-config";
-chrome.alarms.create(CONFIG_ALARM, { periodInMinutes: 10 });
+ensureAlarm(CONFIG_ALARM, { periodInMinutes: 10 });
 chrome.alarms.onAlarm.addListener((alarm) => {
   if (alarm && alarm.name === CONFIG_ALARM) fetchRemoteConfig(true);
 });
@@ -2757,7 +2778,7 @@ fetchRemoteConfig(true);
 // ~1 min. No-op unless this machine is logged in. updated_at is checked first, so
 // an unchanged config costs one cheap request and no storage write.
 const CLOUD_ALARM = "subsell-cloud";
-chrome.alarms.create(CLOUD_ALARM, { periodInMinutes: 1 });
+ensureAlarm(CLOUD_ALARM, { periodInMinutes: 1 });
 chrome.alarms.onAlarm.addListener((alarm) => {
   if (alarm && alarm.name === CLOUD_ALARM) cloudPull(false);
 });
@@ -3196,11 +3217,12 @@ function armUpdateRestart() {
   try { chrome.alarms.create(UPDATE_RETRY_ALARM, { periodInMinutes: 0.5 }); } catch (e) { /* alarm exists */ }
   broadcastToBotTabs("PAUSE_SCANS");
 }
-chrome.alarms.create(UPDATE_ALARM, { periodInMinutes: 10 });
+ensureAlarm(UPDATE_ALARM, { periodInMinutes: 10 });
 chrome.alarms.onAlarm.addListener((alarm) => {
   if (alarm && alarm.name === UPDATE_ALARM) {
     selfUpdateCheck(); // reload if new files already on disk
     cloudSelfUpdate(false); // hourly (self-throttled) cloud check + download
+    try { chrome.storage.local.set({ sudAlarmFired: Date.now() }); } catch (e) { /* diagnostic only */ }
   }
   if (alarm && alarm.name === UPDATE_RETRY_ALARM) selfUpdateCheck();
 });
