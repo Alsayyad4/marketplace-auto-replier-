@@ -93,9 +93,13 @@ endpoint serves that object to the extension.
 - `videoLinkUrl` — string (default blank = the first central video's own URL).
 - `videoLinkText` — string (default blank = built-in `Voici la vidéo démo 🎥 (demo video) {link}`);
   `{link}` is replaced by the URL.
-- **Power features** (v0.21.51: all default `false` — the quiet build; each makes the computer
-  visibly do something, turn on one at a time only if videos still do not upload on a
-  minimized window):
+- **Power features** — **(v0.21.53) these are NO LONGER web-app settings.** They moved to each
+  machine's own `chrome.storage.local` (extension Settings → Videos), because v0.21.48-.50
+  shipped `videoForeground: true` in the dashboard's DEFAULTS: an unrelated Save wrote a `true`
+  the operator never chose into the ONE cloud row the whole fleet reads, v0.21.51's new `false`
+  default could not beat a saved value, and PC-1zysp was still logging `fg=60` — sixty
+  window-focus steals in seven minutes. A shared row must not be able to arm desktop-grabbing
+  behaviour. Stale copies in the cloud row are ignored (the 🩺 line says so). All default `false`:
   - `videoForeground` — bring the Messenger window to the front for a video set, hand focus back after.
   - `videoPip` — open a small picture-in-picture "SubSell" window during a set to keep the page awake (no click).
   - `videoActivateTab` — switch an unfocused Chrome window to the Messenger tab.

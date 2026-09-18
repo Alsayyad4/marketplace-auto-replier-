@@ -55,10 +55,6 @@
     videoLinkFallback: true,
     videoLinkUrl: "",
     videoLinkText: "",
-    videoForeground: false,
-    videoPip: false,
-    videoTrustedChannels: false,
-    videoActivateTab: false,
     smartFollowupEnabled: false,
     smartFollowupMaxCount: 1,
     smartFollowupQuietHours: 6,
@@ -125,10 +121,6 @@
     ["videoLinkFallback", "checked"],
     ["videoLinkUrl", "value"],
     ["videoLinkText", "value"],
-    ["videoForeground", "checked"],
-    ["videoPip", "checked"],
-    ["videoTrustedChannels", "checked"],
-    ["videoActivateTab", "checked"],
   ];
 
   function fieldsToForm() {
@@ -589,6 +581,24 @@
   if ($("videoEnabled")) {
     $("videoEnabled").addEventListener("change", () => {
       chrome.storage.local.set({ videoEnabled: $("videoEnabled").checked });
+    });
+  }
+  /* ----- (v0.21.53) POWER SWITCHES — THIS COMPUTER ONLY, never synced -----
+   * These four grab the desktop (focus, a floating window, a real click on
+   * Messenger's attach button). A stale `videoForeground:true` left in the SHARED
+   * cloud row by the v0.21.48-.50 dashboard armed the whole fleet at once and gave
+   * the operator "crazy stuff on the computer" (PC-1zysp: fg=60 in 7 minutes). They
+   * are per-machine local storage now, so arming one machine can never arm the rest. */
+  const POWER_KEYS = ["videoForeground", "videoPip", "videoTrustedChannels", "videoActivateTab"];
+  chrome.storage.local.get(POWER_KEYS, (r) => {
+    for (const k of POWER_KEYS) if ($(k)) $(k).checked = !!(r && r[k]);
+  });
+  for (const k of POWER_KEYS) {
+    if (!$(k)) continue;
+    $(k).addEventListener("change", () => {
+      const o = {};
+      o[k] = $(k).checked;
+      chrome.storage.local.set(o);
     });
   }
   if ($("videoDelaySec")) {

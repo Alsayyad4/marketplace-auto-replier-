@@ -6,6 +6,22 @@ French), built for used-iPhone sales in Montréal. Runs locally per Chrome profi
 by default; **optional cloud sync** turns it into a web app so one change reaches
 every computer.
 
+> 🔍 **v0.21.53 — the detector was blind, the desktop switch was stale, and the last working
+> attach channel was locked away.** From the PC-1zysp diagnostic: (1) `chat-seen=0
+> chat-unseen=18` while eight sidebar rows read *"You sent a video."* — `chatAlreadyHasOurVideo()`
+> is purely geometric (it needs a ≥80×80 media rect and a badge overlaying it) and the fleet's
+> tabs are hidden, so Chrome never lays the page out and it reports every delivered video as
+> missing; that false "unseen" cleared the learned channel every 3 sets and latched the machine
+> into reply-first mode. Facebook's own sidebar wording is now a positive signal, and it needs no
+> layout. (2) `foreground=on fg=60(7m)` — sixty window-focus steals, from a `videoForeground:true`
+> that v0.21.48-.50's dashboard wrote into the **shared** cloud row; the four power switches are
+> per-machine local flags now, so a shared row can never again arm the fleet. (3) With the
+> composer's file input gone (`err=130 "composer file input not found"`) and the synthetic paste
+> proven dead on this build (`paste:136d/0t` — not one clip, ever), no native path was left:
+> v0.21.51 had locked `drop` behind the same switch as `chooser`, but only `chooser` can open a
+> Windows file dialog. `drop` is back as a **rescue**, armed only on a machine that has proven
+> the quiet channels dead, with a navigation guard and an automatic put-the-tab-back belt.
+>
 > 🤫 **v0.21.51 — QUIET BUILD.** Operator: "it is detecting virus while installing, opening random
 > files, doing crazy stuff on the computer." Cause: the trusted-input channels — a real click on
 > Messenger's attach button opens a **real Windows "Open" dialog** on builds where Chrome's dialog

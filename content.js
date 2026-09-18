@@ -123,6 +123,25 @@
   // attach-channel rotation and the automatic video doctor. Persisted so a
   // content-script reload keeps the picture.
   let attachMiss = { streak: 0, at: 0 };
+  // (v0.21.53) POWER FLAGS ARE PER-MACHINE, LOCAL ONLY — never read from the shared
+  // cloud/synced settings. v0.21.48-.50 shipped `videoForeground: true` in the
+  // dashboard's own DEFAULTS, so every Save in that window wrote a `true` the
+  // operator never chose into the ONE cloud row the whole fleet reads. v0.21.51
+  // flipped the code default to false and that stale `true` kept winning: PC-1zysp
+  // reported `foreground=on fg=60(7m)` — sixty window-focus steals in seven minutes,
+  // the "desktop issue". A shared row must not be able to arm behaviour that grabs
+  // the desktop, so these four now live in chrome.storage.local and are set on ONE
+  // machine at a time, deliberately, while someone watches it.
+  let powerFlags = {};
+  const POWER_KEYS = ["videoForeground", "videoPip", "videoTrustedChannels", "videoActivateTab", "videoDropRescue"];
+  const powerOn = (k) => powerFlags[k] === true;
+  function refreshPowerFlags() {
+    safe(() => chrome.storage.local.get(POWER_KEYS, (r) => {
+      if (chrome.runtime.lastError || !r) return;
+      powerFlags = r;
+    }));
+  }
+  refreshPowerFlags();
   const VIDEO_BLIND_RETRIES_DEFAULT = 2; // native retries per chat before the link fallback (setting videoRetryMax)
   const VIDEO_LINK_TEXT_DEFAULT = "Voici la vidéo démo 🎥 (demo video) {link}";
   let lastHandled = {}; // threadId -> the buyer message we last replied to (persisted)
@@ -1357,8 +1376,21 @@
       // dialog on the machine, and an uncaught drop makes the tab open the file
       // (the operator's "opening random files"). Default = the quiet channels:
       // the persistent input via the file API, then the synthetic paste.
-      const trusted = lastSettings.videoTrustedChannels === true;
-      const ALL = trusted ? ["chooser", "drop", "input", "paste"] : ["input", "paste"];
+      const trusted = powerOn("videoTrustedChannels"); // (v0.21.53) per-machine local flag, never the shared cloud row
+      // (v0.21.53) DROP RESCUE. v0.21.51 put "chooser" and "drop" behind ONE switch
+      // after real Windows "Open" dialogs appeared on the desktop — but only
+      // "chooser" can do that: it is the one channel that clicks the attach button
+      // with Page.setInterceptFileChooserDialog armed. "drop" dispatches a trusted
+      // drag-and-drop through CDP; it opens no dialog and touches no window. Lumping
+      // them together removed the only working fallback: PC-1zysp shows the persistent
+      // input going missing ("composer file input not found", err=130) while the
+      // synthetic paste has NEVER staged a clip on this build (paste:136d/0t) — so
+      // every chat there ends at the link. Drop is therefore allowed, but only once
+      // this machine has proven the quiet channels dead (two sets with nothing
+      // confirmed). A machine where "input" works never reaches it. Local
+      // `videoDropRescue: false` turns it off.
+      const dropRescue = !trusted && powerFlags.videoDropRescue !== false && (attachMiss.streak || 0) >= 2;
+      const ALL = trusted ? ["chooser", "drop", "input", "paste"] : (dropRescue ? ["input", "drop", "paste"] : ["input", "paste"]);
       let order = pref && ALL.indexOf(pref.channel) !== -1 ? [pref.channel].concat(ALL.filter((c) => c !== pref.channel)) : ALL.slice();
       if (!canCdp) order = order.filter((c) => c === "paste");
       if (!order.length) order = ["paste"];
@@ -1710,7 +1742,7 @@
   // hidden tab, the reason an attached clip's upload used to wait for a click.
   async function cdpPress(mode) {
     if (!cdpAvailable()) return false;
-    if (lastSettings.videoTrustedChannels !== true) return false; // (v0.21.51) quiet by default: synthetic presses only
+    if (!powerOn("videoTrustedChannels")) return false; // (v0.21.51) quiet by default: synthetic presses only
     try {
       const r = await Promise.race([ask({ type: "CDP_SEND", mode }), sleep(15000).then(() => null)]);
       return !!(r && r.ok);
@@ -1829,12 +1861,12 @@
           // (v0.21.50) keep the page painting through a PiP window for 2 min (no
           // click needed); window focus only if PiP is refused
           // (v0.21.51) PiP / window focus only when the dashboard turned them on
-          const pipOk = lastSettings.videoPip === true ? await enterPipForSet("upload en cours…") : false;
+          const pipOk = powerOn("videoPip") ? await enterPipForSet("upload en cours…") : false;
           if (pipOk) {
             if (pipHoldTimer) clearTimeout(pipHoldTimer);
             pipHoldTimer = setTimeout(() => { pipHoldTimer = null; if (!busy) exitPipForSet(); }, 120000);
             setStatus({ lastAction: "watcher: a clip is uploading on a hidden tab — keeping the page awake (picture-in-picture)" });
-          } else if (lastSettings.videoForeground === true) {
+          } else if (powerOn("videoForeground")) {
             ask({ type: "VIDEO_FOREGROUND", on: true, hold: 120000 });
             setStatus({ lastAction: "watcher: a clip is uploading on a hidden tab — bringing the window to the front" });
           }
@@ -2005,6 +2037,42 @@
     return false;
   }
 
+  // (v0.21.53) RENDER-INDEPENDENT "a video of ours is already in this chat".
+  // chatAlreadyHasOurVideo() above is entirely GEOMETRIC: it needs a >=80x80 media
+  // rect, a duration badge whose centre lies inside it, and a row-rect
+  // right-anchoring test. This fleet's Messenger tabs are hidden/minimized nearly
+  // all the time; Chrome then does not lay the page out and every
+  // getBoundingClientRect() degrades — so the detector answered "no video" for
+  // EIGHTEEN chats whose own sidebar row read "You sent a video." (PC-1zysp,
+  // 2026-09-17: chat-seen=0 chat-unseen=18, eight rows saying exactly that, and
+  // the Activity log carrying "1/1 demo video(s) sent" for them).
+  // Facebook writes that snippet itself, as TEXT, with no layout involved — so it
+  // survives a hidden tab. POSITIVE-ONLY evidence: a match means a video of ours
+  // is in that chat; no match means nothing (the buyer may have written since).
+  // Only "video" wording counts — "You sent a photo." must never match.
+  const WE_SENT_VIDEO_RE = /\byou sent a video\b|\bvous avez envoy[ée]e? une vid[ée]o\b/i;
+  function rowText(a) {
+    // innerText is the RENDERED text and can come back empty on an unrendered
+    // tab; textContent is parsed from the DOM and always there.
+    const t = safe(() => a.innerText || "", "");
+    return t || safe(() => a.textContent || "", "");
+  }
+  function sidebarSaysWeSentVideo(id, sidebarKey) {
+    if (!id && !sidebarKey) return false;
+    const want = new Set([id, sidebarKey, adoptedAlias[id], adoptedAlias[sidebarKey]].filter(Boolean));
+    for (const a of safe(() => conversationAnchors(), [])) {
+      const rid = threadId(a);
+      if (!rid || !want.has(rid)) continue;
+      if (WE_SENT_VIDEO_RE.test(rowText(a))) return true;
+    }
+    return false;
+  }
+  // The union of both signals: geometry when the page is actually rendered,
+  // Facebook's own words when it is not.
+  function chatServedVideo(id, sidebarKey) {
+    return safe(chatAlreadyHasOurVideo, false) || sidebarSaysWeSentVideo(id, sidebarKey);
+  }
+
   // FROZEN pre-2026-08-10 <video>-branch detector (v0.21.10-13 behavior) — used
   // ONLY by the false-mark divergence probe in maybeSendVideo: if THIS fires while
   // the hardened detector does not, the false-positive source of an old mark is
@@ -2076,6 +2144,7 @@
   // machine without the permission/file access doesn't burn seconds on every clip.
   let cdpDisabledUntil = 0;
   let cdpStrikes = 0; // consecutive TRANSIENT misses (input not found / no preview)
+  let cdpInputMissRounds = 0; // (v0.21.53) escalating park while the composer input stays missing; any verified attach resets it
   let cdpSetToken = 0; // bumped per video set; a miss skips the file API for the REST of that set only
   let cdpFailedSetToken = -1;
   const cdpAvailable = () => Date.now() > cdpDisabledUntil;
@@ -2102,7 +2171,18 @@
     } else if (/input not found|no preview/i.test(err)) {
       // Transient CHAT state (composer holding a draft, stuck preview): the next
       // clip retries the file API after the tray settles; three in a row park 2 min.
-      if (++cdpStrikes >= 3) { cdpStrikes = 0; cdpDisabledUntil = Date.now() + 2 * 60 * 1000; }
+      // (v0.21.53) But when the composer's input is simply GONE on this Messenger
+      // build, a 2-minute park means re-probing for ever: PC-1zysp logged err=130,
+      // all of them "composer file input not found", and every one of those attaches
+      // the debugger and flashes the "SubSell is debugging this browser" bar across
+      // the operator's desktop. Park in steps — 2 min, then 10, then 30 — so a
+      // genuinely transient state still recovers fast while a missing input goes
+      // quiet and the run falls through to the drop rescue / the link.
+      if (++cdpStrikes >= 3) {
+        cdpStrikes = 0;
+        cdpInputMissRounds = Math.min((cdpInputMissRounds || 0) + 1, 3);
+        cdpDisabledUntil = Date.now() + [2, 10, 30][cdpInputMissRounds - 1] * 60 * 1000;
+      }
     } else if (/message port closed|could not establish connection|receiving end does not exist|^no response$/i.test(err)) {
       cdpFailedSetToken = cdpSetToken; // background restart: nothing reached the composer — retry next set
     } else {
@@ -2197,6 +2277,7 @@
   }
   function noteCdpVerified(blind) {
     cdpStrikes = 0;
+    cdpInputMissRounds = 0; // (v0.21.53) the composer input is back — drop the escalating park
     cdpUnverifiedStreak = 0;
     lastCdpVerifiedAt = Date.now();
     ask({ type: "CDP_VERIFIED", blind: !!blind }); // fire-and-forget telemetry ("protocol ok" ≠ "clip staged")
@@ -2615,7 +2696,7 @@
           const mainEl = getMain();
           if (mainEl && findComposer() && safe(() => mainEl.querySelector('[role="row"]'), null)) {
             const dmR = (await getLocal(["videoSentThreads"])).videoSentThreads || {};
-            if (chatAlreadyHasOurVideo()) {
+            if (chatServedVideo(id, sidebarKey)) { // (v0.21.53) geometry OR the sidebar's own words
               dmR[id] = Object.assign({}, dmR[id], { sent: 1, recon: 1 }); // confirmed after all
               await setLocal({ videoSentThreads: dmR });
             } else {
@@ -2669,7 +2750,7 @@
       }
       // A video is visibly in the chat (real message row) → it's sent; mark + stop.
       // (Skipped in resume mode — of course there are already videos there.)
-      if (resumeFrom == null && chatAlreadyHasOurVideo()) {
+      if (resumeFrom == null && chatServedVideo(id, sidebarKey)) {
         videoLocked.add(id);
         clearPend();
         done[id] = { done: true, at: now, via: "dom" }; // inert marker: DOM-detected, not a confirmed send
@@ -2738,7 +2819,7 @@
       // mode — there the done-flag and existing videos are expected.)
       if (resumeFrom == null) {
         const fresh = (await getLocal(["videoSentThreads"])).videoSentThreads || {};
-        if (videoLocked.has(id) || (fresh[id] && fresh[id].done) || chatAlreadyHasOurVideo()) {
+        if (videoLocked.has(id) || (fresh[id] && fresh[id].done) || chatServedVideo(id, sidebarKey)) {
           // Do NOT latch videoLocked when the observed mark is a RESUME marker —
           // "done" is transient there (another pass's partial set); a latched tab
           // would eat the tail's pending-queue entry forever without delivering.
@@ -3010,12 +3091,12 @@
       // (v0.21.51 SAFE MODE) both are OFF unless the dashboard turns them on
       // (videoPip / videoForeground): a floating window and windows pulled to the
       // front read as "the computer doing crazy stuff" on the operator's desktop.
-      if (sCfg.videoPip === true && document.visibilityState !== "visible") {
+      if (powerOn("videoPip") && document.visibilityState !== "visible") {
         pipOn = await enterPipForSet(name || id);
         if (pipOn) setStatus({ lastAction: "page kept awake (picture-in-picture) for the video set…", currentThread: name });
       }
       // LAYER 3 — the window comes to the front (verified, one retry).
-      if (!pipOn && sCfg.videoForeground === true && document.visibilityState !== "visible") {
+      if (!pipOn && powerOn("videoForeground") && document.visibilityState !== "visible") {
         fgOn = true;
         setStatus({ lastAction: "bringing this window to the front for the video set…", currentThread: name });
         try { await Promise.race([ask({ type: "VIDEO_FOREGROUND", on: true }), sleep(5000)]); } catch (e) { /* best effort */ }
@@ -3599,8 +3680,13 @@
       if (okCount > 0 && lastSres === "sent" && stillOnThread(id)) {
         await sleep(20000);
         if (!stillOnThread(id)) return;
-        const seenInChat = chatAlreadyHasOurVideo();
+        // (v0.21.53) the sidebar's own "You sent a video." counts too — on a hidden
+        // tab the geometric detector cannot see anything and used to report every
+        // delivered set as unseen, which cleared the learned channel every 3 sets
+        // and latched the machine into reply-first rush mode for ever.
+        const seenInChat = chatAlreadyHasOurVideo() || sidebarSaysWeSentVideo(id, sidebarKey);
         await noteSetOutcome(seenInChat, setVia, id, name);
+        if (seenInChat) await noteAttachMiss(false); // this machine's channel IS delivering
         if (!seenInChat) {
           const dmG = (await getLocal(["videoSentThreads"])).videoSentThreads || {};
           if (dmG[id] && dmG[id].done) { dmG[id] = Object.assign({}, dmG[id], { unseen: 1 }); await setLocal({ videoSentThreads: dmG }); }
@@ -4480,6 +4566,7 @@
     busy = true;
     busySince = Date.now();
     try {
+      refreshPowerFlags(); // (v0.21.53) per-machine power switches (never the shared cloud row)
       await sweepStagedClip("scan"); // (v0.21.48) obligatory send of a clip left staged in the open chat
       const anchors = conversationAnchors();
       const settings = (await ask({ type: "GET_SETTINGS" })).settings || {};

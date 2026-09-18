@@ -92,12 +92,14 @@ const DEFAULTS = {
   // (v0.21.48) bring the Messenger window to the front while a video set attaches,
   // uploads and sends (Chrome defers media loading in a hidden tab), then hand
   // focus back. Off = never touch window focus (videos may then wait for a click).
-  videoForeground: false, // (v0.21.51) OFF by default — windows pulled to the front looked like "crazy stuff"
-  // (v0.21.51) power features, all OFF by default (quiet build after the field report
-  // "opening random files, doing crazy stuff on the computer"):
-  videoPip: false, // picture-in-picture keep-awake window during a video set
-  videoTrustedChannels: false, // real click on the attach button / real file drop / trusted Enter — can open real dialogs on some builds
-  videoActivateTab: false, // switch an unfocused window to the Messenger tab
+  // (v0.21.53) the four power switches (videoForeground / videoPip /
+  // videoTrustedChannels / videoActivateTab) are NO LONGER settings: they live in
+  // each machine's chrome.storage.local. v0.21.48-.50 shipped videoForeground:true
+  // in the dashboard's DEFAULTS, so an unrelated Save wrote a `true` the operator
+  // never chose into the ONE cloud row the whole fleet reads, and v0.21.51's new
+  // `false` default could never win against a saved value (PC-1zysp: foreground=on,
+  // fg=60 in 7 minutes). A shared row must not be able to arm desktop-grabbing
+  // behaviour. Any stale copies left in the cloud row are now simply ignored.
   // smart follow-up on quiet chats (proactive — off by default; all knobs configurable)
   smartFollowupEnabled: false, // master on/off for proactive follow-ups
   smartFollowupMaxCount: 1, // how many follow-ups per chat, total (e.g. 1 or 2) — anti-spam cap
@@ -1516,9 +1518,16 @@ function pageComposerPoint() {
   // overlay/dialog/infobar-shifted layout would swallow the drop)?
   let hit = null, hitLabel = "";
   try {
-    const el = document.elementFromPoint(x, y);
-    hit = !!(el && (el === c || c.contains(el) || el.contains(c)));
-    hitLabel = el ? ((el.getAttribute && el.getAttribute("aria-label")) || el.tagName || "?") : "none";
+    // (v0.21.53) elementFromPoint needs a laid-out page. On a HIDDEN tab — which is
+    // the normal state on this fleet — it returns some unrelated wrapper, and the
+    // caller then refused a perfectly good drop point ("COVERED-by:DIV" in the
+    // PC-1zysp doctor line, taken while vis=hidden). Unknown, not false.
+    if (document.visibilityState !== "visible") { hitLabel = "not-rendered"; }
+    else {
+      const el = document.elementFromPoint(x, y);
+      hit = !!(el && (el === c || c.contains(el) || el.contains(c)));
+      hitLabel = el ? ((el.getAttribute && el.getAttribute("aria-label")) || el.tagName || "?") : "none";
+    }
   } catch (e) { hit = null; }
   return { x, y, hit, hitLabel };
 }
@@ -1635,10 +1644,24 @@ async function cdpDrop(target, paths) {
     expression: "(function(){var ov=function(e){e.preventDefault();};var dr=function(e){e.preventDefault();};document.addEventListener('dragover',ov);document.addEventListener('drop',dr);setTimeout(function(){document.removeEventListener('dragover',ov);document.removeEventListener('drop',dr);},8000);return true;})()",
     returnByValue: true,
   }, 5000);
+  // (v0.21.53) belt behind the net: remember where the tab was, and if the drop
+  // navigated it anyway (a build whose own handler stops propagation before our
+  // bubble-phase listener runs), put it straight back. A Messenger tab turned into
+  // a file:// video player is a dead bot until someone notices.
+  const urlBefore = await pageEval(target, function () { return location.href; });
   const data = { items: [], files: paths, dragOperationsMask: 1 };
   await cdpCmd(target, "Input.dispatchDragEvent", { type: "dragEnter", x: pt.x, y: pt.y, data }, 5000);
   await cdpCmd(target, "Input.dispatchDragEvent", { type: "dragOver", x: pt.x, y: pt.y, data }, 5000);
   await cdpCmd(target, "Input.dispatchDragEvent", { type: "drop", x: pt.x, y: pt.y, data }, 5000);
+  try {
+    await new Promise((r) => setTimeout(r, 400));
+    const urlAfter = await pageEval(target, function () { return location.href; });
+    if (urlBefore && urlAfter && urlAfter !== urlBefore && !/^https:\/\/(www\.)?(messenger|facebook)\.com\//.test(urlAfter)) {
+      await cdpCmd(target, "Page.navigate", { url: urlBefore }, 8000);
+      await recordCdp(false, "drop navigated the tab — sent back");
+      return { ok: false, error: "the drop navigated the tab (build does not accept it) — returned to the chat", navigated: true };
+    }
+  } catch (e) { /* the check is best-effort; the preventDefault net is the primary guard */ }
   await recordCdp(true);
   return { ok: true, channel: "drop" };
 }
@@ -2232,6 +2255,8 @@ async function buildDiagnostic() {
         "videoCache", "replyLog", "sudBase", "sudDirName", "sudLastCheck", "sudStatus", "cdpStats", "videoDisk", "winRestoreN", "winRestoreAt", "attachPref",
         "cooldowns", "replyCounts", "lastHandled", "videoAttachTrace",
         "attachChannelStats", "attachMiss", "videoDoctorLast", "tabActivateN", "tabActivateAt", "fgN", "fgAt", "winSlot", "fgFail", "pipN", "pipAt", "pipFail",
+        "videoForeground", "videoPip", "videoTrustedChannels", "videoActivateTab",
+        "videoDropRescue",
       ],
       (x) => r(x || {})
     )
@@ -2307,11 +2332,13 @@ async function buildDiagnostic() {
         return e ? k + ":" + (e.dispatched || 0) + "d/" + (e.tile || 0) + "t/" + (e.blind || 0) + "b/" + (e.none || 0) + "n/" + (e.unverified || 0) + "u" : k + ":-";
       }).join(" ") +
       " retryMax=" + (settings.videoRetryMax != null ? settings.videoRetryMax : "?") + " linkFallback=" + (settings.videoLinkFallback === false ? "off" : "on") +
+      " dropRescue=" + (st.videoDropRescue === false ? "off" : ((am2.streak || 0) >= 2 ? "ARMED" : "standby")) +
       " tabActivated=" + (st.tabActivateN || 0) + (st.tabActivateAt ? "(" + ageM(st.tabActivateAt) + ")" : "") +
-      " foreground=" + (settings.videoForeground === false ? "off" : "on") + " fg=" + (st.fgN || 0) + (st.fgAt ? "(" + ageM(st.fgAt) + ")" : "") +
+      " foreground=" + (st.videoForeground === true ? "ON(local)" : "off") + " fg=" + (st.fgN || 0) + (st.fgAt ? "(" + ageM(st.fgAt) + ")" : "") +
       (st.fgFail && st.fgFail.n ? " fgFail=" + st.fgFail.n + "(" + ageM(st.fgFail.at) + ")" : "") +
       " pip=" + (st.pipN || 0) + (st.pipAt ? "(" + ageM(st.pipAt) + ")" : "") + (st.pipFail && st.pipFail.n ? " pipFail=" + st.pipFail.n + "(" + ageM(st.pipFail.at) + ":" + cut(st.pipFail.why, 40) + ")" : "") +
-      " trusted=" + (settings.videoTrustedChannels === true ? "on" : "off") + " pipMode=" + (settings.videoPip === true ? "on" : "off") + " activateTab=" + (settings.videoActivateTab === true ? "on" : "off") +
+      " trusted=" + (st.videoTrustedChannels === true ? "ON(local)" : "off") + " pipMode=" + (st.videoPip === true ? "ON(local)" : "off") + " activateTab=" + (st.videoActivateTab === true ? "ON(local)" : "off") +
+      (settings.videoForeground === true || settings.videoPip === true || settings.videoTrustedChannels === true || settings.videoActivateTab === true ? " [stale power keys in the cloud row — IGNORED since .53]" : "") +
       " slot=" + (st.winSlot != null ? st.winSlot : "-") +
       (st.videoDoctorLast ? " | doctor(" + ageM(st.videoDoctorLast.at) + "): " + cut(st.videoDoctorLast.text, 400) : "")
     );
@@ -2858,7 +2885,7 @@ async function heartbeat() {
   // gets minimized anyway, restore it here every minute (never focused, so the
   // desktop is not stolen). Local `keepWindowsRestored:false` turns this off.
   try {
-    const kw = await new Promise((r) => chrome.storage.local.get(["keepWindowsRestored", "winRestoreN", "tabActivateN", "keepWindowsCascaded", "winSlot"], (x) => r(x || {})));
+    const kw = await new Promise((r) => chrome.storage.local.get(["keepWindowsRestored", "winRestoreN", "tabActivateN", "keepWindowsCascaded", "winSlot", "videoActivateTab"], (x) => r(x || {})));
     if (kw.keepWindowsRestored !== false && chrome.windows) {
       const wids = Array.from(new Set(tabs.map((t) => t.windowId).filter((w) => w != null)));
       let n = 0;
@@ -2880,7 +2907,7 @@ async function heartbeat() {
       // focused window; never flips between two Messenger tabs in one window.
       let act = 0;
       for (const t of tabs) {
-        if (settings.videoActivateTab !== true) break; // (v0.21.51) off unless the dashboard turns it on
+        if (kw.videoActivateTab !== true) break; // (v0.21.53) per-machine local flag only — never the shared cloud row
         if (t.active) continue;
         if (tabs.some((o) => o.windowId === t.windowId && o.active)) continue;
         const w = await new Promise((r) => chrome.windows.get(t.windowId, (x) => { void chrome.runtime.lastError; r(x || null); }));

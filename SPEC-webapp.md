@@ -63,10 +63,7 @@ per-machine on/off).
 | `videoLinkFallback` | bool | true | (v0.21.47) After the retries, send the demo as a LINK via the text path (chat then marked served). |
 | `videoLinkUrl` | string | "" | Link to send; blank = the first `demoVideoUrls` entry's URL. |
 | `videoLinkText` | string | "" | Message carrying the link; `{link}` = the URL; blank = built-in FR/EN line. |
-| `videoForeground` | bool | false | Power feature: bring the Messenger window to the front for a video set, hand focus back after. |
-| `videoPip` | bool | false | Power feature: picture-in-picture keep-awake window during a set. |
-| `videoActivateTab` | bool | false | Power feature: switch an unfocused window to the Messenger tab. |
-| `videoTrustedChannels` | bool | false | Power feature: real click on the attach button / real drop / trusted Enter. ⚠ can open real file dialogs on some builds. |
+*(v0.21.53: `videoForeground`, `videoPip`, `videoActivateTab` and `videoTrustedChannels` were REMOVED from this config. They are per-machine `chrome.storage.local` flags now — a stale `true` in the shared row was arming the whole fleet. Any copies still present in a stored config are ignored by the extension.)*
 | `followUps` | array | [] | Follow-up nudges. Each: `{name, afterMinutes (number), message, enabled (bool)}`. After the bot replies, it arms a timer; if the buyer stays quiet that long it sends `message` once. |
 
 ### Advanced settings (stored but NOT active in the current "simple" build)

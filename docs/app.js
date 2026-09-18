@@ -57,10 +57,9 @@
     videoLinkFallback: true, // send the demo as a LINK when native attach keeps failing
     videoLinkUrl: "", // blank = the first central video's URL
     videoLinkText: "", // blank = built-in FR/EN line; {link} = the URL
-    videoForeground: false, // bring the Messenger window to the front while a video set attaches/uploads/sends (power feature, off)
-    videoPip: false, // picture-in-picture keep-awake window during a set (power feature, off)
-    videoTrustedChannels: false, // real click on the attach button / real drop / real Enter (can open real dialogs — off)
-    videoActivateTab: false, // switch an unfocused window to the Messenger tab (off)
+    // (v0.21.53) the four power switches moved OUT of the shared config: a stale
+    // videoForeground:true in this row was grabbing the desktop on the whole fleet.
+    // They are per-machine now (extension Settings -> Videos), never synced.
     smartFollowupEnabled: false,
     smartFollowupMaxCount: 1,
     smartFollowupQuietHours: 6,
@@ -86,7 +85,6 @@
     ["closerGoals", "value"], ["priceList", "value"], ["visitConfirmMessage", "value"],
     ["demoVideoDelaySec", "number"], ["demoVideoBetweenSec", "number"],
     ["videoRetryMax", "number"], ["videoLinkFallback", "checked"], ["videoLinkUrl", "value"], ["videoLinkText", "value"],
-    ["videoForeground", "checked"], ["videoPip", "checked"], ["videoTrustedChannels", "checked"], ["videoActivateTab", "checked"],
     ["smartFollowupEnabled", "checked"], ["smartFollowupMaxCount", "number"],
     ["smartFollowupQuietHours", "number"], ["smartFollowupGapHours", "number"],
   ];
