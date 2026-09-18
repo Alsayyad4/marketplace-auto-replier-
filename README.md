@@ -6,6 +6,17 @@ French), built for used-iPhone sales in Montréal. Runs locally per Chrome profi
 by default; **optional cloud sync** turns it into a web app so one change reaches
 every computer.
 
+> 🎓 **v0.21.55 — the teaching page actually teaches, and the bot stops sounding like a bot.**
+> The Business tab now **saves itself** as you type (no button to remember) and says truthfully that
+> every bot has it within ~1 min — the old message claimed ~10 min, which was the wrong cadence and
+> made the page feel disconnected. A new panel shows **exactly what the bot is being taught** from
+> your fields, in the order Claude receives them. You can now **teach a rule in plain words** instead
+> of waiting for a bad reply to correct, standing rules are no longer pushed out by a run of
+> thumbs-ups, and **every** Activity row can be graded — including the `[HUMAN]` escalations, which
+> were the most useful lessons and were the ones hidden. And the replies read like a person: each
+> fact said once per conversation, no repeated openers, one emoji at most and not every message,
+> length matched to the buyer, no bullet points, none of the “n’hésitez pas” scaffolding.
+>
 > 🧰 **v0.21.54 — six self-healing mechanisms that could not fire.** A four-reader audit of the same
 > diagnostic found that the engine already had the answers and none of them could reach the field.
 > The commonest CDP failure ("composer file input not found") skipped the handler that parks a dead

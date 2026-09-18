@@ -72,6 +72,22 @@ endpoint serves that object to the extension.
 **Simple timer follow-up** (fixed message; separate feature — use one or the other):
 - `followUps` — array of `{ name, afterMinutes (number), message, enabled (bool) }`. After the bot replies it arms a timer; if the buyer stays quiet that long it sends `message` once.
 
+## How the Business tab reaches the bot (v0.21.55)
+
+Every field on the Business tab is written into the system prompt `buildSystemPrompt()` builds for
+**every single reply** — `businessName`, `businessAddress`, `businessHoursText`, `businessInfo`,
+`instructions`, `priceList`, `closerGoals`, `examples`, the available `listings`, and the `coaching`
+list. There is no second place to teach the bot.
+
+- **Auto-save**: fields save 1.2 s after you stop typing; the bar shows `Saving…` then the clock.
+- **Propagation**: cloud-sync machines re-pull every **60 s** (`CLOUD_ALARM`); remote-config-URL
+  machines every 10 min (`CONFIG_ALARM`). The Save message used to quote the 10-min figure to
+  everyone, which was wrong for this fleet.
+- **“Show me exactly what the bot is being taught”** renders your fields in the order Claude gets
+  them. It does not reproduce the built-in sales playbook, platform-safety rules or humanization
+  rules — those ship in `background.js` and are not editable from the dashboard.
+- **Coaching** (max 30): 👍 stores the reply as a model answer, 👎 stores your correction, and the
+  “Teach a rule” box stores a standing rule tagged `note:"always applies"`. Rules are evicted last.
 ## Tab: Videos
 
 - `demoVideoUrls` — array of `{ name, url }`. **Central demo videos**: uploaded once in

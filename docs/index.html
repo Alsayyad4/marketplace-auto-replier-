@@ -181,6 +181,15 @@
 
         <!-- BUSINESS -->
         <section id="business" class="pane">
+          <div class="banner" style="margin-bottom:12px;">
+            <b>🎓 This page IS the bot’s training.</b> Everything you type here is written into the
+            instructions every machine sends to Claude on <i>every single reply</i> — there is no second place to teach it.
+            Edits save on their own a moment after you stop typing, and the bots pick them up within about a minute.
+            <div id="teachPreviewWrap" style="margin-top:8px;">
+              <button id="teachPreviewBtn" type="button">👁 Show me exactly what the bot is being taught</button>
+              <pre id="teachPreview" class="hidden" style="white-space:pre-wrap;font-size:12px;max-height:340px;overflow:auto;background:rgba(127,127,127,.10);padding:10px;border-radius:6px;margin-top:8px;"></pre>
+            </div>
+          </div>
           <label>Business name</label>
           <input type="text" id="businessName" />
           <label>Address</label>
@@ -276,6 +285,14 @@
             <b>🎓 Coaching — teach the bot from real replies</b>
             <div class="hint" style="margin:4px 0;">Grade any text reply below: 👍 = "answer like this" &nbsp;·&nbsp; 👎 = "wrong — here's what to say". Every machine learns it within ~1 minute. Kept: last 30 lessons.</div>
             <div id="coachingList" class="hint">No lessons yet.</div>
+            <div style="margin-top:10px;padding-top:10px;border-top:1px solid #444;">
+              <b>✍️ Teach a rule in your own words</b>
+              <div class="hint" style="margin:4px 0;">Anything you’d tell a new employee — “never repeat the address twice”, “if they ask for delivery say we don’t ship”. Goes straight into every bot’s instructions.</div>
+              <div class="row">
+                <input type="text" id="ruleText" placeholder="e.g. don’t give the exact price, always say ‘à partir de’" style="flex:1;min-width:240px;" />
+                <button id="addRule" type="button" class="primary">Teach it</button>
+              </div>
+            </div>
           </div>
           <table id="activityTable">
             <thead><tr><th>When</th><th>Machine</th><th>Chat</th><th>Type</th><th>Buyer said</th><th>Bot reply</th><th>Teach</th></tr></thead>
@@ -289,6 +306,7 @@
         <button id="save" class="primary">Save to cloud</button>
         <button id="reload">Reload</button>
         <span id="savedMsg" class="saved"></span>
+        <span id="autoSaveMsg" class="hint" style="margin-left:auto;">Saves automatically as you type.</span>
       </div>
     </div>
 

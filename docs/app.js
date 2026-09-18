@@ -262,6 +262,8 @@
     renderVideos();
     renderDemoVideos();
     renderCoaching();
+    wireAutoSave();       // (v0.21.55) every field auto-saves from here on
+    renderTeachPreview(); // and the "what the bot learns" panel tracks it
   }
 
   /* ---------------- config URL ---------------- */
@@ -309,18 +311,125 @@
     flash(data.config && Object.keys(data.config).length ? "Loaded from cloud." : "New config — fill it in and save.");
   }
 
-  async function saveConfig() {
+  async function saveConfig(quiet) {
     formToFields();
     const clean = Object.assign({}, settings);
     delete clean.enabled; // per-machine
     const { error } = await client.from("subsell_configs")
       .update({ config: clean, updated_at: new Date().toISOString() })
       .eq("user_id", session.user.id);
-    if (error) { flash("Save failed: " + error.message, true); return; }
-    flash("Saved ✓ — machines update within ~10 min (or hit Fetch now).");
+    if (error) {
+      if (autoMsg) { autoMsg.textContent = "Not saved: " + error.message; autoMsg.className = "err"; }
+      flash("Save failed: " + error.message, true);
+      return false;
+    }
+    // Machines on cloud sync re-pull once a minute; the old copy said ~10 min,
+    // which is the REMOTE-URL cadence, and made the operator think their edits
+    // had not landed. Say the true number and show the clock.
+    if (autoMsg) { autoMsg.textContent = "Saved " + new Date().toLocaleTimeString() + " \u2014 live on every bot within ~1 min"; autoMsg.className = "saved"; }
+    if (!quiet) flash("Saved \u2713 \u2014 every bot picks this up within ~1 min.");
+    renderTeachPreview();
+    return true;
   }
-  $("save").addEventListener("click", saveConfig);
+  $("save").addEventListener("click", () => saveConfig(false));
   $("reload").addEventListener("click", loadConfig);
+
+  /* ---- AUTO-SAVE: the operator asked that anything they change apply straight
+   * away. Every field on this page is training data, so a change that sits
+   * unsaved behind a button is a change the bots are not learning. Debounced so
+   * typing is not a write storm; the button still works for the impatient. ---- */
+  const autoMsg = $("autoSaveMsg");
+  let autoTimer = null;
+  let autoPending = false;
+  function queueAutoSave() {
+    if (!client || !session) return; // not signed in yet
+    autoPending = true;
+    if (autoMsg) { autoMsg.textContent = "Saving\u2026"; autoMsg.className = "hint"; }
+    clearTimeout(autoTimer);
+    autoTimer = setTimeout(async () => { autoPending = false; await saveConfig(true); }, 1200);
+  }
+  // Never lose an edit the operator typed and walked away from.
+  window.addEventListener("beforeunload", (e) => {
+    if (!autoPending) return;
+    e.preventDefault();
+    e.returnValue = "";
+  });
+  function wireAutoSave() {
+    for (const [id] of FIELDS) {
+      const el = $(id);
+      if (!el || el.dataset.autosave) continue;
+      el.dataset.autosave = "1";
+      el.addEventListener("input", queueAutoSave);
+      el.addEventListener("change", queueAutoSave);
+    }
+  }
+
+  /* ---- WHAT THE BOT IS ACTUALLY TAUGHT ----
+   * The operator could never see whether this page reached the bot. This renders
+   * the operator-authored teaching exactly as the extension feeds it to Claude
+   * (same fields, same order). It deliberately does NOT reproduce the built-in
+   * sales playbook: that lives in background.js and duplicating it here would
+   * drift and start lying. Labelled accordingly. ---- */
+  function renderTeachPreview() {
+    const el = $("teachPreview");
+    if (!el || el.classList.contains("hidden")) return;
+    formToFields();
+    const L = [];
+    L.push("\u2500\u2500 WHO YOU ARE \u2500\u2500");
+    L.push(`You are the auto-reply assistant for "${settings.businessName || "(no name)"}".`);
+    L.push(`Address: ${settings.businessAddress || "(none)"}. Hours: ${settings.businessHoursText || "(none)"}.`);
+    const sec = (title, body) => { if (body && String(body).trim()) { L.push(""); L.push("\u2500\u2500 " + title + " \u2500\u2500"); L.push(String(body).trim()); } };
+    sec("BUSINESS INFO", settings.businessInfo);
+    sec("INSTRUCTIONS / TONE", settings.instructions);
+    sec("STARTING PRICES the bot may share", settings.priceList);
+    sec("HOW TO CLOSE", settings.closerMode ? settings.closerGoals : "");
+    sec("EXAMPLE CONVERSATIONS / RULES", settings.examples);
+    const av = (settings.listings || []).filter((l) => l && l.available !== false);
+    if (av.length) {
+      L.push("");
+      L.push("\u2500\u2500 LISTINGS it can quote \u2500\u2500");
+      for (const l of av.slice(0, 20)) L.push(`\u2022 ${l.title || l.model || "item"} ${l.storage || ""} ${l.condition || ""}`.replace(/\s+/g, " ").trim());
+      if (av.length > 20) L.push(`\u2026 and ${av.length - 20} more`);
+    }
+    const co = settings.coaching || [];
+    if (co.length) {
+      L.push("");
+      L.push("\u2500\u2500 YOUR COACHING (outranks every style rule) \u2500\u2500");
+      for (const c of co.slice(-12)) {
+        L.push(c.kind === "good"
+          ? `\u2714 answer like this \u2014 "${truncTxt(c.buyer, 70)}" \u2192 "${truncTxt(c.reply, 120)}"`
+          : `\u2718 NOT "${truncTxt(c.bad || "", 60)}" \u2014 say instead: "${truncTxt(c.better, 120)}"${c.note ? "  (" + truncTxt(c.note, 60) + ")" : ""}`);
+      }
+    }
+    L.push("");
+    L.push("\u2500\u2500 plus, built into every bot \u2500\u2500");
+    L.push("The closing playbook, the platform-safety rules (never share a phone number or move off Messenger), the sound-like-a-person rules, and the reply-format rules. Those ship with the extension \u2014 they are not editable here.");
+    el.textContent = L.join("\n");
+  }
+  if ($("teachPreviewBtn")) {
+    $("teachPreviewBtn").addEventListener("click", () => {
+      const el = $("teachPreview");
+      const open = !el.classList.contains("hidden");
+      el.classList.toggle("hidden", open);
+      $("teachPreviewBtn").textContent = open ? "\uD83D\uDC41 Show me exactly what the bot is being taught" : "Hide";
+      if (!open) renderTeachPreview();
+    });
+  }
+
+  /* ---- Teach a rule in plain words (no need to wait for a bad reply) ---- */
+  if ($("addRule")) {
+    const submitRule = async () => {
+      const t = ($("ruleText").value || "").trim();
+      if (!t) return;
+      $("addRule").disabled = true;
+      await addCoaching({ kind: "bad", buyer: "(general rule from the boss)", bad: "", better: t, note: "always applies" });
+      $("ruleText").value = "";
+      $("addRule").disabled = false;
+      flash("Rule taught \u2713 \u2014 every bot has it within ~1 min.");
+    };
+    $("addRule").addEventListener("click", submitRule);
+    $("ruleText").addEventListener("keydown", (e) => { if (e.key === "Enter") submitRule(); });
+  }
 
   /* ---------------- activity log (combined feed across all machines) ---------------- */
   const truncTxt = (s, n) => { s = s == null ? "" : String(s); return s.length > n ? s.slice(0, n) + "…" : s; };
@@ -362,7 +471,15 @@
   async function addCoaching(item) {
     settings.coaching = settings.coaching || [];
     settings.coaching.push(Object.assign({ at: Date.now() }, item));
-    while (settings.coaching.length > COACH_MAX) settings.coaching.shift();
+    // (v0.21.55) A standing RULE the boss typed ("never quote an exact price") must
+    // not be evicted by a run of thumbs-ups on ordinary replies — plain FIFO did
+    // exactly that. Drop the oldest graded EXAMPLE first; only start dropping rules
+    // when the list is nothing but rules.
+    const isRule = (c) => c && c.note === "always applies";
+    while (settings.coaching.length > COACH_MAX) {
+      const i = settings.coaching.findIndex((c) => !isRule(c));
+      settings.coaching.splice(i >= 0 ? i : 0, 1);
+    }
     renderCoaching();
     await saveConfig();
   }
@@ -424,7 +541,11 @@
       for (const c of cells) { const td = document.createElement("td"); td.textContent = c; tr.appendChild(td); }
       // 🎓 Teach cell — only real conversational replies are gradeable.
       const tdT = document.createElement("td");
-      const gradeable = (r.kind === "text" || r.kind === "followup") && r.bot_text;
+      // (v0.21.55) every row is gradeable. A [HUMAN] escalation that should have
+      // been answered, or a video row that went to the wrong chat, is exactly the
+      // kind of mistake the boss wants to correct — restricting the buttons to
+      // text rows hid the most useful lessons.
+      const gradeable = !!(r.bot_text || r.buyer_text);
       if (gradeable) {
         tdT.style.whiteSpace = "nowrap";
         const up = document.createElement("button");
