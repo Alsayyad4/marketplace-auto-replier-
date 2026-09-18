@@ -212,7 +212,7 @@
         let n = 0;
         for (const k of Object.keys(am)) {
           const e = am[k];
-          if (e && e.why === "attach" && (e.fails || 0) >= 1) { delete am[k]; n++; }
+          if (e && e.why === "attach" && (e.fails || 0) >= 1) { if (e.blindTries) am[k] = { blindTries: e.blindTries }; else delete am[k]; n++; } // (v0.21.54) the bounded-retry count is not an attach strike
         }
         chrome.storage.local.set({ videoAttempts: am, autoUnpause0129: true }, () => void chrome.runtime.lastError);
         if (n) console.debug("[SubSell] cleared", n, "attach strikes/pauses for the fixed engine");
@@ -227,7 +227,7 @@
         let n = 0;
         for (const k of Object.keys(am)) {
           const e = am[k];
-          if (e && e.why === "attach" && (e.fails || 0) >= 1) { delete am[k]; n++; }
+          if (e && e.why === "attach" && (e.fails || 0) >= 1) { if (e.blindTries) am[k] = { blindTries: e.blindTries }; else delete am[k]; n++; } // (v0.21.54) the bounded-retry count is not an attach strike
         }
         chrome.storage.local.set({ videoAttempts: am, autoUnpause0134: true }, () => void chrome.runtime.lastError);
         if (n) console.debug("[SubSell] cleared", n, "attach strikes/pauses for the streaming engine");
@@ -244,7 +244,7 @@
         let n = 0;
         for (const k of Object.keys(am)) {
           const e = am[k];
-          if (e && e.why === "attach" && (e.fails || 0) >= 1) { delete am[k]; n++; }
+          if (e && e.why === "attach" && (e.fails || 0) >= 1) { if (e.blindTries) am[k] = { blindTries: e.blindTries }; else delete am[k]; n++; } // (v0.21.54) the bounded-retry count is not an attach strike
         }
         chrome.storage.local.set({ videoAttempts: am, autoUnpause0138: true }, () => void chrome.runtime.lastError);
         if (n) console.debug("[SubSell] cleared", n, "attach strikes/pauses for the one-clip-in-flight engine");
@@ -1267,6 +1267,7 @@
     };
     const attempts = [];
     let pasteFnRef = null; // the synthetic paste, also used as the last just-send channel
+    let inputFnRef = null; // (v0.21.54) the pure-DOM file-input assignment, offered to just-send as "dom"
     if (useCdp) {
       const cdpFn = async () => {
         setStatus({ lastAction: "attaching video via Chrome file API…" });
@@ -1329,6 +1330,7 @@
       return true;
     };
     inputFn.via = "input";
+    inputFnRef = inputFn; // (v0.21.54) also offered to just-send as the "dom" channel
     attempts.push(inputFn);
 
     // JUST-SEND MODE (v0.21.43, operator: "just send the videos"). The verdict
@@ -1390,10 +1392,25 @@
       // confirmed). A machine where "input" works never reaches it. Local
       // `videoDropRescue: false` turns it off.
       const dropRescue = !trusted && powerFlags.videoDropRescue !== false && (attachMiss.streak || 0) >= 2;
-      const ALL = trusted ? ["chooser", "drop", "input", "paste"] : (dropRescue ? ["input", "drop", "paste"] : ["input", "paste"]);
+      // (v0.21.54) "dom" — the pure-DOM file-input assignment (`input.files = …` +
+      // a change event). It is the strategy the legacy ladder has always carried and
+      // that worked before .45, it needs NO debugger (no infobar), opens nothing, and
+      // it has no locality rule at all: it takes the LAST non-listing
+      // `input[type=file]` in the document. The CDP "input" channel, by contrast,
+      // demands the input be within 160 px of the composer or inside its 8 nearest
+      // ancestors AND score >= 7 — which is why PC-1zysp logs "composer file input
+      // not found" 130 times while the DOM path was never even tried (it only ran
+      // when videoJustSend === false, and just-send is the default). Quiet by
+      // construction, so it sits in the default order right after the CDP attempt.
+      const ALL = trusted
+        ? ["chooser", "drop", "input", "dom", "paste"]
+        : (dropRescue ? ["input", "dom", "drop", "paste"] : ["input", "dom", "paste"]);
       let order = pref && ALL.indexOf(pref.channel) !== -1 ? [pref.channel].concat(ALL.filter((c) => c !== pref.channel)) : ALL.slice();
-      if (!canCdp) order = order.filter((c) => c === "paste");
-      if (!order.length) order = ["paste"];
+      // (v0.21.54) when the file API is unusable/parked only the CDP channels are
+      // impossible — "dom" needs no debugger, so it must survive this filter (it used
+      // to be dropped with them, which is how a parked machine was left with paste alone).
+      if (!canCdp) order = order.filter((c) => c === "paste" || c === "dom");
+      if (!order.length) order = ["dom", "paste"];
       // No learned channel and the last set(s) on this machine showed nothing:
       // rotate the starting channel so a dead first channel is not tried first forever.
       if (!pref && (attachMiss.streak || 0) > 0 && order.length > 1) {
@@ -1426,13 +1443,22 @@
         let fired = false;
         if (ch === "paste") {
           try { fired = pasteFnRef ? !!(await pasteFnRef()) : false; } catch (e) { fired = false; }
+        } else if (ch === "dom") {
+          try { fired = inputFnRef ? !!(await inputFnRef()) : false; } catch (e) { fired = false; }
         } else {
           const r = await ask({ type: "CDP_SET_FILES", paths: [diskPath], channel: ch });
           if (r && r.ok) fired = true;
           else if (r && r.maybeSet) { fired = true; maybeIn = true; escalate = false; } // the file MAY be in: never a second channel on top
           else {
             if (r && r.missing) forgetDiskPaths([diskPath]);
-            if (r && (r.fileAccess === "denied" || /unavailable|permission/i.test((r && r.error) || ""))) noteCdpFail(r);
+            // (v0.21.54) EVERY non-ok result goes through noteCdpFail. The old guard
+            // only passed "denied"/"unavailable"/"permission", so the commonest
+            // failure of all — "composer file input not found" — never reached the
+            // 3-strike park: cdpStrikes stayed 0, cdpUsableNow() stayed true, and the
+            // machine paid a full chrome.debugger.attach (one "SubSell is debugging
+            // this browser" flash) per clip for a channel that had failed 130 times
+            // in a row. It also made the escalating park added in .53 dead code.
+            noteCdpFail(r);
             setStatus({ videoLast: "attach via " + ch + " not possible here: " + trunc((r && r.error) || "?", 70) });
           }
         }
@@ -1464,9 +1490,16 @@
       if (!dispatched) {
         // no channel could even dispatch — clean failure, retried later; a learned
         // channel that can no longer dispatch (button renamed…) is forgotten after 3
-        if (prefDispatchFailed) await notePrefMiss();
+        await notePrefMiss(); // (v0.21.54) see below — a pref that cannot dispatch is exactly what this counts
         return false;
       }
+      // (v0.21.54) A LEARNED CHANNEL THAT CAN NO LONGER DISPATCH MUST BE FORGOTTEN.
+      // notePrefMiss used to be reachable only when NO channel dispatched, or when
+      // the pref itself dispatched. On PC-1zysp the pref ("input") failed every time
+      // while paste always dispatched, so both guards missed: attachPref stayed
+      // {channel:"input"} for ever, "input" was tried first on every single clip,
+      // and the miss-streak rotation is gated on `!pref` so it could never help.
+      if (prefDispatchFailed) await notePrefMiss();
       // Nothing visible yet: spend the rest of the budget (a late tile / flip still counts).
       while (Date.now() - t0 < JUST_SEND_WAIT_MS) {
         await sleep(1000); tick();
@@ -2480,7 +2513,7 @@
     F.push("chatHasVideo=" + (safe(chatAlreadyHasOurVideo, false) ? "Y" : "n"));
     const st = await getLocal(["attachPref", "attachChannelStats", "attachMiss"]);
     const cs = st.attachChannelStats || {};
-    F.push("channels=" + ["chooser", "drop", "input", "paste"].map((k) => {
+    F.push("channels=" + ["chooser", "drop", "input", "dom", "paste"].map((k) => {
       const e = cs[k];
       return e ? k + ":" + (e.dispatched || 0) + "d/" + (e.tile || 0) + "t/" + (e.blind || 0) + "b/" + (e.none || 0) + "n/" + (e.unverified || 0) + "u" : k + ":-";
     }).join(" "));
@@ -2530,6 +2563,22 @@
           const c = findComposer();
           if (!c || composerText(c)) return false; // never ship on top of an operator draft
           if (trayRemoveBtns().length > 0) return false; // something IS staged — its own send path owns the composer
+          // (v0.21.54) The link is an OUTBOUND MESSAGE and must obey the same gates
+          // every other one does. typeAndSend is pure DOM — no business hours, no
+          // hourly/daily cap, no per-conversation reply cap — so without this the
+          // fallback could put a link into a buyer's chat at 03:00, or a 4th message
+          // into a chat capped at 3. Refusing here is safe: the chat keeps its
+          // retry state and the next in-hours visit sends the link instead.
+          const cap = Math.max(0, Number(lastSettings.maxRepliesPerConvo) || 0);
+          const usedReplies = Math.max(replyCounts[id] || 0, adoptedAlias[id] != null ? (replyCounts[adoptedAlias[id]] || 0) : 0);
+          if (cap > 0 && usedReplies >= cap) { vstat("link fallback held — this chat is at its reply cap (" + usedReplies + "/" + cap + ")"); return "held"; }
+          const stL = await ask({ type: "GET_STATUS" });
+          if (stL && stL.ok) {
+            if (stL.withinHours === false) { vstat("link fallback held — outside business hours"); return "held"; }
+            if (stL.hourlyCap && stL.hourCount >= stL.hourlyCap) { vstat("link fallback held — hourly cap reached"); return "held"; }
+            const dCapL = stL.fullDailyCap != null ? stL.fullDailyCap : stL.dailyCap;
+            if (dCapL && stL.dayCount >= dCapL) { vstat("link fallback held — daily cap reached"); return "held"; }
+          }
           const link = String(s.videoLinkUrl || (centralList[0] && centralList[0].url) || "").trim();
           if (!/^https?:\/\//i.test(link)) return false;
           const tpl = String(s.videoLinkText || "").trim() || VIDEO_LINK_TEXT_DEFAULT;
@@ -2575,7 +2624,24 @@
           try { await hooks.onClipSent(-1); } catch (e) { /* the reply path reports its own errors */ }
         }
         let linked = false;
-        if (sCfg.videoLinkFallback !== false) linked = await sendVideoLink(sCfg, central);
+        if (sCfg.videoLinkFallback !== false) {
+          const lr = await sendVideoLink(sCfg, central);
+          if (lr === "held") {
+            // (v0.21.54) the link was refused by a GATE (business hours / caps), not
+            // by this chat. Do not spend the terminal mark on it: leave the chat
+            // exactly where it is and let the next in-hours visit send the link, so a
+            // closed-hours drain cannot silently become "gave up, no video and no link".
+            if (dmZ[id] && dmZ[id].done && !dmZ[id].sent) delete dmZ[id];
+            amZ[id] = Object.assign({}, prev, { fails: (prev.fails || 0) + 1, failAt: Date.now(), why: "blind", blindTries: tries });
+            await setLocal({ videoSentThreads: dmZ, videoAttempts: amZ });
+            videoLocked.delete(id);
+            const qkH = sidebarKey || id;
+            if (qkH && videoPending[qkH] == null && videoPending[id] == null) { videoPending[qkH] = Date.now(); persistDedup(); }
+            setStatus({ lastAction: "demo video: link held (outside hours / cap) — will send later", currentThread: name });
+            return;
+          }
+          linked = !!lr;
+        }
         dmZ[id] = { done: true, at: Date.now(), owner: TAB_UID, sent: 0, resumeTotal: total, gaveUp: 1 };
         if (linked) dmZ[id].link = 1;
         delete amZ[id];
@@ -4825,7 +4891,19 @@
       // full set go out in parallel. Skip; a genuinely orphaned lock ages past
       // the window and is healed/cleared by the normal paths.
       const inFlight = e && e.via === "lock" && Date.now() - (e.at || 0) < VIDEO_INFLIGHT_MS;
-      if (e && (e === true || (e.done && !confirmed && !inFlight))) { delete vt[k]; delete am[k]; videoLocked.delete(k); cleared++; }
+      if (e && (e === true || (e.done && !confirmed && !inFlight))) {
+        delete vt[k];
+        // (v0.21.54) KEEP blindTries. v0.21.52 stopped the pre-send rebuild from
+        // dropping it, but the catch-up arm still deleted the whole videoAttempts
+        // entry — and the catch-up is exactly what the operator triggers (three boot
+        // one-shots plus the popup button) when videos are missing. That reset the
+        // bounded retry to 1/2 for every re-queued chat and pushed the link fallback
+        // back out of reach, so a machine that cannot attach churned instead of
+        // falling through to the link.
+        if (am[k] && am[k].blindTries) am[k] = { blindTries: am[k].blindTries }; else delete am[k];
+        videoLocked.delete(k);
+        cleared++;
+      }
     }
     videoCatchUp = { armed: true, at: Date.now() };
     catchUpDry = 0;

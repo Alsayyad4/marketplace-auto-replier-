@@ -6,6 +6,18 @@ French), built for used-iPhone sales in Montréal. Runs locally per Chrome profi
 by default; **optional cloud sync** turns it into a web app so one change reaches
 every computer.
 
+> 🧰 **v0.21.54 — six self-healing mechanisms that could not fire.** A four-reader audit of the same
+> diagnostic found that the engine already had the answers and none of them could reach the field.
+> The commonest CDP failure ("composer file input not found") skipped the handler that parks a dead
+> channel, so every clip paid a debugger attach — and that also made .53's park dead code. A learned
+> channel that can no longer dispatch was never forgotten. **The pure-DOM attach path — no debugger,
+> no dialog, and none of the locality rules that are failing here — has existed since before .45 and
+> was unreachable**, because it lived in a ladder that only runs when just-send is off; it is now a
+> first-class quiet channel. The catch-up button, the thing you press when videos are missing, was
+> wiping the retry count and pushing the link fallback back out of reach. The link fallback itself
+> obeyed no business hours and no reply cap. And ensureAlarm could create but never re-arm a
+> mis-scheduled alarm — the self-heal that .51's bug had been providing by accident.
+>
 > 🔍 **v0.21.53 — the detector was blind, the desktop switch was stale, and the last working
 > attach channel was locked away.** From the PC-1zysp diagnostic: (1) `chat-seen=0
 > chat-unseen=18` while eight sidebar rows read *"You sent a video."* — `chatAlreadyHasOurVideo()`

@@ -2327,7 +2327,7 @@ async function buildDiagnostic() {
     const am2 = st.attachMiss || {};
     L.push(
       "attach: missStreak=" + (am2.streak || 0) + (am2.at ? "(" + ageM(am2.at) + ")" : "") +
-      " channels=" + ["chooser", "drop", "input", "paste"].map((k) => {
+      " channels=" + ["chooser", "drop", "input", "dom", "paste"].map((k) => {
         const e = acs[k];
         return e ? k + ":" + (e.dispatched || 0) + "d/" + (e.tile || 0) + "t/" + (e.blind || 0) + "b/" + (e.none || 0) + "n/" + (e.unverified || 0) + "u" : k + ":-";
       }).join(" ") +
@@ -2783,7 +2783,27 @@ function ensureAlarm(name, opts) {
   try {
     chrome.alarms.get(name, (a) => {
       void chrome.runtime.lastError;
-      if (!a) { try { chrome.alarms.create(name, opts); } catch (e) { /* another worker won the race */ } }
+      // (v0.21.54) RECONCILE, don't just create. v0.21.51's bug — re-creating on
+      // every worker wake — was accidentally also its self-heal: an alarm that had
+      // stopped being delivered came back within a minute. Creating only when the
+      // record is ABSENT removed that, so an alarm that still EXISTS but is
+      // mis-scheduled (a wall-clock correction on an always-on shop PC pushing
+      // scheduledTime hours out, a resume-from-sleep edge, Chrome dropping delivery)
+      // would now be permanent — and the heartbeat is what drives the dead-tab
+      // watchdog, the scan pushes and the freshness reload, so that presents as "the
+      // auto-replier just stopped" with nothing in the log. Re-create when the period
+      // is wrong or the next firing is further out than two whole periods; the normal
+      // case (correct period, sane schedule) still touches nothing, so the
+      // countdown-reset bug does not come back.
+      const period = opts && opts.periodInMinutes;
+      const skewed = !!(a && period && (a.periodInMinutes !== period || (a.scheduledTime && a.scheduledTime > Date.now() + period * 60000 * 2)));
+      if (!a) { try { chrome.alarms.create(name, opts); } catch (e) { /* another worker won the race */ } return; }
+      if (skewed) {
+        try {
+          LOG("alarm", name, "was mis-scheduled (period", a.periodInMinutes, "vs", period, ") — re-arming");
+          chrome.alarms.clear(name, () => { void chrome.runtime.lastError; try { chrome.alarms.create(name, opts); } catch (e) { /* race */ } });
+        } catch (e) { /* best effort */ }
+      }
     });
   } catch (e) {
     try { chrome.alarms.create(name, opts); } catch (e2) { /* best effort */ }
