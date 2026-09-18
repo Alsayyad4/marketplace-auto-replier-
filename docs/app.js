@@ -12,7 +12,7 @@
    * tabs in SETTINGS-REFERENCE.md. `enabled` is per-machine and excluded. */
   const DEFAULTS = {
     apiKey: "",
-    model: "claude-sonnet-4-6",
+    model: "claude-haiku-4-5", // MUST match background.js DEFAULTS — a mismatch here silently re-pins the whole fleet on the next save
     responseDelaySec: 30,
     jitterSec: 60,
     hourlyCap: 30,
@@ -89,7 +89,17 @@
     ["smartFollowupQuietHours", "number"], ["smartFollowupGapHours", "number"],
   ];
 
+  // (v0.21.56) Fields whose REAL default text lives in the extension (background.js
+  // DEFAULTS), not here. Blank means "use the extension's", never "".
+  const EXT_DEFAULT_TEXT = { businessInfo: 1, instructions: 1, closerGoals: 1 };
   let settings = Object.assign({}, DEFAULTS); // working copy (preserves loaded advanced fields)
+  // (v0.21.56) Nothing may be written to the shared row until THIS page has read
+  // it. `settings` starts as pristine DEFAULTS and the Save handler is bound at
+  // module evaluation, so a click (or, since auto-save, a keystroke) before the
+  // network round trip finished would have overwritten the whole fleet's config
+  // with empty defaults — no confirmation, no undo, live on every machine in 60 s.
+  let rowLoaded = false;
+  let loadedStamp = null; // the row's updated_at when we read it — our write precondition
   let configKey = "";
   let client = null;
   let session = null;
@@ -124,6 +134,15 @@
         // previously saved value (or the default).
         const n = Number(el.value);
         if (el.value.trim() !== "" && Number.isFinite(n)) settings[id] = n;
+      }
+      else if (EXT_DEFAULT_TEXT[id] && !el.value.trim()) {
+        // (v0.21.56) A BLANK box must not silently erase real instructions. These
+        // three ship with substantial text in background.js DEFAULTS while this
+        // page's DEFAULTS have "", so an unconditional write persisted "" and
+        // buildSystemPrompt then fed Claude an empty BUSINESS INFO / INSTRUCTIONS /
+        // closer playbook. Deleting the key instead lets the extension's own
+        // default win the merge again. Same principle as the number branch above.
+        delete settings[id];
       }
       else settings[id] = el.value;
     }
@@ -296,28 +315,52 @@
 
   /* ---------------- Supabase data ---------------- */
   async function loadConfig() {
-    let { data, error } = await client.from("subsell_configs").select("config, config_key").maybeSingle();
+    let { data, error } = await client.from("subsell_configs").select("config, config_key, updated_at").maybeSingle();
     if (error) { flash("Load failed: " + error.message, true); return; }
     if (!data) {
       // No row yet (trigger/backfill not run) — create one for this user.
-      const ins = await client.from("subsell_configs").insert({ user_id: session.user.id }).select("config, config_key").maybeSingle();
+      const ins = await client.from("subsell_configs").insert({ user_id: session.user.id }).select("config, config_key, updated_at").maybeSingle();
       if (ins.error) { flash("No config row and couldn't create one (" + ins.error.message + "). Run supabase/schema.sql.", true); return; }
       data = ins.data;
     }
     settings = Object.assign({}, DEFAULTS, data.config || {}); // keep any advanced fields present
     configKey = data.config_key || "";
+    loadedStamp = data.updated_at || null;
+    rowLoaded = true; // saving is unlocked only now
+    if ($("save")) $("save").disabled = false;
     renderAll();
     buildUrl();
     flash(data.config && Object.keys(data.config).length ? "Loaded from cloud." : "New config — fill it in and save.");
   }
 
   async function saveConfig(quiet) {
+    // (v0.21.56) never write a config this page has not read (see rowLoaded above)
+    if (!rowLoaded) {
+      if (autoMsg) { autoMsg.textContent = "Not saved — still loading your settings"; autoMsg.className = "hint"; }
+      if (!quiet) flash("Still loading your settings — nothing was saved.", true);
+      return false;
+    }
     formToFields();
     const clean = Object.assign({}, settings);
     delete clean.enabled; // per-machine
-    const { error } = await client.from("subsell_configs")
+    // (v0.21.56) OPTIMISTIC CONCURRENCY. Both this page and every extension write
+    // the whole config column, with no precondition — so whoever saved last simply
+    // erased the other's edits, and the loser was never told. Send the stamp we
+    // read as a condition: zero rows back means someone else changed the row since,
+    // and we re-read instead of flattening their work.
+    let q = client.from("subsell_configs")
       .update({ config: clean, updated_at: new Date().toISOString() })
       .eq("user_id", session.user.id);
+    if (loadedStamp) q = q.eq("updated_at", loadedStamp);
+    const { data: wrote, error } = await q.select("updated_at");
+    if (!error && (!wrote || !wrote.length)) {
+      // Someone (another tab, or a machine's own save) wrote first.
+      if (autoMsg) { autoMsg.textContent = "Someone else saved first — reloading their version"; autoMsg.className = "err"; }
+      flash("Another device saved these settings while you were editing — reloaded theirs so nothing is lost. Re-apply your change and save again.", true);
+      await loadConfig();
+      return false;
+    }
+    if (!error && wrote && wrote[0]) loadedStamp = wrote[0].updated_at || loadedStamp;
     if (error) {
       if (autoMsg) { autoMsg.textContent = "Not saved: " + error.message; autoMsg.className = "err"; }
       flash("Save failed: " + error.message, true);
@@ -342,7 +385,7 @@
   let autoTimer = null;
   let autoPending = false;
   function queueAutoSave() {
-    if (!client || !session) return; // not signed in yet
+    if (!client || !session || !rowLoaded) return; // not signed in, or the row is not read yet
     autoPending = true;
     if (autoMsg) { autoMsg.textContent = "Saving\u2026"; autoMsg.className = "hint"; }
     clearTimeout(autoTimer);
