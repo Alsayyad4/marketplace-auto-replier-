@@ -6,6 +6,16 @@ French), built for used-iPhone sales in Montréal. Runs locally per Chrome profi
 by default; **optional cloud sync** turns it into a web app so one change reaches
 every computer.
 
+> 🛑 **v0.21.56 — the link fallback was spamming the inbox; it is off.** A buyer screenshot showed
+> the bot posting a raw Supabase storage URL, and eleven consecutive chats whose last message was the
+> same link — several of them chats the bot had never actually replied in. That is my bug from .47,
+> and it is an account-level risk: it reads as phishing to a buyer, it is the exact pattern Marketplace
+> bans for, and it contradicted the bot's own rule never to post a link. It is now gated behind a new
+> opt-in key that no saved config has (so it is off everywhere immediately), and even when enabled it
+> refuses unless off-platform guardrails are off, the chat already has a real reply in it, and you have
+> set a proper shareable link — the raw storage URL is never sent. The doctor also gained a `docscan:`
+> line to settle whether the video attach is genuinely failing or our detector has simply gone blind.
+>
 > 🎓 **v0.21.55 — the teaching page actually teaches, and the bot stops sounding like a bot.**
 > The Business tab now **saves itself** as you type (no button to remember) and says truthfully that
 > every bot has it within ~1 min — the old message claimed ~10 min, which was the wrong cadence and

@@ -256,7 +256,13 @@
           <p class="hint">Each extension retries a few times with different attach channels; after that it sends the demo as a <b>link</b> through the normal text path, so the buyer always gets it. Applies to every computer.</p>
           <h3 style="margin:14px 0 4px;">⚙️ Power features <span class="hint">(all OFF by default — each one makes the computer visibly do something; turn on one at a time only if videos still do not upload on a minimized window)</span></h3>
           <p class="hint">The switches that make a computer <b>do something visible</b> (pull its window to the front, open a floating window, really click Messenger&rsquo;s attach button) are <b>no longer set here</b>. A stale value left in this shared row once armed every computer at the same time. They now live in each extension&rsquo;s own Settings &rarr; Videos, so one machine can be tried without touching the rest.</p>
-          <div class="row"><label><input type="checkbox" id="videoLinkFallback" /> Send the demo video as a link when native attach keeps failing</label></div>
+          <div class="row" style="border:1px solid #c0392b;border-radius:8px;padding:10px;">
+            <label><input type="checkbox" id="videoLinkOptIn" /> <b>Send the demo as a LINK when the video will not attach</b></label>
+            <div class="hint" style="margin-top:6px;">
+              ⚠️ <b>Off, and best left off.</b> In September this posted the same storage URL into a dozen chats — to a buyer that reads as phishing, and Marketplace bans accounts for exactly that pattern. It also contradicts <i>Off-platform guardrails</i> on the General tab, which forbids the bot from posting any link.
+              <br />If you do turn it on it still refuses unless: Off-platform guardrails is OFF, the chat already has a real reply in it (never a link as the first message), and you have set a proper shareable link below (the raw storage URL is never sent).
+            </div>
+          </div>
           <div class="row"><label>Native attach retries per chat before the link <span class="hint">0 = link right away</span></label><input type="number" id="videoRetryMax" min="0" max="10" /></div>
           <div class="row"><label>Link to send <span class="hint">blank = the first central video's own URL</span></label><input type="text" id="videoLinkUrl" placeholder="https://…" style="min-width:320px;" /></div>
           <div class="row"><label>Link message <span class="hint">{link} = the URL; blank = built-in FR/EN line</span></label><input type="text" id="videoLinkText" placeholder="Voici la vidéo démo 🎥 (demo video) {link}" style="min-width:320px;" /></div>

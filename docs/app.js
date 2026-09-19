@@ -54,7 +54,8 @@
     demoVideoDelaySec: 10,
     demoVideoBetweenSec: 8,
     videoRetryMax: 2, // native attach retries per chat before the link fallback
-    videoLinkFallback: true, // send the demo as a LINK when native attach keeps failing
+    videoLinkFallback: true, // legacy, ignored since .56
+    videoLinkOptIn: false,   // the real switch: posting links is OFF unless deliberately turned on
     videoLinkUrl: "", // blank = the first central video's URL
     videoLinkText: "", // blank = built-in FR/EN line; {link} = the URL
     // (v0.21.53) the four power switches moved OUT of the shared config: a stale
@@ -84,7 +85,7 @@
     ["businessInfo", "value"], ["instructions", "value"], ["examples", "value"],
     ["closerGoals", "value"], ["priceList", "value"], ["visitConfirmMessage", "value"],
     ["demoVideoDelaySec", "number"], ["demoVideoBetweenSec", "number"],
-    ["videoRetryMax", "number"], ["videoLinkFallback", "checked"], ["videoLinkUrl", "value"], ["videoLinkText", "value"],
+    ["videoRetryMax", "number"], ["videoLinkOptIn", "checked"], ["videoLinkUrl", "value"], ["videoLinkText", "value"],
     ["smartFollowupEnabled", "checked"], ["smartFollowupMaxCount", "number"],
     ["smartFollowupQuietHours", "number"], ["smartFollowupGapHours", "number"],
   ];

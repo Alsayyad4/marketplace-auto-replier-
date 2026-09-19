@@ -86,7 +86,10 @@ const DEFAULTS = {
   // link fallback, and the fallback itself (the demo sent as a LINK through the
   // proven text path when no attach channel can stage a clip on that machine).
   videoRetryMax: 2, // 0 = no native retry (link right away when nothing attaches)
-  videoLinkFallback: true,
+  // (v0.21.56) The link fallback is OFF unless videoLinkOptIn is explicitly true.
+  // videoLinkFallback is kept only so old configs parse; it is no longer consulted.
+  videoLinkFallback: true, // legacy, ignored since .56
+  videoLinkOptIn: false,   // the real switch — and it requires offPlatformGuard:false too
   videoLinkUrl: "", // blank = the first central clip's URL
   videoLinkText: "", // blank = built-in FR/EN line; {link} is replaced by the URL
   // (v0.21.48) bring the Messenger window to the front while a video set attaches,

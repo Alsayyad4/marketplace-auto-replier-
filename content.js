@@ -2510,6 +2510,33 @@
     const ctl = sendControlLabel();
     F.push("ctl=\"" + trunc(ctl || "-", 24) + "\"" + (ctl && LIKE_CTL_RE.test(ctl) && !SEND_CTL_RE.test(ctl) ? "(like)" : ctl && SEND_CTL_RE.test(ctl) ? "(send)" : "(?)"));
     F.push("tray=" + trayRemoveBtns().length + "/" + trayEls().length + " up=" + trayUploads());
+    // (v0.21.56) DETECTION vs ATTACH — the question the counters cannot answer.
+    // PC-bde6i reported FOUR different channels (drop, input, dom, paste — CDP and
+    // pure DOM alike) each dispatching ~90 times with 0 tiles, while
+    // persistentInput=found, fileAccess=ok and 180 successful CDP sets. Either
+    // Messenger refuses every programmatic attach, or the clip IS staged and our
+    // detectors cannot see it — and they only ever look INSIDE [role=main]
+    // (trayQuery). If Messenger moved the composer's attachment tray into a portal,
+    // every detector reads 0 for ever and the engine gives up on a working attach.
+    // So: count the same preview elements document-wide and say where they live.
+    try {
+      const main = getMain();
+      const all = Array.from(document.querySelectorAll(VIDEO_PREVIEW_SEL));
+      let inMain = 0, outside = 0;
+      for (const el of all) { if (main && main.contains(el)) inMain++; else outside++; }
+      const blobs = document.querySelectorAll('img[src^="blob:"]').length;
+      const vids = document.querySelectorAll("video").length;
+      // Every "remove"-ish control anywhere — if Messenger renamed the button our
+      // VIDEO_REMOVE_SEL misses it and a staged clip reads as nothing staged.
+      const rmLabels = [];
+      for (const b of document.querySelectorAll("[aria-label]")) {
+        const al = safe(() => b.getAttribute("aria-label"), "") || "";
+        if (/remove|supprimer|retirer|delete|enlever/i.test(al) && rmLabels.length < 4 && rmLabels.indexOf(al) === -1) rmLabels.push(al);
+      }
+      F.push("docscan: preview-els main=" + inMain + " OUTSIDE-main=" + outside +
+             " blobImgs=" + blobs + " videoEls=" + vids +
+             " removeish=[" + rmLabels.map((x) => trunc(x, 26)).join(" | ") + "]");
+    } catch (e) { F.push("docscan: err " + trunc((e && e.message) || e, 40)); }
     F.push("chatHasVideo=" + (safe(chatAlreadyHasOurVideo, false) ? "Y" : "n"));
     const st = await getLocal(["attachPref", "attachChannelStats", "attachMiss"]);
     const cs = st.attachChannelStats || {};
@@ -2579,8 +2606,36 @@
             const dCapL = stL.fullDailyCap != null ? stL.fullDailyCap : stL.dailyCap;
             if (dCapL && stL.dayCount >= dCapL) { vstat("link fallback held — daily cap reached"); return "held"; }
           }
-          const link = String(s.videoLinkUrl || (centralList[0] && centralList[0].url) || "").trim();
-          if (!/^https?:\/\//i.test(link)) return false;
+          // (v0.21.56) FOUR HARD GUARDS. Shipped in .47 as "no buyer is left without
+          // the demo", this became the operator's "weird links and bad stuff": with
+          // every attach channel dead it fired in EVERY chat, posting the raw
+          // Supabase storage URL of a WhatsApp file — to buyers that looks exactly
+          // like phishing, and a dozen identical links across one inbox is what
+          // Marketplace spam detection is built to catch. Worse, it contradicted the
+          // bot's OWN platform-safety rule ("NEVER write any external link/URL"),
+          // because it types through the DOM and never passes Claude.
+          // (a) The safety rule wins. If links are forbidden for the model, they are
+          //     forbidden for us — the two settings silently disagreed and the unsafe
+          //     one won.
+          if (lastSettings.offPlatformGuard !== false) {
+            vstat("link fallback skipped \u2014 off-platform guard is ON (no links may be posted)");
+            return false;
+          }
+          // (b) NEVER the first thing a buyer sees. A bare link into a chat we have
+          //     never spoken in is textbook spam-bot behaviour; the diagnostic showed
+          //     rows with replies=0 whose only message was the link.
+          if (usedReplies < 1) {
+            vstat("link fallback skipped \u2014 no real reply in this chat yet (a link must never be the first message)");
+            return false;
+          }
+          // (c) Only a link the operator deliberately set. Falling back to the raw
+          //     storage object URL is what produced
+          //     "tcqunihripihroseswgy.supabase.co/.../WhatsApp_Video_...mp4".
+          const link = String(s.videoLinkUrl || "").trim();
+          if (!/^https?:\/\//i.test(link)) {
+            vstat("link fallback skipped \u2014 no shareable link set (the raw storage URL is never sent)");
+            return false;
+          }
           const tpl = String(s.videoLinkText || "").trim() || VIDEO_LINK_TEXT_DEFAULT;
           const text = tpl.indexOf("{link}") !== -1 ? tpl.replace(/\{link\}/g, link) : tpl + " " + link;
           const ok = await typeAndSend(c, text);
@@ -2624,7 +2679,12 @@
           try { await hooks.onClipSent(-1); } catch (e) { /* the reply path reports its own errors */ }
         }
         let linked = false;
-        if (sCfg.videoLinkFallback !== false) {
+        // (v0.21.56) OPT-IN BY A NEW KEY. videoLinkFallback defaulted to true and is
+        // saved in the ONE shared cloud row, so flipping its default would have
+        // changed nothing on a fleet whose row already says true — the exact trap
+        // videoForeground sprang in .53. videoLinkOptIn is a key no stored config
+        // has, so this is OFF everywhere the moment this build lands.
+        if (sCfg.videoLinkOptIn === true) {
           const lr = await sendVideoLink(sCfg, central);
           if (lr === "held") {
             // (v0.21.54) the link was refused by a GATE (business hours / caps), not

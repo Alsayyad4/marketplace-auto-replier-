@@ -103,7 +103,8 @@ list. There is no second place to teach the bot.
   attach is retried (each time with a different attach channel first) when **nothing
   could be confirmed staged** — no preview tile and Messenger's own send control never
   left its empty state. `0` = no native retry.
-- `videoLinkFallback` — bool (default `true`). (v0.21.47) After those retries, send the demo
+- `videoLinkOptIn` — bool (default `false`). **(v0.21.56)** The only switch that enables the link fallback. `videoLinkFallback` is legacy and ignored. Even when true the link is refused unless `offPlatformGuard` is false, the chat already has a real reply, and `videoLinkUrl` is set — the raw `demoVideoUrls` storage URL is never sent. See the HANDOFF entry for why.
+- `videoLinkFallback` — legacy, ignored since v0.21.56 (was: default `true`). (v0.21.47) After those retries, send the demo
   as a **link** through the normal text path (the proven send), so the buyer still gets it.
   The chat is then marked served (`link:1`) — never sent twice.
 - `videoLinkUrl` — string (default blank = the first central video's own URL).

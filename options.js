@@ -52,7 +52,8 @@
     demoVideoDelaySec: 10,
     demoVideoBetweenSec: 8,
     videoRetryMax: 2,
-    videoLinkFallback: true,
+    videoLinkFallback: true, // legacy, ignored since .56
+    videoLinkOptIn: false,
     videoLinkUrl: "",
     videoLinkText: "",
     smartFollowupEnabled: false,
@@ -118,7 +119,7 @@
     ["demoVideoDelaySec", "number"],
     ["demoVideoBetweenSec", "number"],
     ["videoRetryMax", "number"],
-    ["videoLinkFallback", "checked"],
+    ["videoLinkOptIn", "checked"],
     ["videoLinkUrl", "value"],
     ["videoLinkText", "value"],
   ];
