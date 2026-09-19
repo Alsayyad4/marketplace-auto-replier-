@@ -6,6 +6,16 @@ French), built for used-iPhone sales in Montréal. Runs locally per Chrome profi
 by default; **optional cloud sync** turns it into a web app so one change reaches
 every computer.
 
+> 🔑 **v0.21.57 — let Messenger open its own file picker, and catch it inside the page.** The
+> diagnostic settled it: 180 successful file-API calls, the input found, the clip on disk — and
+> Messenger's own send button still saying the composer is empty. This build creates its file input
+> only when its own attach button is pressed, so every channel that fills an input found beforehand
+> is filling a decoy. The new `btn` channel replaces the two browser APIs that can raise a file
+> dialog, then clicks Messenger's own attach button: Messenger makes its input, clicks it, and the
+> shim hands over the clip instead of opening anything. **No dialog can appear** — the code paths
+> that raise one are the ones being replaced — and no window is focused or moved. It needs no
+> debugger, so no “SubSell is debugging this browser” bar either. 13 tests cover the mechanism.
+>
 > 🛑 **v0.21.56 — the link fallback was spamming the inbox; it is off.** A buyer screenshot showed
 > the bot posting a raw Supabase storage URL, and eleven consecutive chats whose last message was the
 > same link — several of them chats the bot had never actually replied in. That is my bug from .47,

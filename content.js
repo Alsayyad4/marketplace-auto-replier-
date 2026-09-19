@@ -1268,6 +1268,7 @@
     const attempts = [];
     let pasteFnRef = null; // the synthetic paste, also used as the last just-send channel
     let inputFnRef = null; // (v0.21.54) the pure-DOM file-input assignment, offered to just-send as "dom"
+    let btnFnRef = null;   // (v0.21.57) Messenger's own picker, caught by the page shim
     if (useCdp) {
       const cdpFn = async () => {
         setStatus({ lastAction: "attaching video via Chrome file API…" });
@@ -1332,6 +1333,54 @@
     inputFn.via = "input";
     inputFnRef = inputFn; // (v0.21.54) also offered to just-send as the "dom" channel
     attempts.push(inputFn);
+
+    // (v0.21.57) "btn" — let MESSENGER open its own picker, and catch it in the page.
+    // Every other channel guesses which <input type=file> to fill. On this build
+    // there is nothing to guess at until the composer's attach button is pressed,
+    // which is why input/dom/drop/paste all report ok and stage nothing. Here we
+    // arm a MAIN-world shim (background: pageArmFileShim) that replaces
+    // HTMLInputElement.prototype.click and window.showOpenFilePicker, then click
+    // Messenger's own attach control. Messenger creates its input, clicks it, and
+    // the shim hands over the clip instead of opening anything — so the file lands
+    // in the input Messenger is actually listening to, and NO dialog can appear,
+    // because the code paths that raise one are the ones we replaced.
+    // A plain .click() is enough: React's onClick does not care about isTrusted,
+    // and user activation is only needed to OPEN a dialog, which we never do.
+    const btnFn = async () => {
+      const f = await ensureFile();
+      if (!f) return false;
+      const target = findAttachControl();
+      if (!target) { setStatus({ videoLast: "attach button not found in the composer" }); return false; }
+      let url = null;
+      try {
+        url = URL.createObjectURL(f);
+        const armed = await ask({ type: "ARM_FILE_SHIM", url, name: f.name, mime: f.type, ms: 20000 });
+        if (!(armed && armed.ok)) { setStatus({ videoLast: "could not arm the page file shim: " + trunc((armed && armed.error) || "?", 60) }); return false; }
+        safe(() => target.el.click());
+        if (target.more) {
+          // compact bar: the attach item lives inside the "+" menu
+          let item = null;
+          for (let i = 0; i < 8 && !item; i++) { await sleep(300); item = findAttachMenuItem(); }
+          if (!item) { await ask({ type: "SHIM_STATUS", disarm: true }); return false; }
+          safe(() => item.click());
+        }
+        // Did Messenger actually reach a file input? This is the one fact that
+        // separates "the build ignores us" from "we never triggered its picker".
+        let st = null;
+        for (let i = 0; i < 10; i++) {
+          await sleep(400);
+          const r = await ask({ type: "SHIM_STATUS" });
+          st = (r && r.status) || null;
+          if (st && st.fired > 0) break;
+        }
+        lastShimFired = st ? st.fired : 0;
+        lastShimSeen = st ? st.seen : 0;
+        if (!st || !st.fired) { setStatus({ videoLast: "clicked attach but Messenger never opened a file picker (seen=" + ((st && st.seen) || 0) + ")" }); return false; }
+        return true;
+      } catch (e) { return false; }
+      finally { if (url) setTimeout(() => safe(() => URL.revokeObjectURL(url)), 30000); }
+    };
+    btnFnRef = btnFn;
 
     // JUST-SEND MODE (v0.21.43, operator: "just send the videos"). The verdict
     // engine below PREDICTS whether a clip attached by watching the tray during
@@ -1402,15 +1451,20 @@
       // not found" 130 times while the DOM path was never even tried (it only ran
       // when videoJustSend === false, and just-send is the default). Quiet by
       // construction, so it sits in the default order right after the CDP attempt.
+      // (v0.21.57) "btn" leads the quiet order: it is the only channel that fills
+      // the input Messenger actually created, it opens no dialog and moves no
+      // window, and on a build that makes its input on demand it is the only one
+      // that can work at all.
       const ALL = trusted
-        ? ["chooser", "drop", "input", "dom", "paste"]
-        : (dropRescue ? ["input", "dom", "drop", "paste"] : ["input", "dom", "paste"]);
+        ? ["btn", "chooser", "drop", "input", "dom", "paste"]
+        : (dropRescue ? ["btn", "input", "dom", "drop", "paste"] : ["btn", "input", "dom", "paste"]);
       let order = pref && ALL.indexOf(pref.channel) !== -1 ? [pref.channel].concat(ALL.filter((c) => c !== pref.channel)) : ALL.slice();
       // (v0.21.54) when the file API is unusable/parked only the CDP channels are
       // impossible — "dom" needs no debugger, so it must survive this filter (it used
       // to be dropped with them, which is how a parked machine was left with paste alone).
-      if (!canCdp) order = order.filter((c) => c === "paste" || c === "dom");
-      if (!order.length) order = ["dom", "paste"];
+      // "btn" and "dom" need no debugger, so they survive a file-API park.
+      if (!canCdp) order = order.filter((c) => c === "paste" || c === "dom" || c === "btn");
+      if (!order.length) order = ["btn", "dom", "paste"];
       // No learned channel and the last set(s) on this machine showed nothing:
       // rotate the starting channel so a dead first channel is not tried first forever.
       if (!pref && (attachMiss.streak || 0) > 0 && order.length > 1) {
@@ -1445,6 +1499,8 @@
           try { fired = pasteFnRef ? !!(await pasteFnRef()) : false; } catch (e) { fired = false; }
         } else if (ch === "dom") {
           try { fired = inputFnRef ? !!(await inputFnRef()) : false; } catch (e) { fired = false; }
+        } else if (ch === "btn") {
+          try { fired = btnFnRef ? !!(await btnFnRef()) : false; } catch (e) { fired = false; }
         } else {
           const r = await ask({ type: "CDP_SET_FILES", paths: [diskPath], channel: ch });
           if (r && r.ok) fired = true;
@@ -2242,6 +2298,48 @@
     if (misses >= 3) { await setLocal({ attachPref: null }); setStatus({ videoLast: "attach channel '" + p.channel + "' stopped showing clips — re-learning" }); }
     else await setLocal({ attachPref: Object.assign({}, p, { misses }) });
   }
+  // (v0.21.57) Messenger's own attach control, found the same way the page-world
+  // finder does it: a labelled button inside the composer bar's subtree, in the
+  // composer's horizontal band. "more" marks the compact "+" menu, whose attach
+  // item is found by findAttachMenuItem after it opens.
+  const ATTACH_RE = /attach|joindre|jointe|fichier|pi[èe]ce|\bfile\b|photo|m[ée]dia|upload|t[ée]l[ée]vers|image|vid[ée]o/i;
+  const ATTACH_BAD_RE = /sticker|autocollant|gif|emoji|like|j'?aime|pouce|thumb|voice|vocal|audio|micro|record|enregistr|press enter|entr[eé]e pour|^send$|^envoyer$|listing|annonce|call|appel/i;
+  const ATTACH_MORE_RE = /more actions|plus d.actions|ouvrir plus|open more|more options|plus d.options/i;
+  let lastShimFired = 0, lastShimSeen = 0;
+  function findAttachControl() {
+    const main = getMain();
+    const c = findComposer();
+    if (!main || !c) return null;
+    const cr = safe(() => c.getBoundingClientRect(), null);
+    if (!cr) return null;
+    const up = [];
+    for (let nEl = c.parentElement, i = 0; nEl && nEl !== main && i < 8; nEl = nEl.parentElement, i++) up.push(nEl);
+    let best = null, moreBtn = null;
+    for (const b of safe(() => Array.from(main.querySelectorAll('[role="button"][aria-label], button[aria-label]')), [])) {
+      if (!up.some((u) => u.contains(b))) continue;
+      const r = safe(() => b.getBoundingClientRect(), null);
+      if (!r || !r.width || !r.height) continue;
+      if (r.bottom < cr.top - 60 || r.top > cr.bottom + 60) continue;
+      const al = safe(() => b.getAttribute("aria-label"), "") || "";
+      if (ATTACH_MORE_RE.test(al)) { if (!moreBtn) moreBtn = b; continue; }
+      if (!ATTACH_RE.test(al) || ATTACH_BAD_RE.test(al)) continue;
+      if (!best || r.left < safe(() => best.getBoundingClientRect().left, 1e9)) best = b;
+    }
+    if (best) return { el: best, more: false };
+    return moreBtn ? { el: moreBtn, more: true } : null;
+  }
+  function findAttachMenuItem() {
+    for (const root of safe(() => Array.from(document.querySelectorAll('[role="menu"], [role="dialog"], [role="listbox"]')), [])) {
+      for (const it of safe(() => Array.from(root.querySelectorAll('[role="menuitem"], [role="menuitemradio"], [role="option"], [role="button"]')), [])) {
+        const t = ((safe(() => it.getAttribute("aria-label"), "") || "") + " " + (safe(() => it.innerText, "") || "")).trim();
+        if (!ATTACH_RE.test(t) || ATTACH_BAD_RE.test(t)) continue;
+        const r = safe(() => it.getBoundingClientRect(), null);
+        if (r && r.width && r.height) return it;
+      }
+    }
+    return null;
+  }
+
   // (v0.21.47) Per-channel outcome counters for the 🩺 line: how often each
   // channel dispatched, showed a tile, flipped the send control (blind), showed
   // nothing (none) or could not be judged (unverified). Fire-and-forget.
@@ -2540,7 +2638,8 @@
     F.push("chatHasVideo=" + (safe(chatAlreadyHasOurVideo, false) ? "Y" : "n"));
     const st = await getLocal(["attachPref", "attachChannelStats", "attachMiss"]);
     const cs = st.attachChannelStats || {};
-    F.push("channels=" + ["chooser", "drop", "input", "dom", "paste"].map((k) => {
+    F.push("shim: fired=" + lastShimFired + " seen=" + lastShimSeen);
+    F.push("channels=" + ["btn", "chooser", "drop", "input", "dom", "paste"].map((k) => {
       const e = cs[k];
       return e ? k + ":" + (e.dispatched || 0) + "d/" + (e.tile || 0) + "t/" + (e.blind || 0) + "b/" + (e.none || 0) + "n/" + (e.unverified || 0) + "u" : k + ":-";
     }).join(" "));

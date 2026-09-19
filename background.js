@@ -2046,6 +2046,96 @@ async function cdpActivate(tabId) {
   }
 }
 
+// ---- (v0.21.57) THE FILE-PICKER SHIM: attach without any dialog, ever ----
+// PC-bde6i settled the question the counters could not: ok=180 successful CDP
+// sets, persistentInput=found, fileAccess=ok, and yet EVERY channel staged
+// nothing — and crucially Messenger's OWN send control never left "send a like",
+// which is render-independent. So the clip genuinely is not being staged, and
+// this is the build v0.21.45 first described: the composer creates its file input
+// ON DEMAND, only when its own attach button is clicked. Setting files on any
+// input that exists beforehand reports ok and does nothing, which is why input,
+// dom, drop and paste all fail identically.
+// The only path that works is Messenger's own picker — and that is exactly the
+// path that put a real Windows "Open" dialog on the operator's desktop in .51,
+// because CDP's Page.setInterceptFileChooserDialog does not cover every way a
+// page can ask for a file.
+// So: do not intercept the dialog. Make it impossible to open one. This shim runs
+// in the page's MAIN world and replaces the two APIs that can raise a file dialog:
+//   - HTMLInputElement.prototype.click: for a file input we hand Messenger the
+//     clip and RETURN WITHOUT CALLING THE ORIGINAL, so no dialog can appear, and
+//     the input we fill is the one Messenger itself just created — the right one,
+//     by construction, instead of one we guessed at.
+//   - window.showOpenFilePicker: returns a handle to our clip instead of a dialog.
+// Nothing else changes; both are restored on a timer and in a finally.
+async function pageArmFileShim(blobUrl, name, mime, ms) {
+  try {
+    if (window.__subsellShim) { window.__subsellShim.renew(Date.now() + ms); return { ok: true, already: true }; }
+    const blob = await (await fetch(blobUrl)).blob();
+    const file = new File([blob], name || "video.mp4", { type: mime || "video/mp4" });
+    let until = Date.now() + ms;
+    const live = () => Date.now() < until;
+    const origClick = HTMLInputElement.prototype.click;
+    const origPicker = window.showOpenFilePicker;
+    window.__subsellShimFired = 0;
+    window.__subsellShimSeen = 0;
+    HTMLInputElement.prototype.click = function () {
+      if (this.type === "file" && live()) {
+        window.__subsellShimSeen++;
+        try {
+          const dt = new DataTransfer();
+          dt.items.add(file);
+          this.files = dt.files;
+          this.dispatchEvent(new Event("input", { bubbles: true }));
+          this.dispatchEvent(new Event("change", { bubbles: true }));
+          window.__subsellShimFired++;
+          return; // the original click is never called ⇒ no dialog is possible
+        } catch (e) { /* fall through to the real click below */ }
+      }
+      return origClick.apply(this, arguments);
+    };
+    if (typeof origPicker === "function") {
+      window.showOpenFilePicker = function () {
+        if (live()) {
+          window.__subsellShimFired++;
+          return Promise.resolve([{ kind: "file", name: file.name, getFile: async () => file }]);
+        }
+        return origPicker.apply(this, arguments);
+      };
+    }
+    const restore = () => {
+      try { HTMLInputElement.prototype.click = origClick; } catch (e) { /* ignore */ }
+      try { if (typeof origPicker === "function") window.showOpenFilePicker = origPicker; } catch (e) { /* ignore */ }
+      window.__subsellShim = null;
+    };
+    window.__subsellShim = { renew: (t) => { until = t; }, restore };
+    setTimeout(restore, Math.min(Math.max(ms, 1000), 60000) + 500);
+    return { ok: true };
+  } catch (e) { return { ok: false, error: String((e && e.message) || e) }; }
+}
+function pageShimStatus() {
+  return { fired: window.__subsellShimFired || 0, seen: window.__subsellShimSeen || 0, armed: !!window.__subsellShim };
+}
+function pageDisarmFileShim() {
+  try { if (window.__subsellShim) window.__subsellShim.restore(); } catch (e) { /* ignore */ }
+  return true;
+}
+async function armFileShim(tabId, blobUrl, name, mime, ms) {
+  if (!tabId || !chrome.scripting) return { ok: false, error: "no tab / scripting API" };
+  try {
+    const r = await chrome.scripting.executeScript({
+      target: { tabId }, world: "MAIN", func: pageArmFileShim, args: [blobUrl, name || "", mime || "", Number(ms) || 15000],
+    });
+    return (r && r[0] && r[0].result) || { ok: false, error: "shim not applied" };
+  } catch (e) { return { ok: false, error: String((e && e.message) || e) }; }
+}
+async function shimStatus(tabId, disarm) {
+  if (!tabId || !chrome.scripting) return { ok: false };
+  try {
+    const r = await chrome.scripting.executeScript({ target: { tabId }, world: "MAIN", func: disarm ? pageDisarmFileShim : pageShimStatus });
+    return { ok: true, status: (r && r[0] && r[0].result) || null };
+  } catch (e) { return { ok: false, error: String((e && e.message) || e) }; }
+}
+
 // (v0.21.47) VIDEO DOCTOR (browser side): read-only facts about the attach path
 // on THIS tab — window/tab visibility, whether the attach button is found and
 // really sits under its click point, whether a persistent composer input exists,
@@ -2347,7 +2437,7 @@ async function buildDiagnostic() {
     const am2 = st.attachMiss || {};
     L.push(
       "attach: missStreak=" + (am2.streak || 0) + (am2.at ? "(" + ageM(am2.at) + ")" : "") +
-      " channels=" + ["chooser", "drop", "input", "dom", "paste"].map((k) => {
+      " channels=" + ["btn", "chooser", "drop", "input", "dom", "paste"].map((k) => {
         const e = acs[k];
         return e ? k + ":" + (e.dispatched || 0) + "d/" + (e.tile || 0) + "t/" + (e.blind || 0) + "b/" + (e.none || 0) + "n/" + (e.unverified || 0) + "u" : k + ":-";
       }).join(" ") +
@@ -2683,6 +2773,17 @@ chrome.runtime.onMessage.addListener((msg, _sender, sendResponse) => {
         case "VIDEO_FOREGROUND": {
           // (v0.21.48) bring the sender's window/tab to the front (on) or hand focus back (off)
           sendResponse(await videoForeground(_sender && _sender.tab, !!msg.on, msg.hold, !!msg.retry));
+          break;
+        }
+        case "ARM_FILE_SHIM": {
+          // (v0.21.57) arm the page-world file-picker shim for this tab
+          const tabId = _sender && _sender.tab && _sender.tab.id;
+          sendResponse(await armFileShim(tabId, msg.url, msg.name, msg.mime, msg.ms));
+          break;
+        }
+        case "SHIM_STATUS": {
+          const tabId = _sender && _sender.tab && _sender.tab.id;
+          sendResponse(await shimStatus(tabId, !!msg.disarm));
           break;
         }
         case "CDP_ACTIVATE": {
