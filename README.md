@@ -6,6 +6,18 @@ French), built for used-iPhone sales in Montréal. Runs locally per Chrome profi
 by default; **optional cloud sync** turns it into a web app so one change reaches
 every computer.
 
+> 👁 **v0.21.58 — the detector was blind; the attach was working all along.** A photo of a live
+> composer showed SEVEN clips staged in the attachment strip while every counter read zero. The cause
+> was one selector: it only recognised the × button if its label contained both “remove” *and*
+> “attach”, and Messenger labels it simply “Remove” — so it has matched nothing, on any build, ever.
+> Everything followed from that: the bot judged each attach as failed, retried, stacked another copy,
+> never sent any of them, and a later Enter would ship the pile — the “double sending videos”. It also
+> drove the miss-streak that exhausted retries into the link fallback. The detector now anchors on the
+> composer’s geometry instead of on label wording, **the demo-video link is removed**, and one real
+> double-text path is closed: before clicking Send as a fallback the bot checks whether the message
+> already went out. 9 new tests cover the detector, including the false positives that would cause a
+> premature send.
+>
 > 🔑 **v0.21.57 — let Messenger open its own file picker, and catch it inside the page.** The
 > diagnostic settled it: 180 successful file-API calls, the input found, the clip on disk — and
 > Messenger's own send button still saying the composer is empty. This build creates its file input

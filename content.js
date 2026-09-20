@@ -1012,6 +1012,20 @@
     pressEnter(el);
     if (await composerEmptied(el, 5000)) return true;
     if (norm(composerText(el)) === norm(want)) {
+      // (v0.21.58) …but first check the Enter did not ALREADY send it. On these
+      // laggy Remote-Desktop machines Messenger can post the message while the
+      // composer still shows the text for another moment; clicking Send then posts
+      // it a SECOND time — the operator's "sometimes double texting". If our exact
+      // message is already the last thing in the conversation, it went out: stop.
+      const already = safe(() => {
+        const cv = readConversation() || [];
+        const last = cv.length ? cv[cv.length - 1] : null;
+        return !!(last && last.role === "me" && norm(last.text || "") === norm(want));
+      }, false);
+      if (already) {
+        setStatus({ lastAction: "reply already delivered — skipped the duplicate send" });
+        return true;
+      }
       clickSend();
       if (await composerEmptied(el, 4000)) return true;
     }
@@ -1068,8 +1082,67 @@
     };
     return safe(() => Array.from(main.querySelectorAll(sel)).filter(notInRow), []);
   }
-  const trayEls = () => trayQuery(VIDEO_PREVIEW_SEL);
-  const trayRemoveBtns = () => trayQuery(VIDEO_REMOVE_SEL);
+
+  // (v0.21.58) THE DETECTOR WAS BLIND, AND THAT IS WHY CLIPS PILED UP.
+  // An operator photo of a live composer showed SEVEN staged clips sitting in the
+  // attachment strip while every counter reported 0 tiles. So the attach has been
+  // working for weeks; we simply could not see it, "retried", stacked another
+  // copy, and never sent any of them — and a later Enter would ship the whole pile
+  // ("the tool double sending videos"). The cause is in the selectors above:
+  // VIDEO_REMOVE_SEL demands an aria-label containing BOTH "remove" AND "attach"
+  // (or "supprimer" AND "jointe"). Messenger's little × is labelled "Remove" /
+  // "Supprimer" / "Retirer" — so it matched nothing, on any build, ever.
+  // The fix stops trusting wording and DOM scope, and anchors on geometry instead:
+  // the attachment strip is the band directly above the textbox, in the composer's
+  // own column, and never inside a message row. Searched document-wide so a
+  // portal-rendered strip is found too.
+  const TRAY_BAND_UP = 280;   // how far above the textbox the strip can reach
+  const REMOVE_ANY_RE = /remove|supprimer|retirer|enlever|delete|annuler|discard|×/i;
+  function trayBand() {
+    const c = findComposer();
+    const cr = c ? safe(() => c.getBoundingClientRect(), null) : null;
+    if (!cr || !cr.height) return null;
+    return { c, top: cr.top - TRAY_BAND_UP, bottom: cr.top + 8, left: cr.left - 100, right: cr.right + 140 };
+  }
+  function inBand(el, band) {
+    const r = safe(() => el.getBoundingClientRect(), null);
+    if (!r || !r.width || !r.height) return false;
+    if (r.bottom > band.bottom || r.top < band.top) return false;      // the strip sits just above the textbox
+    if (r.right < band.left || r.left > band.right) return false;      // and in the composer's column
+    const row = safe(() => el.closest('[role="row"]'), null);          // never a sent message
+    if (row && !safe(() => band.c && row.contains(band.c), false)) return false;
+    return true;
+  }
+  function trayWide(kind) {
+    const band = trayBand();
+    if (!band) return [];
+    const out = [];
+    const seen = new Set();
+    const push = (el) => { if (!seen.has(el)) { seen.add(el); out.push(el); } };
+    if (kind === "remove") {
+      for (const b of safe(() => Array.from(document.querySelectorAll('[role="button"][aria-label], button[aria-label], [role="button"][title], button[title]')), [])) {
+        const al = ((safe(() => b.getAttribute("aria-label"), "") || "") + " " + (safe(() => b.getAttribute("title"), "") || "")).trim();
+        if (!REMOVE_ANY_RE.test(al)) continue;
+        const r = safe(() => b.getBoundingClientRect(), null);
+        if (!r || r.width > 56 || r.height > 56) continue;              // the little ×, not a toolbar button
+        if (!inBand(b, band)) continue;
+        push(b);
+      }
+      return out;
+    }
+    for (const el of safe(() => Array.from(document.querySelectorAll('img, video, [role="progressbar"]')), [])) {
+      const r = safe(() => el.getBoundingClientRect(), null);
+      if (!r) continue;
+      const isBar = safe(() => el.getAttribute("role"), "") === "progressbar";
+      if (!isBar && (r.width < 24 || r.height < 24 || r.width > 260 || r.height > 260)) continue; // thumbnail-sized
+      if (!inBand(el, band)) continue;
+      push(el);
+    }
+    return out;
+  }
+  const union = (a, b) => { const o = a.slice(); for (const x of b) if (o.indexOf(x) === -1) o.push(x); return o; };
+  const trayEls = () => union(trayQuery(VIDEO_PREVIEW_SEL), trayWide("preview"));
+  const trayRemoveBtns = () => union(trayQuery(VIDEO_REMOVE_SEL), trayWide("remove"));
   // Remove ONLY attachments beyond the first `expectedGood` — POSITION-based,
   // not node-identity-based: React re-creates DOM nodes freely, so a Set of
   // "known" buttons could mistake a re-rendered GOOD clip for a stray and
@@ -2607,7 +2680,9 @@
     F.push("composer=" + (c ? (composerText(c) ? "has-text" : "empty") : "NONE"));
     const ctl = sendControlLabel();
     F.push("ctl=\"" + trunc(ctl || "-", 24) + "\"" + (ctl && LIKE_CTL_RE.test(ctl) && !SEND_CTL_RE.test(ctl) ? "(like)" : ctl && SEND_CTL_RE.test(ctl) ? "(send)" : "(?)"));
-    F.push("tray=" + trayRemoveBtns().length + "/" + trayEls().length + " up=" + trayUploads());
+    F.push("tray=" + trayRemoveBtns().length + "/" + trayEls().length + " up=" + trayUploads() +
+           " [strict " + trayQuery(VIDEO_REMOVE_SEL).length + "/" + trayQuery(VIDEO_PREVIEW_SEL).length +
+           " + band " + trayWide("remove").length + "/" + trayWide("preview").length + "]");
     // (v0.21.56) DETECTION vs ATTACH — the question the counters cannot answer.
     // PC-bde6i reported FOUR different channels (drop, input, dom, paste — CDP and
     // pure DOM alike) each dispatching ~90 times with 0 tiles, while
@@ -2778,12 +2853,14 @@
           try { await hooks.onClipSent(-1); } catch (e) { /* the reply path reports its own errors */ }
         }
         let linked = false;
-        // (v0.21.56) OPT-IN BY A NEW KEY. videoLinkFallback defaulted to true and is
-        // saved in the ONE shared cloud row, so flipping its default would have
-        // changed nothing on a fleet whose row already says true — the exact trap
-        // videoForeground sprang in .53. videoLinkOptIn is a key no stored config
-        // has, so this is OFF everywhere the moment this build lands.
-        if (sCfg.videoLinkOptIn === true) {
+        // (v0.21.58) THE LINK IS GONE. The operator asked for it plainly ("Video
+        // demo link remove.") after seeing it in buyer chats, and they are right:
+        // it posted a raw storage URL that reads as phishing, it fired in chats the
+        // bot had never spoken in, and it only ever existed because we believed the
+        // attach was failing — which it was not. Kept as unreachable code for one
+        // release so the shape of the terminal branch stays reviewable; delete it
+        // and sendVideoLink outright next time this file is opened.
+        if (false) {
           const lr = await sendVideoLink(sCfg, central);
           if (lr === "held") {
             // (v0.21.54) the link was refused by a GATE (business hours / caps), not
