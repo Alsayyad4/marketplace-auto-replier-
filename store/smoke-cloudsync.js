@@ -13,7 +13,10 @@
  *   3. it heals once per wipe, and not at all if somebody fixed it first;
  *   4. a healthy row is still applied, and clears the alarm;
  *   5. a deliberate shrink (fewer listings, key and teaching intact) is NOT refused;
- *   6. a login that brought nothing back does not report that it did.
+ *   6. a login that brought nothing back does not report that it did;
+ *   7. (v0.21.62) a fresh install logging into an EMPTY account fills it from the
+ *      build's starter setup — once, after re-reading the row, never over real
+ *      settings, never with a secret — and a re-blanked row converges in one heal.
  *
  * Run:  node store/smoke-cloudsync.js
  */
@@ -84,11 +87,14 @@ function build(opts) {
   const readManagedConfig = async () => null;
   const DEFAULTS = { apiKey: "", model: "claude-haiku-4-5", businessInfo: "", instructions: "", enabled: false };
 
+  // (v0.21.62) SEED_CONFIG lives next to DEFAULTS, outside the sliced block, so the
+  // harness injects it: `seed` = what this build ships (default: nothing).
+  const SEED_CONFIG = opts.seed || {};
   const api = new Function(
-    "chrome", "LOG", "fetch", "syncedConfigRead", "syncedConfigWrite", "readManagedConfig", "DEFAULTS",
+    "chrome", "LOG", "fetch", "syncedConfigRead", "syncedConfigWrite", "readManagedConfig", "DEFAULTS", "SEED_CONFIG",
     block +
-    "; return { cloudPull, cloudPullRaw, cloudPush, cloudLiveConfig, healWipedAccount, looksLikeWipe, configWeight, getSettings, bestKnownConfig };"
-  )(chrome, () => {}, fetch, syncedConfigRead, syncedConfigWrite, readManagedConfig, DEFAULTS);
+    "; return { cloudPull, cloudPullRaw, cloudPush, cloudLiveConfig, healWipedAccount, seedEmptyAccount, looksLikeWipe, configWeight, getSettings, bestKnownConfig };"
+  )(chrome, () => {}, fetch, syncedConfigRead, syncedConfigWrite, readManagedConfig, DEFAULTS, SEED_CONFIG);
   return { api, store, row, calls };
 }
 
@@ -144,12 +150,76 @@ function build(opts) {
   ok(r.ok && r.empty === true, "a row with nothing in it comes back as empty, not as a successful sync");
   ok(!m.store.cloudConfig, "and nothing is written over this machine's settings");
 
-  /* 6b — the symptom the operator saw: blank strings in the account, no local copy */
+  /* 6b — the symptom the operator saw: blank strings in the account, no local copy,
+   *      and a build that ships NO starter setup. The blank must not be applied
+   *      either: the machine stays on DEFAULTS (a real model in the box) instead
+   *      of reproducing the empty form. */
   m = build({ row: WIPED, store: {} });
+  r = await m.api.cloudPull(true);
+  let s = await m.api.getSettings();
+  ok(r.ok && r.empty === true && !r.seeded, "a blank account with nothing to seed from is reported empty — seeded=" + !!r.seeded);
+  ok(s.model === "claude-haiku-4-5" && !m.store.cloudConfig,
+     "the blank is NOT applied: the machine keeps its defaults instead of showing an empty form");
+
+  /* 7 — (v0.21.62) THE FIX THE OPERATOR ASKED FOR: email + password on a fresh
+   *      install fills the account from the build, and every machine follows. */
+  const SEED = Object.assign({}, REAL, { apiKey: "" }); // what a build can ship: everything but the secret
+  m = build({ row: WIPED, store: {}, seed: SEED });
+  r = await m.api.cloudPull(true);
+  ok(r.ok && r.seeded === true && r.keys > 0, "a fresh install logging into an EMPTY account seeds it from the build — seeded=" + r.seeded);
+  ok(m.calls.push === 1 && m.row.config.businessInfo === REAL.businessInfo,
+     "the account itself now holds the starter setup (one write)");
+  ok(m.store.cloudConfig && m.store.cloudConfig.businessInfo === REAL.businessInfo,
+     "and this machine runs on it immediately");
+  ok(m.row.config.apiKey === "" && !("enabled" in m.row.config),
+     "the seed never invents a secret and never carries a per-machine key");
+  s = await m.api.getSettings();
+  ok(s.businessInfo === REAL.businessInfo && s.model === REAL.model, "getSettings serves the seeded teaching");
+
+  /* 7b — an untouched row ({}) seeds too */
+  m = build({ row: {}, store: {}, seed: SEED });
+  r = await m.api.cloudPull(true);
+  ok(r.seeded === true && m.calls.push === 1, "an account that was never set up seeds as well");
+
+  /* 7c — the seed must NEVER overwrite real settings */
+  m = build({ row: REAL, store: {}, seed: Object.assign({}, SEED, { businessInfo: "seed text" }) });
+  r = await m.api.cloudPull(true);
+  ok(!r.seeded && m.calls.push === 0 && m.row.config.businessInfo === REAL.businessInfo,
+     "a healthy account is left exactly as it is — the seed does not fire");
+
+  /* 7d — a machine that holds a real copy heals with ITS copy, not the seed */
+  m = build({ row: WIPED, store: { __sync: REAL }, seed: Object.assign({}, SEED, { businessInfo: "seed text" }) });
+  r = await m.api.cloudPull(true);
+  ok(r.wiped === true && r.healed === true && m.row.config.businessInfo === REAL.businessInfo,
+     "a machine with the real settings puts THOSE back, and the seed stays out of the way");
+
+  /* 7e — machines starting together: the second sees a filled row and writes nothing */
+  m = build({ row: WIPED, liveRow: REAL, store: {}, seed: SEED });
+  r = await m.api.cloudPull(true);
+  ok(!r.seeded && m.calls.push === 0 && /another machine/.test(r.seedError || ""),
+     "the seed re-reads the row first and steps aside when another machine already filled it — " + (r.seedError || ""));
+
+  /* 7f — once per row stamp, and the whole thing converges (no write loop) */
+  m = build({ row: WIPED, store: {}, seed: SEED });
+  const first = await m.api.seedEmptyAccount("stamp-A");
+  const again = await m.api.seedEmptyAccount("stamp-A");
+  ok(first.ok === true && again.ok === false && m.calls.push === 1,
+     "seedEmptyAccount writes once per stamp — second call: " + (again.skipped || again.error));
+  // After seeding, this machine HOLDS the seed, so a later blanking of the row is a
+  // wipe against a held copy: the heal (its own once-per-stamp) restores it, and
+  // after that nothing else writes. Two mechanisms, one write each, then silence.
+  m.row.config = JSON.parse(JSON.stringify(WIPED));
+  m.row.updated_at = "stamp-B";
+  m.store.cloudUpdatedAt = "force-a-refetch";
   await m.api.cloudPull(true);
-  const s = await m.api.getSettings();
-  ok(s.model === "" && s.apiKey === "",
-     "with no copy to defend, a blank account still reads back blank — this is the screen the operator saw");
+  const afterHeal = m.calls.push;
+  m.row.config = JSON.parse(JSON.stringify(WIPED));
+  m.row.updated_at = "stamp-B";
+  m.store.cloudUpdatedAt = "force-a-refetch";
+  await m.api.cloudPull(true);
+  await m.api.cloudPull(true);
+  ok(afterHeal === 2 && m.calls.push === 2,
+     "a re-blanked row is healed once and then left alone — pushes=" + m.calls.push + " (no loop)");
 
   console.log(failed ? "\n" + failed + " CHECK(S) FAILED" : "\nall checks passed");
   process.exit(failed ? 1 : 0);

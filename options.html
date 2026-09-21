@@ -98,7 +98,8 @@
         <label>Sync across computers — permanent link (older alternative) <span class="hint">put your key + settings in ONE shared file; every Chrome reads from it (works across different Google accounts). Edit the file → all machines update. Prefer Cloud sync above.</span></label>
         <div class="row">
           <button id="exportConfig" type="button">⬇ Export config to file</button>
-          <span class="hint">do this on a fully set-up machine, then paste the file into a SECRET GitHub gist</span>
+          <button id="importConfig" type="button">⬆ Import config from file</button>
+          <span class="hint">export on a fully set-up machine — it is the one backup that survives uninstalling the extension. Import loads it back; press Save to send it to every computer.</span>
         </div>
         <label>Remote config URL <span class="hint">the RAW link to that shared file. Stored locally on this computer only.</span></label>
         <input type="text" id="remoteConfigUrl" placeholder="https://gist.githubusercontent.com/…/raw/…/subsell-config.json" />

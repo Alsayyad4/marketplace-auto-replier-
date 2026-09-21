@@ -110,6 +110,65 @@ const DEFAULTS = {
   smartFollowupGapHours: 24, // hours between follow-ups (for the 2nd, 3rd…)
 };
 
+// ---- (v0.21.62) A FRESH INSTALL MUST COME UP READY FROM A LOGIN ALONE ----
+// The account row was overwritten with empty strings, and every machine that still
+// held a copy was uninstalled — which in Chrome destroys the extension's storage
+// for good, sync included. So there was nothing left to pull: email + password
+// brought back a blank form, on every machine, for ever. A login cannot recover
+// what no longer exists anywhere. But the build itself knows this business, so it
+// can put a working setup back into an EMPTY account and let the normal sync carry
+// it to every machine.
+//
+// Deliberately narrow: it fires only when the account holds nothing worth having
+// AND this machine holds nothing better, so it can never overwrite real settings;
+// it re-reads the row immediately before writing, so machines starting together do
+// not fight; and it runs once per row stamp. The API key is NOT in here and cannot
+// be — a secret that only ever lived in that row is gone, and Anthropic never
+// shows a key twice. Everything else comes back.
+// Every fact below is traced to a file in the SubSell website repo or verified
+// against the live Supabase project (supabase/RECOVERY.md has the sources).
+// Nothing is invented. Keys that DEFAULTS already ship with good text
+// (instructions, closerGoals) are deliberately absent so the shipped text wins.
+// priceList and listings are absent ON PURPOSE: the only surviving numbers are
+// months stale and the site's own list contradicts itself (an iPhone 12 Pro Max
+// above a 13 Pro Max), and with no price list the bot stays in its designed mode —
+// best price in person, come to the shop. Paste a list later if you want quotes.
+const SEED_CONFIG = {
+  model: "claude-haiku-4-5",
+  businessName: "SubSell",
+  businessAddress: "757 Rue Beaubien Est, Montréal (Rosemont – La Petite-Patrie), 30 seconds from Métro Beaubien",
+  businessHoursText: "9AM–9PM, 7 days",
+  businessHoursStart: 9,
+  businessHoursEnd: 21,
+  businessInfo:
+    "SubSell is an independent used & refurbished phone shop in Montréal, open since 2017, at 757 Rue Beaubien Est " +
+    "(Rosemont – La Petite-Patrie), 30 seconds on foot from Métro Beaubien (orange line). Open 7 days a week, " +
+    "9 AM to 9 PM, no appointment needed. Bilingual French/English. Free street parking; bus 18 stops in front. " +
+    "Every phone we sell is unlocked, tested on 30+ points, and comes with a 6-month SubSell warranty plus " +
+    "accessories (charger, case, screen protector already installed). 7-day exchange for another model of equal " +
+    "or higher value. Reserving a phone is free with no deposit — nothing is paid online; the buyer sees the exact " +
+    "phone, tests it with us (screen, battery, cameras, Face ID, network) and pays in person only once satisfied. " +
+    "We also BUY used phones and pay cash the same day (or instant Interac e-Transfer) — never store credit, never " +
+    "gift cards. Trade-ins welcome, including cross-brand (e.g. Samsung → iPhone): the old phone's value comes off " +
+    "the price and the buyer pays only the difference. We also buy Samsung Galaxy, iPads, MacBooks, Apple Watch and " +
+    "game consoles; iCloud-locked phones cannot be bought, and government photo ID is required on every purchase. " +
+    "1,500+ Google reviews at 4.9/5. Contact by phone or WhatsApp: 438-258-7895 (only if the buyer asks for it).",
+  demoVideoUrls: [
+    {
+      name: "Video_iPhone.mp4",
+      url: "https://tcqunihripihroseswgy.supabase.co/storage/v1/object/public/subsell-videos/3983744e-d577-4be1-8bd7-0a53f68071af/1780943854937-Video_iPhone.mp4",
+    },
+    {
+      name: "WhatsApp Video 2026-07-06.mp4",
+      url: "https://tcqunihripihroseswgy.supabase.co/storage/v1/object/public/subsell-videos/3983744e-d577-4be1-8bd7-0a53f68071af/1783399350640-WhatsApp_Video_2026-07-06_at_9.35.54_PM.mp4",
+    },
+    {
+      name: "WhatsApp Video 2025-09-30.mp4",
+      url: "https://tcqunihripihroseswgy.supabase.co/storage/v1/object/public/subsell-videos/3983744e-d577-4be1-8bd7-0a53f68071af/1780943846402-WhatsApp_Video_2025-09-30_at_3.20.32_PM.mp4",
+    },
+  ],
+};
+
 const LOG = (...a) => console.log("[SubSell-BG]", ...a);
 
 /* ---------------- settings ---------------- */
@@ -706,6 +765,32 @@ async function healWipedAccount(mine, stamp) {
   } catch (e) { return { ok: false, error: e.message }; }
 }
 
+// (v0.21.62) Put the shipped starter setup into an account that holds nothing, so
+// a machine that knows only an email and a password comes up working. Same two
+// safety rules as the heal: once per row stamp, and re-read the row immediately
+// before writing so whoever gets there first is the only one that writes.
+async function seedEmptyAccount(stamp) {
+  try {
+    if (configWeight(SEED_CONFIG) < 20) return { ok: false, skipped: "this build ships no starter setup" };
+    const seen = await new Promise((r) => chrome.storage.local.get(["cloudSeededStamp"], (x) => r(x && x.cloudSeededStamp)));
+    if (seen && seen === stamp) return { ok: false, skipped: "already seeded this one" };
+    await new Promise((r) => chrome.storage.local.set({ cloudSeededStamp: stamp }, () => { void chrome.runtime.lastError; r(); }));
+    const live = await cloudLiveConfig();
+    if (live && configWeight(live) >= 20) return { ok: false, skipped: "another machine filled it first" };
+    const cfg = Object.assign({}, SEED_CONFIG);
+    delete cfg.enabled; // on/off stays per machine
+    const out = await cloudPush(cfg);
+    if (out && out.ok) {
+      await new Promise((r) =>
+        chrome.storage.local.set({ cloudSeeded: { at: Date.now(), stamp, keys: Object.keys(cfg).length } }, () => { void chrome.runtime.lastError; r(); })
+      );
+      LOG("the account was empty — put the shipped starter setup into it (", Object.keys(cfg).length, "keys)");
+      return { ok: true, keys: Object.keys(cfg).length };
+    }
+    return out || { ok: false, error: "push failed" };
+  } catch (e) { return { ok: false, error: e.message }; }
+}
+
 // (v0.21.61) Every pull leaves a breadcrumb, because the Settings page used to say
 // "pulled your cloud settings" whatever came back — including nothing at all.
 async function cloudPull(force) {
@@ -801,10 +886,17 @@ async function cloudPullRaw(force) {
     }
     // A healthy row clears the alarm.
     await new Promise((r) => chrome.storage.local.remove(["cloudWipe"], () => { void chrome.runtime.lastError; r(); }));
-    if (!Object.keys(cfg).length) {
-      // The row exists but holds nothing. Say so instead of reporting a sync.
+
+    // (v0.21.62) The account holds nothing worth having and neither does this
+    // machine — the state a fresh install lands in once the settings were lost
+    // everywhere. Applying the emptiness would only reproduce the blank form, so
+    // put the shipped starter setup into the account instead and let the sync
+    // carry it. Covers an untouched row ({}) and one overwritten with blanks.
+    if (incoming < 20) {
       await new Promise((r) => chrome.storage.local.set({ cloudUpdatedAt: stamp }, () => { void chrome.runtime.lastError; r(); }));
-      return { ok: true, empty: true, rowBlank: true };
+      const seeded = await seedEmptyAccount(stamp);
+      if (seeded && seeded.ok) return { ok: true, seeded: true, keys: seeded.keys };
+      return { ok: true, empty: true, rowBlank: !Object.keys(cfg).length, seedError: seeded && (seeded.error || seeded.skipped) };
     }
     await new Promise((r) =>
       chrome.storage.local.set({ cloudConfig: cfg, cloudConfigAt: Date.now(), cloudUpdatedAt: stamp }, r)
@@ -868,7 +960,7 @@ async function cloudStatus() {
   const auth = await getCloudAuth();
   const { url, key } = await getCloudCreds();
   const extra = await new Promise((r) =>
-    chrome.storage.local.get(["cloudConfigAt", "supabaseUrl", "supabaseAnonKey", "lastPull", "cloudWipe"], (x) => r(x || {}))
+    chrome.storage.local.get(["cloudConfigAt", "supabaseUrl", "supabaseAnonKey", "lastPull", "cloudWipe", "cloudSeeded"], (x) => r(x || {}))
   );
   return {
     ok: true,
@@ -880,6 +972,7 @@ async function cloudStatus() {
     storedCreds: !!(extra.supabaseUrl && extra.supabaseAnonKey),
     lastPull: extra.lastPull || null,   // (v0.21.61) what actually came back
     wipe: extra.cloudWipe || null,      // (v0.21.61) the account was found emptied
+    seeded: extra.cloudSeeded || null,  // (v0.21.62) an empty account was filled from the build
   };
 }
 

@@ -461,6 +461,42 @@
       URL.revokeObjectURL(url);
     });
   }
+  if ($("importConfig")) {
+    // (v0.21.62) There was an Export and no Import, so the one backup a machine
+    // could make was a file nothing could read back in. Once the account had been
+    // emptied and the machines reinstalled, that missing half was the difference
+    // between a two-minute recovery and no recovery at all.
+    $("importConfig").addEventListener("click", () => {
+      const input = document.createElement("input");
+      input.type = "file";
+      input.accept = "application/json";
+      input.addEventListener("change", () => {
+        const file = input.files && input.files[0];
+        if (!file) return;
+        const reader = new FileReader();
+        reader.onload = () => {
+          let data;
+          try { data = JSON.parse(reader.result); } catch (e) { alert("That file is not valid JSON: " + e.message); return; }
+          if (!data || typeof data !== "object" || Array.isArray(data)) { alert("That file does not hold a settings object."); return; }
+          delete data.enabled; // on/off stays per machine
+          const keys = Object.keys(data).length;
+          if (!confirm("Load " + keys + " settings from " + file.name + "?\n\nThis fills the form on this computer. Nothing is sent anywhere until you press Save.")) return;
+          settings = Object.assign({}, DEFAULTS, data);
+          settings.listings = settings.listings || [];
+          settings.followUps = settings.followUps || [];
+          settings.videos = settings.videos || [];
+          fieldsToForm();
+          renderListings();
+          renderFollowUps();
+          renderVideos();
+          renderCentralVideos();
+          $("savedMsg").textContent = "Loaded " + keys + " settings from the file — press Save to send them to every computer.";
+        };
+        reader.readAsText(file);
+      });
+      input.click();
+    });
+  }
   loadRemoteConfig();
 
   /* ----- cloud sync (Supabase web app) ----- */
