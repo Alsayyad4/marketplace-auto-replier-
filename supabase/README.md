@@ -87,3 +87,12 @@ Paste that URL into the extension (Settings → General → **Remote config URL*
 - **Zero extension changes**: this uses the extension's existing "Remote config URL"
   feature, which fetches the JSON on startup and every ~10 min and applies it as the
   top settings source.
+
+## Config safety (v0.21.61)
+
+Run `config-safety.sql` once in the SQL editor, after `schema.sql`. It adds
+`subsell_config_history` (what each write replaced, 20 deep, readable only by the
+owner) and a BEFORE UPDATE trigger that refuses to blank `apiKey`, `model`,
+`businessInfo` or `instructions`. The extension refuses the same writes, but this
+holds for every client at once — including machines still running an older build,
+and the dashboard.

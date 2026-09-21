@@ -399,9 +399,15 @@
   function save() {
     formToFields();
     // Synced across all computers on the same Google account (via background).
-    chrome.runtime.sendMessage({ type: "SAVE_SETTINGS", settings }, () => {
-      $("savedMsg").textContent = "Saved ✓ (syncs to your other computers)";
-      setTimeout(() => ($("savedMsg").textContent = ""), 2500);
+    chrome.runtime.sendMessage({ type: "SAVE_SETTINGS", settings }, (r) => {
+      // (v0.21.61) When the guard folds values back into a save that would have
+      // cleared them, say so — a silent repair is how you find out months later.
+      const rep = (r && r.repaired) || [];
+      $("savedMsg").textContent = rep.length
+        ? "Saved ✓ — kept " + rep.length + " field(s) a blank form would have cleared (" +
+          rep.slice(0, 3).join(", ") + (rep.length > 3 ? "…" : "") + ")"
+        : "Saved ✓ (syncs to your other computers)";
+      setTimeout(() => ($("savedMsg").textContent = ""), rep.length ? 6000 : 2500);
     });
   }
   $("save").addEventListener("click", save);
@@ -482,36 +488,101 @@
    * This machine may still hold a good copy in Chrome sync or in its own saved
    * settings; offer the richest one back with one click. */
   let restoreCandidates = [];
+  function describeCopy(b) {
+    const bits = [];
+    if (b.has.apiKey) bits.push("API key");
+    if (b.has.businessInfo || b.has.instructions) bits.push("teaching");
+    if (b.has.listings) bits.push(b.has.listings + " listing(s)");
+    if (b.has.demoVideoUrls) bits.push(b.has.demoVideoUrls + " video(s)");
+    if (b.has.coaching) bits.push(b.has.coaching + " coaching note(s)");
+    return b.from + (b.at ? " · " + fmtWhen(b.at) : "") + (bits.length ? " · " + bits.join(", ") : " · empty");
+  }
   function checkForWipe() {
     chrome.runtime.sendMessage({ type: "CONFIG_BACKUPS" }, (r) => {
       if (chrome.runtime.lastError || !r || !r.ok) return;
       restoreCandidates = r.backups || [];
       const best = restoreCandidates[0];
-      // "Empty" = what is live now is far poorer than something we still hold.
-      const looksWiped = r.currentWeight < 20 || (best && best.weight > r.currentWeight * 2);
+      // (v0.21.61) The copies this machine holds are listed whether or not anything
+      // looks wrong. The old box appeared only when a heuristic fired, so on the
+      // machine actually in front of the operator there was no way to ask for a
+      // restore at all — the recovery existed and could not be reached.
+      const pick = $("restorePick");
+      if (pick) {
+        pick.innerHTML = "";
+        restoreCandidates.forEach((b, i) => {
+          const o = document.createElement("option");
+          o.value = String(i);
+          o.textContent = describeCopy(b);
+          pick.appendChild(o);
+        });
+        pick.style.display = restoreCandidates.length > 1 ? "" : "none";
+      }
+      const link = $("restoreOpenLink");
+      if (link) link.style.display = restoreCandidates.length ? "" : "none";
+      if ($("restoreCfg")) $("restoreCfg").style.display = restoreCandidates.length ? "" : "none";
+
+      // Why the box is showing matters: "the account is empty" and "this computer
+      // is behind" need different words and different actions from the operator.
+      chrome.runtime.sendMessage({ type: "CLOUD_STATUS" }, (s) => {
+        const box = $("wipeWarn");
+        if (!box) return;
+        const lastPull = (s && s.lastPull) || null;
+        const refused = !!(s && s.wipe);
+        const accountEmpty = !!(lastPull && lastPull.ok && lastPull.empty);
+        const poor = r.currentWeight < 20 || (best && best.weight > r.currentWeight * 2);
+        if (!(refused || accountEmpty || (poor && best))) { box.style.display = "none"; return; }
+        let title, detail;
+        if (refused) {
+          title = "⚠️ The shared account came back empty — this computer kept your settings.";
+          detail =
+            " Another computer saved a blank form over them. Nothing was lost here, and this computer has put them back in the account;" +
+            " every other computer picks them up within about a minute.";
+        } else if (accountEmpty) {
+          title = "⚠️ The shared account has no settings saved in it.";
+          detail = best
+            ? " This computer still holds a fuller copy. Restoring puts it back here and in the account, so every other computer gets it within about a minute."
+            : " This computer holds no copy either. Restore from a computer whose bot still works, or type the settings in here and press Save.";
+        } else {
+          title = "⚠️ Your saved settings look empty.";
+          const bits = [];
+          if (best.has.apiKey) bits.push("the API key");
+          if (best.has.businessInfo || best.has.instructions) bits.push("your business teaching");
+          if (best.has.listings) bits.push(best.has.listings + " listing(s)");
+          if (best.has.demoVideoUrls) bits.push(best.has.demoVideoUrls + " demo video(s)");
+          if (best.has.coaching) bits.push(best.has.coaching + " coaching note(s)");
+          detail =
+            " This computer still has a fuller copy in " + best.from +
+            (bits.length ? ", including " + bits.join(", ") : "") +
+            ". Restoring puts it back here and on every other computer within about a minute.";
+        }
+        if ($("wipeTitle")) $("wipeTitle").textContent = title;
+        $("wipeDetail").textContent = detail;
+        box.style.display = "";
+      });
+    });
+  }
+  if ($("restoreOpenLink")) {
+    $("restoreOpenLink").addEventListener("click", (e) => {
+      e.preventDefault();
       const box = $("wipeWarn");
       if (!box) return;
-      if (!looksWiped || !best) { box.style.display = "none"; return; }
-      const bits = [];
-      if (best.has.apiKey) bits.push("the API key");
-      if (best.has.businessInfo || best.has.instructions) bits.push("your business teaching");
-      if (best.has.listings) bits.push(best.has.listings + " listing(s)");
-      if (best.has.demoVideoUrls) bits.push(best.has.demoVideoUrls + " demo video(s)");
-      if (best.has.coaching) bits.push(best.has.coaching + " coaching note(s)");
-      $("wipeDetail").textContent =
-        " This computer still has a fuller copy in " + best.from +
-        (bits.length ? ", including " + bits.join(", ") : "") +
-        ". Restoring puts it back here and on every other computer within about a minute.";
-      box.style.display = "";
+      if (box.style.display === "none" || !box.style.display) {
+        if ($("wipeTitle")) $("wipeTitle").textContent = "Earlier copies of your settings on this computer";
+        $("wipeDetail").textContent =
+          " Pick one and restore it. It is put back here and in the shared account, so every other computer gets it within about a minute.";
+        box.style.display = "";
+      } else box.style.display = "none";
     });
   }
   if ($("restoreCfg")) {
     $("restoreCfg").addEventListener("click", () => {
       if (!restoreCandidates.length) return;
-      const b = restoreCandidates[0];
+      const idx = Math.max(0, Number(($("restorePick") && $("restorePick").value) || 0) || 0);
+      const b = restoreCandidates[idx];
+      if (!b) return;
       if (!confirm("Restore the settings from " + b.from + "?\n\nThis replaces what is saved in the cloud, so every computer gets it within about a minute.")) return;
       $("restoreMsg").textContent = "Restoring…";
-      chrome.runtime.sendMessage({ type: "CONFIG_RESTORE", index: 0 }, (r) => {
+      chrome.runtime.sendMessage({ type: "CONFIG_RESTORE", index: idx }, (r) => {
         if (chrome.runtime.lastError || !r || !r.ok) {
           $("restoreMsg").textContent = "Failed: " + ((r && r.error) || (chrome.runtime.lastError && chrome.runtime.lastError.message) || "?");
           return;
@@ -566,7 +637,19 @@
               return;
             }
             $("cloudPassword").value = "";
-            $("cloudMsg").textContent = "Logged in ✓ — pulled your cloud settings.";
+            // (v0.21.61) Say what came back. This line used to read "pulled your
+            // cloud settings" even when the account was empty, which is how a wiped
+            // account managed to look like a healthy login with a blank form.
+            const p = r.pull || {};
+            $("cloudMsg").textContent = p.wiped
+              ? "Logged in ✓ — the account was empty, so this computer's settings were put back."
+              : p.empty
+              ? "Logged in ✓ — but the account has no settings saved in it."
+              : p.keys
+              ? "Logged in ✓ — pulled " + p.keys + " settings from your account."
+              : p.unchanged
+              ? "Logged in ✓ — already up to date."
+              : "Logged in ✓.";
             refreshCloudStatus();
             load(); // re-read merged settings (cloud now wins) into the form
           }
@@ -592,10 +675,18 @@
           $("cloudMsg").textContent = "Error: " + chrome.runtime.lastError.message;
           return;
         }
-        $("cloudMsg").textContent =
-          r && r.ok ? (r.empty ? "No cloud config saved yet." : "Synced ✓") : "Failed: " + (r && r.error);
+        $("cloudMsg").textContent = !r || !r.ok
+          ? "Failed: " + (r && r.error)
+          : r.wiped
+          ? "The account came back empty — kept this computer's settings and put them back."
+          : r.empty
+          ? "No settings are saved in the account yet."
+          : r.unchanged
+          ? "Already up to date ✓"
+          : "Synced ✓ (" + (r.keys || 0) + " settings)";
         refreshCloudStatus();
         load();
+        checkForWipe();
       });
     });
   }

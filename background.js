@@ -208,6 +208,21 @@ function configWeight(c) {
   for (const k of CFG_LIST_KEYS) if (Array.isArray(c[k]) && c[k].length) w += 5 * Math.min(c[k].length, 4);
   return w;
 }
+// (v0.21.61) What a WIPE looks like, as opposed to an edit. Weight alone could not
+// tell them apart: an operator who deletes four listings on purpose loses weight
+// too, and a guard that fights real edits gets switched off. A wipe has a
+// signature — the two things nobody clears while still using the account: the API
+// key, and the teaching. Judge on that, and a deliberate trim passes untouched.
+function looksLikeWipe(incoming, held) {
+  const blank = (c, k) => !String((c && c[k]) == null ? "" : c[k]).trim();
+  const has = (c, k) => !blank(c, k);
+  if (!incoming || !held) return false;
+  const lostKey = blank(incoming, "apiKey") && has(held, "apiKey");
+  const lostTeaching =
+    blank(incoming, "businessInfo") && blank(incoming, "instructions") &&
+    (has(held, "businessInfo") || has(held, "instructions"));
+  return lostKey || lostTeaching;
+}
 function getConfigBackups() {
   return new Promise((r) => chrome.storage.local.get([CFG_BACKUP_KEY], (x) => r((x && x[CFG_BACKUP_KEY]) || [])));
 }
@@ -233,7 +248,7 @@ async function bankConfig(cfg, from) {
 // Chrome sync is the important one right now: it is written on every Save from
 // the options page and is NOT touched when the cloud row is overwritten, so on a
 // machine that saved before the wipe it still holds the real settings.
-async function scanConfigSources() {
+async function scanConfigSources(opts) {
   const out = [];
   const add = (config, from, at) => {
     if (!config || typeof config !== "object") return;
@@ -241,6 +256,15 @@ async function scanConfigSources() {
     if (weight < 20) return;
     out.push({ from, at: at || 0, weight, config });
   };
+  // (v0.21.61) The account row itself, read live. Everything below is what THIS
+  // machine happens to remember, so the guard was blind on a machine that had
+  // nothing of its own — a fresh install, or one that had only ever pulled. Those
+  // are exactly the machines that published a blank form over everyone's settings.
+  if (opts && opts.live) {
+    try {
+      if (typeof cloudLiveConfig === "function") add(await cloudLiveConfig(), "the account in the cloud", Date.now());
+    } catch (e) { /* offline — fall back to local copies */ }
+  }
   try { for (const b of await getConfigBackups()) add(b.config, b.from === "cloud" ? "backup (from the cloud)" : "backup (from a save)", b.at); } catch (e) { /* keep scanning */ }
   try {
     const sync = await new Promise((r) => syncedConfigRead((cfg, had) => r(had ? cfg : null)));
@@ -260,8 +284,8 @@ async function scanConfigSources() {
   return uniq;
 }
 
-async function bestKnownConfig() {
-  const all = await scanConfigSources();
+async function bestKnownConfig(opts) {
+  const all = await scanConfigSources(opts);
   return all.length ? all[0] : null;
 }
 // Stop a blank form from erasing the account. A normal edit (even clearing ONE
@@ -270,10 +294,10 @@ async function bestKnownConfig() {
 // high-value fields are folded back in rather than published as blanks.
 async function guardOutgoingConfig(cfg) {
   try {
-    const best = await bestKnownConfig();
+    const best = await bestKnownConfig({ live: true });
     if (!best || !best.config) return { config: cfg, repaired: [] };
     const now = configWeight(cfg);
-    if (now >= (best.weight || 0) * 0.5) return { config: cfg, repaired: [] };
+    if (now >= (best.weight || 0) * 0.5 && !looksLikeWipe(cfg, best.config)) return { config: cfg, repaired: [] };
     const out = Object.assign({}, cfg);
     const repaired = [];
     for (const k of CFG_TEXT_KEYS) {
@@ -606,7 +630,15 @@ async function cloudLogin(email, password) {
     const auth = authFromTokenResponse(data, null);
     await setCloudAuth(auth);
     const pulled = await cloudPull(true);
-    return { ok: true, email: auth.email, pulled: !!(pulled && pulled.ok) };
+    // (v0.21.61) `pulled` used to be true for a pull that brought back nothing at
+    // all, and the Settings page said "pulled your cloud settings" on the strength
+    // of it — so an empty account was indistinguishable from a healthy one.
+    return {
+      ok: true,
+      email: auth.email,
+      pulled: !!(pulled && pulled.ok && !pulled.empty),
+      pull: pulled || null,
+    };
   } catch (e) {
     return { ok: false, error: e.message };
   }
@@ -634,9 +666,61 @@ async function cloudValidAuth() {
   }
 }
 
+// (v0.21.61) The account's CURRENT config, read live. The outgoing guard uses it
+// so that a machine with nothing of its own still cannot publish a blank form over
+// the account, and the heal below uses it to check whether somebody has already
+// fixed the row before writing to it.
+async function cloudLiveConfig() {
+  try {
+    const auth = await cloudValidAuth();
+    if (!auth) return null;
+    const { url, key } = await getCloudCreds();
+    const resp = await fetch(url + "/rest/v1/subsell_configs?select=config", {
+      headers: { apikey: key, authorization: "Bearer " + auth.access_token },
+      cache: "no-store",
+    });
+    if (!resp.ok) return null;
+    const rows = await resp.json().catch(() => []);
+    if (!Array.isArray(rows) || !rows.length) return null;
+    return rows[0].config || null;
+  } catch (e) { return null; }
+}
+
+// (v0.21.61) An emptied account leaves every bot on every machine mute, and the
+// operator sees a settings page that looks like a fresh install. A machine that
+// still holds the real settings puts them back by itself — nobody has to notice.
+// Two rules keep the fleet from fighting over the row: once per wipe (keyed by the
+// row's stamp), and re-read the row immediately before writing, so whichever
+// machine gets there first is the only one that writes.
+async function healWipedAccount(mine, stamp) {
+  try {
+    if (!mine || !mine.config) return { ok: false, skipped: "nothing to put back" };
+    const seen = await new Promise((r) => chrome.storage.local.get(["cloudHealedStamp"], (x) => r(x && x.cloudHealedStamp)));
+    if (seen && seen === stamp) return { ok: false, skipped: "already healed this one" };
+    await new Promise((r) => chrome.storage.local.set({ cloudHealedStamp: stamp }, () => { void chrome.runtime.lastError; r(); }));
+    const live = await cloudLiveConfig();
+    if (live && !looksLikeWipe(live, mine.config)) return { ok: false, skipped: "already healthy" };
+    const out = await cloudPush(mine.config);
+    if (out && out.ok) LOG("put the account's settings back from", mine.from);
+    return out;
+  } catch (e) { return { ok: false, error: e.message }; }
+}
+
+// (v0.21.61) Every pull leaves a breadcrumb, because the Settings page used to say
+// "pulled your cloud settings" whatever came back — including nothing at all.
+async function cloudPull(force) {
+  const out = await cloudPullRaw(force);
+  try {
+    await new Promise((r) =>
+      chrome.storage.local.set({ lastPull: Object.assign({ at: Date.now() }, out) }, () => { void chrome.runtime.lastError; r(); })
+    );
+  } catch (e) { /* a breadcrumb must never break a sync */ }
+  return out;
+}
+
 // Pull the account's config row. Applies it as `cloudConfig` (the getSettings
 // source of truth) only when the server's updated_at changed, so polling is cheap.
-async function cloudPull(force) {
+async function cloudPullRaw(force) {
   const auth = await cloudValidAuth();
   if (!auth) {
     // Breadcrumb (state-change only): a cloudConfig exists but auth can no longer
@@ -694,6 +778,34 @@ async function cloudPull(force) {
     delete cfg.enabled; // on/off stays per machine
     const prev = await new Promise((r) => chrome.storage.local.get(["cloudUpdatedAt"], (x) => r(x.cloudUpdatedAt)));
     if (!force && prev && stamp && prev === stamp) return { ok: true, unchanged: true };
+
+    // (v0.21.61) INCOMING WIPE GUARD — the reason a wipe was unsurvivable.
+    // The pull applied whatever the row said, so ONE machine saving a blank form
+    // emptied every other machine's copy within about a minute, and with it the
+    // last thing a restore could have been built from. A pull may bring settings;
+    // it may not take them away. The copy this machine holds stays, the event is
+    // recorded for the Settings page, and the account is put back.
+    const mine = await bestKnownConfig(); // local only — never the row we just read
+    const held = (mine && mine.weight) || 0;
+    const incoming = configWeight(cfg);
+    if (held >= 20 && (looksLikeWipe(cfg, mine.config) || incoming < held * 0.5)) {
+      await new Promise((r) =>
+        chrome.storage.local.set(
+          { cloudUpdatedAt: stamp, cloudWipe: { at: Date.now(), stamp, incoming, held, from: mine.from } },
+          () => { void chrome.runtime.lastError; r(); }
+        )
+      );
+      LOG("REFUSED an emptied cloud config (worth", incoming, "against", held, "held) — this machine keeps its settings");
+      const healed = await healWipedAccount(mine, stamp);
+      return { ok: true, wiped: true, held, incoming, healed: !!(healed && healed.ok), healError: healed && (healed.error || healed.skipped) };
+    }
+    // A healthy row clears the alarm.
+    await new Promise((r) => chrome.storage.local.remove(["cloudWipe"], () => { void chrome.runtime.lastError; r(); }));
+    if (!Object.keys(cfg).length) {
+      // The row exists but holds nothing. Say so instead of reporting a sync.
+      await new Promise((r) => chrome.storage.local.set({ cloudUpdatedAt: stamp }, () => { void chrome.runtime.lastError; r(); }));
+      return { ok: true, empty: true, rowBlank: true };
+    }
     await new Promise((r) =>
       chrome.storage.local.set({ cloudConfig: cfg, cloudConfigAt: Date.now(), cloudUpdatedAt: stamp }, r)
     );
@@ -756,7 +868,7 @@ async function cloudStatus() {
   const auth = await getCloudAuth();
   const { url, key } = await getCloudCreds();
   const extra = await new Promise((r) =>
-    chrome.storage.local.get(["cloudConfigAt", "supabaseUrl", "supabaseAnonKey"], (x) => r(x || {}))
+    chrome.storage.local.get(["cloudConfigAt", "supabaseUrl", "supabaseAnonKey", "lastPull", "cloudWipe"], (x) => r(x || {}))
   );
   return {
     ok: true,
@@ -766,6 +878,8 @@ async function cloudStatus() {
     lastPullAt: extra.cloudConfigAt || null,
     url,
     storedCreds: !!(extra.supabaseUrl && extra.supabaseAnonKey),
+    lastPull: extra.lastPull || null,   // (v0.21.61) what actually came back
+    wipe: extra.cloudWipe || null,      // (v0.21.61) the account was found emptied
   };
 }
 
@@ -2765,15 +2879,23 @@ chrome.runtime.onMessage.addListener((msg, _sender, sendResponse) => {
           // when logged into the cloud, push there too (it's the source of truth,
           // so the change reaches every machine on the next ~1-min pull).
           const s = msg.settings || {};
-          await bankConfig(s, "save");
-          const ok = await syncedConfigWrite(s);
+          // (v0.21.61) Guard FIRST. The old order banked the raw form and wrote it
+          // straight to Chrome sync, and only cloudPush was defended — so a blank
+          // save destroyed this machine's own surviving copy, which is precisely
+          // what a restore reads, before anything got the chance to refuse it.
+          // "Run test" saves too, so the operator troubleshooting a dead bot was
+          // one button away from publishing the blank form to the whole account.
+          const guarded = await guardOutgoingConfig(s);
+          const safe = Object.assign({}, guarded.config);
+          await bankConfig(safe, "save");
+          const ok = await syncedConfigWrite(safe);
           let cloud = null;
           const auth = await getCloudAuth();
-          if (auth && auth.refresh_token) cloud = await cloudPush(s);
+          if (auth && auth.refresh_token) cloud = await cloudPush(safe);
           if (typeof s.enabled === "boolean") {
             await new Promise((r) => chrome.storage.local.set({ enabledLocal: s.enabled }, r));
           }
-          sendResponse({ ok, cloud });
+          sendResponse({ ok, cloud, repaired: guarded.repaired || [] });
           break;
         }
         case "SET_ENABLED": {

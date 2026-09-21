@@ -64,13 +64,17 @@
         <label>☁️ Cloud sync (web app) <span class="hint">the recommended way to run on many computers: log into ONE account; edit settings here or in the web dashboard and every connected Chrome updates within ~1 min — even across different Google accounts. Setup: cloud/SUPABASE_SETUP.md</span></label>
         <div id="cloudStatus" class="hint">Checking…</div>
         <div id="wipeWarn" class="hint" style="display:none;border:1px solid #c0392b;border-radius:8px;padding:10px;margin:8px 0;">
-          <b>⚠️ Your saved settings look empty.</b>
+          <b id="wipeTitle">⚠️ Your saved settings look empty.</b>
           <span id="wipeDetail"></span>
+          <div class="row" style="margin-top:8px;">
+            <select id="restorePick" style="max-width:100%;"></select>
+          </div>
           <div class="row" style="margin-top:8px;">
             <button id="restoreCfg" type="button" class="primary">↩ Restore my settings</button>
             <span id="restoreMsg" class="hint"></span>
           </div>
         </div>
+        <div class="hint" style="margin:4px 0;"><a href="#" id="restoreOpenLink" style="display:none;">↩ Earlier copies of my settings…</a></div>
         <div class="inline">
           <div><label>Supabase project URL <span class="hint">safe to share</span></label><input type="text" id="supabaseUrl" placeholder="https://xxxx.supabase.co" /></div>
           <div><label>Supabase anon (public) key <span class="hint">safe to share — NOT service_role</span></label><input type="password" id="supabaseAnonKey" placeholder="eyJ…" /></div>
