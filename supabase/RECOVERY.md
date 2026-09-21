@@ -25,9 +25,9 @@ website, subselltrade.ca) unless noted. Nothing is invented.
 | `businessName` | SubSell | `src/lib/schema.ts:45-46` |
 | `businessAddress` | 757 Rue Beaubien Est, Montréal (Rosemont – La Petite-Patrie), 30 s from Métro Beaubien | `src/lib/schema.ts:49-56`, `src/components/LocalSEOBlock.astro:37-38` |
 | `businessHoursText` | 9AM–9PM, 7 days | `src/lib/schema.ts:321-330` (`Mo-Su 09:00-21:00`); the 22h→21h correction is commit 5c36145 |
-| `businessHoursStart/End` | 9 / 21 | same — the extension's own default of 22 was wrong for this business |
-| `businessInfo` | see the constant | facts drawn from `src/data/faqs.json` (cash rule :43, trade-in :76, iCloud lock :241, price lock :273), `src/pages/en/returns.astro:55-94` (no-deposit reservation, inspect before paying, 7-day exchange, 6-month warranty), `public/llms-comprehensive.txt:26-28,169-176,188-196` (what they buy, ID + IMEI checks, reviews), `src/lib/schema.ts:48` (phone) |
-| `demoVideoUrls` | 3 clips | verified live in the public bucket `subsell-videos/<user id>/` — the two identically named 2025-09-30 WhatsApp files are duplicates (same size, uploaded 9 s apart), one is used |
+| `businessHoursStart/End` | *not seeded* (shipped 9–22 stays) | these are the REPLY GATE, not the closing time: a message outside the window is skipped, not queued (`withinBusinessHours`), so the wider window lets the bot still answer a 21:30 buyer — the prompt text says 9 PM |
+| `businessInfo` | see the constant | facts drawn from `src/data/faqs.json` (cash rule :43, trade-in :76, iCloud lock :241, parking :248/:252, price lock :273), `src/pages/en/returns.astro:55-94` (24 h no-deposit reservation, inspect before paying, 7-day exchange with its two conditions, 6-month warranty), `public/llms-comprehensive.txt:26-28,169-176,188-196` (what they buy, ID + IMEI checks, reviews). **No phone number** — the platform guard forbids writing one in chat and escalates `[HUMAN]` |
+| `demoVideoUrls` | 2 clips | verified live in the public bucket `subsell-videos/<user id>/`: the general iPhone demo + the newest (2026-07-06) upload. Every clip here goes to EVERY buyer in one chat, so the 2025-09-30 clip (uploaded twice, 9 s apart) is left for the owner to add back from the dashboard's Videos tab |
 
 ### Left out on purpose
 

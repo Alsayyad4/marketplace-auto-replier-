@@ -68,9 +68,13 @@ function build(opts) {
   const fetch = async (url, init) => {
     if (init && init.method === "POST") {
       calls.push++;
+      // `failPushes` = how many writes drop on the floor first (offline, a 5xx)
+      if (opts.failPushes && calls.push <= opts.failPushes) return { ok: false, status: 503, json: async () => ({ message: "unavailable" }), text: async () => "unavailable", clone() { return this; } };
       const sent = JSON.parse(init.body)[0];
       row.config = sent.config;
-      row.updated_at = new Date(Date.parse(row.updated_at) + 1000).toISOString();
+      // tests use both real ISO stamps and opaque ones like "stamp-B" — bump either
+      const t = Date.parse(row.updated_at);
+      row.updated_at = isNaN(t) ? row.updated_at + "+1" : new Date(t + 1000).toISOString();
       return json([{ updated_at: row.updated_at }]);
     }
     if (url.indexOf("select=updated_at") >= 0) return json([{ updated_at: row.updated_at }]);
@@ -246,6 +250,27 @@ function build(opts) {
   await m.api.cloudPull(true);
   ok(afterHeal === 2 && m.calls.push === 2,
      "a re-blanked row is healed once and then left alone — pushes=" + m.calls.push + " (no loop)");
+
+  /* 8 — (v0.21.64) a dropped write is RETRIED, not remembered as done. The stamp
+   *     used to be recorded before the push; one 503 then left a dead account dead
+   *     for ever, because nothing else ever changes a dead row's stamp. */
+  m = build({ row: WIPED, store: {}, seed: SEED, failPushes: 1 });
+  r = await m.api.cloudPull(true);
+  ok(!r.seeded && !m.store.cloudSeededStamp, "a seed whose write failed is not marked done — seeded=" + !!r.seeded);
+  m.store.cloudUpdatedAt = "force-a-refetch";
+  r = await m.api.cloudPull(true);
+  // cloudPush banks the outgoing config BEFORE the request, so after the failed
+  // write this machine already HOLDS the seed — the next pull may fix the account
+  // through either door (seed, or the wipe guard healing with the banked seed).
+  // What matters is that it is fixed, with exactly one more write.
+  ok((r.seeded === true || r.healed === true) && m.calls.push === 2 && m.row.config.businessInfo === REAL.businessInfo,
+     "…and the next pull fixes the account — via " + (r.seeded ? "seed" : "heal") + ", pushes=" + m.calls.push);
+  m = build({ row: WIPED, store: { __sync: REAL }, failPushes: 1 });
+  r = await m.api.cloudPull(true);
+  ok(r.wiped === true && !r.healed && !m.store.cloudHealedStamp, "a heal whose write failed is not marked done either");
+  m.store.cloudUpdatedAt = "force-a-refetch";
+  r = await m.api.cloudPull(true);
+  ok(r.healed === true && m.row.config.apiKey === REAL.apiKey, "…and the next pull heals it — pushes=" + m.calls.push);
 
   console.log(failed ? "\n" + failed + " CHECK(S) FAILED" : "\nall checks passed");
   process.exit(failed ? 1 : 0);

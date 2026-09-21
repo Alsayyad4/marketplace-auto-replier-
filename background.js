@@ -137,22 +137,32 @@ const SEED_CONFIG = {
   model: "claude-haiku-4-5",
   businessName: "SubSell",
   businessAddress: "757 Rue Beaubien Est, Montréal (Rosemont – La Petite-Patrie), 30 seconds from Métro Beaubien",
+  // The shop closes at 9 PM and the prompt says so. businessHoursStart/End are
+  // NOT here on purpose: they are the REPLY GATE (a message outside the window is
+  // skipped, not queued — withinBusinessHours), and the shipped 9–22 window lets
+  // the bot still answer a 21:30 buyer with "on est fermé là, passe demain".
   businessHoursText: "9AM–9PM, 7 days",
-  businessHoursStart: 9,
-  businessHoursEnd: 21,
+  // No phone number in here: the platform guard forbids writing one in chat
+  // (Facebook flags it) and a buyer who asks for one is escalated [HUMAN].
   businessInfo:
     "SubSell is an independent used & refurbished phone shop in Montréal, open since 2017, at 757 Rue Beaubien Est " +
     "(Rosemont – La Petite-Patrie), 30 seconds on foot from Métro Beaubien (orange line). Open 7 days a week, " +
-    "9 AM to 9 PM, no appointment needed. Bilingual French/English. Free street parking; bus 18 stops in front. " +
-    "Every phone we sell is unlocked, tested on 30+ points, and comes with a 6-month SubSell warranty plus " +
+    "9 AM to 9 PM, no appointment needed. Bilingual French/English. Metered parking on Beaubien Est, free " +
+    "side-street parking after 6 PM; bus 18 runs along Beaubien; bike rack in front. " +
+    "Every iPhone we sell is unlocked, tested on 30+ points, and comes with a 6-month SubSell warranty plus " +
     "accessories (charger, case, screen protector already installed). 7-day exchange for another model of equal " +
-    "or higher value. Reserving a phone is free with no deposit — nothing is paid online; the buyer sees the exact " +
-    "phone, tests it with us (screen, battery, cameras, Face ID, network) and pays in person only once satisfied. " +
-    "We also BUY used phones and pay cash the same day (or instant Interac e-Transfer) — never store credit, never " +
-    "gift cards. Trade-ins welcome, including cross-brand (e.g. Samsung → iPhone): the old phone's value comes off " +
-    "the price and the buyer pays only the difference. We also buy Samsung Galaxy, iPads, MacBooks, Apple Watch and " +
-    "game consoles; iCloud-locked phones cannot be bought, and government photo ID is required on every purchase. " +
-    "1,500+ Google reviews at 4.9/5. Contact by phone or WhatsApp: 438-258-7895 (only if the buyer asks for it).",
+    "or higher value (price difference payable, phone returned in the condition it was sold). A phone can be " +
+    "reserved free for 24 hours with no deposit through the website — nothing is paid online; the buyer sees the " +
+    "exact phone, tests it with us (screen, battery, cameras, Face ID, network) and pays in person only once " +
+    "satisfied. We also BUY used phones and pay cash the same day (or instant Interac e-Transfer) — when we buy or " +
+    "trade in, never store credit, never gift cards. Trade-ins welcome, including cross-brand (e.g. Samsung → " +
+    "iPhone): the old phone's value comes off the price and the buyer pays only the difference — and if their " +
+    "phone is worth more, we pay them the difference in cash. We also buy Samsung Galaxy, iPads, MacBooks, Apple " +
+    "Watch and game consoles; iCloud-locked phones cannot be bought, and government photo ID is required on every " +
+    "purchase. 1,500+ Google reviews at 4.9/5.",
+  // Two clips, not three: every clip here is sent to EVERY buyer, in one chat.
+  // The general iPhone demo plus the newest upload; the 2025-09-30 clip (which was
+  // uploaded twice, 9 s apart) can be added back from the dashboard's Videos tab.
   demoVideoUrls: [
     {
       name: "Video_iPhone.mp4",
@@ -161,10 +171,6 @@ const SEED_CONFIG = {
     {
       name: "WhatsApp Video 2026-07-06.mp4",
       url: "https://tcqunihripihroseswgy.supabase.co/storage/v1/object/public/subsell-videos/3983744e-d577-4be1-8bd7-0a53f68071af/1783399350640-WhatsApp_Video_2026-07-06_at_9.35.54_PM.mp4",
-    },
-    {
-      name: "WhatsApp Video 2025-09-30.mp4",
-      url: "https://tcqunihripihroseswgy.supabase.co/storage/v1/object/public/subsell-videos/3983744e-d577-4be1-8bd7-0a53f68071af/1780943846402-WhatsApp_Video_2025-09-30_at_3.20.32_PM.mp4",
     },
   ],
 };
@@ -756,11 +762,15 @@ async function healWipedAccount(mine, stamp) {
     if (!mine || !mine.config) return { ok: false, skipped: "nothing to put back" };
     const seen = await new Promise((r) => chrome.storage.local.get(["cloudHealedStamp"], (x) => r(x && x.cloudHealedStamp)));
     if (seen && seen === stamp) return { ok: false, skipped: "already healed this one" };
-    await new Promise((r) => chrome.storage.local.set({ cloudHealedStamp: stamp }, () => { void chrome.runtime.lastError; r(); }));
     const live = await cloudLiveConfig();
     if (live && !looksLikeWipe(live, mine.config)) return { ok: false, skipped: "already healthy" };
     const out = await cloudPush(mine.config);
-    if (out && out.ok) LOG("put the account's settings back from", mine.from);
+    if (out && out.ok) {
+      // (v0.21.64) recorded only after the write landed — a dropped request must
+      // be retried on the next pull, not remembered as done (same fix as the seed)
+      await new Promise((r) => chrome.storage.local.set({ cloudHealedStamp: stamp }, () => { void chrome.runtime.lastError; r(); }));
+      LOG("put the account's settings back from", mine.from);
+    }
     return out;
   } catch (e) { return { ok: false, error: e.message }; }
 }
@@ -784,9 +794,13 @@ async function seedEmptyAccount(stamp, current) {
     if (configWeight(SEED_CONFIG) < 20) return { ok: false, skipped: "this build ships no starter setup" };
     const seen = await new Promise((r) => chrome.storage.local.get(["cloudSeededStamp"], (x) => r(x && x.cloudSeededStamp)));
     if (seen && seen === stamp) return { ok: false, skipped: "already seeded this one" };
-    await new Promise((r) => chrome.storage.local.set({ cloudSeededStamp: stamp }, () => { void chrome.runtime.lastError; r(); }));
     const live = await cloudLiveConfig();
     if (live && !accountIsDead(live) && configWeight(live) >= 20) return { ok: false, skipped: "another machine filled it first" };
+    // (v0.21.64) The stamp is recorded only AFTER a successful write. Recording it
+    // first meant one dropped request (offline, a 5xx) marked the stamp "done" and
+    // the account stayed dead for as long as nothing else touched the row — which,
+    // on a dead account, is for ever.
+    const markDone = () => new Promise((r) => chrome.storage.local.set({ cloudSeededStamp: stamp }, () => { void chrome.runtime.lastError; r(); }));
     // (v0.21.63) MERGE, never replace: whatever real value the row still holds
     // (a price list, follow-ups, pacing the operator tuned) survives; the seed
     // only supplies what makes the account work again.
@@ -795,6 +809,7 @@ async function seedEmptyAccount(stamp, current) {
     delete cfg.enabled; // on/off stays per machine
     const out = await cloudPush(cfg);
     if (out && out.ok) {
+      await markDone();
       await new Promise((r) =>
         chrome.storage.local.set({ cloudSeeded: { at: Date.now(), stamp, keys: Object.keys(cfg).length } }, () => { void chrome.runtime.lastError; r(); })
       );
@@ -1197,7 +1212,7 @@ function buildSystemPrompt(settings) {
       lines.push("MASTER CLOSER PLAYBOOK — you are the best phone salesman in Montréal, and your ONLY win condition is the buyer physically walking into the shop. A chat that ends with a happy, informed buyer who never comes in is a LOST sale. Every message must move them ONE step closer to the door. Apply these techniques naturally, never robotically:");
       lines.push("1. FIRST REPLY sets the frame: answer their question in one short line, add ONE concrete reason the shop beats the ad (test it in your hands, several units to compare, trade-in evaluated on the spot), then ONE easy question. Never open with a wall of text.");
       lines.push("2. LADDER, don't leap: each message = short answer + ONE small easy question (which model? budget? trade-in?) — micro-commitments build momentum toward the visit.");
-      lines.push("3. ASSUME the visit: never ask IF they want to come — ask WHEN. Prefer the two-option close: \"Tu passes aujourd'hui ou demain?\" / \"Afternoon or evening better for you?\" Use the opening hours from the top as a convenience close: \"On est ouvert jusqu'à 22h — tu peux même passer à soir.\"");
+      lines.push("3. ASSUME the visit: never ask IF they want to come — ask WHEN. Prefer the two-option close: \"Tu passes aujourd'hui ou demain?\" / \"Afternoon or evening better for you?\" Use the opening hours from the top as a convenience close (\"On est ouvert jusqu'à <closing time> — tu peux même passer à soir.\") — take the time from the Hours line above, never invent one.");
       lines.push("4. INFORM, THEN CLOSE (no mystery — buyers only travel for something concrete): answer from the BUSINESS INFO, LISTINGS and STARTING PRICES above with total confidence — that info is exactly what you're allowed to tell them. Tell them what we carry (all iPhone models in liquidation + Samsungs), the relevant starting price when the price list has one, storage/condition when asked. Give the useful info FIRST, then close ON that info: \"S25 Ultra? Oui! En liquidation à partir de $X — pis le meilleur prix se fait en personne. Tu passes aujourd'hui ou demain?\" A model NOT covered by the info above: don't guess and don't invent — say stock rotates daily with new arrivals and invite them to see today's selection. Never promise to HOLD a specific unit, and never bring up reserving yourself — ONLY if the buyer asks to reserve/hold, warmly explain it's first come, first served (new arrivals daily = always something good, come soon).");
       lines.push("5. TRADE-IN HOOK, early: ask if they have a phone to trade — a trade-in can ONLY be evaluated in person, which makes the visit necessary instead of optional (and a newer phone can even mean CASH for them).");
       lines.push("6. VALUE STACK before any price talk: warranty, tested in front of them, several units to choose from, trade-in/cash, liquidation pricing. Sell the VISIT itself: see it, touch it, compare, walk out with it today.");
