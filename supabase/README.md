@@ -20,20 +20,20 @@ to `https://<project-ref>.supabase.co/auth/v1/callback`.
 ## 3) Deploy the config endpoint
 
 **Option A — Supabase dashboard (no CLI):** Dashboard → **Edge Functions** →
-**Create a function** → name it **`config`** → paste [`functions/config/index.ts`](./functions/config/index.ts)
+**Create a function** → name it **`subsell-config`** → paste [`functions/subsell-config/index.ts`](./functions/subsell-config/index.ts)
 → **Deploy**. Then open the function's settings and turn **Verify JWT = OFF**
 (required so the extension can fetch with no Authorization header).
 
 **Option B — CLI:**
 ```bash
-supabase functions deploy config --no-verify-jwt
+supabase functions deploy subsell-config --no-verify-jwt
 ```
 Either way, `SUPABASE_URL` and `SUPABASE_SERVICE_ROLE_KEY` are injected into the
 function automatically — no secrets to set.
 
 The per-user URL the operator pastes into the extension:
 ```
-https://<project-ref>.supabase.co/functions/v1/config?key=<config_key>
+https://<project-ref>.supabase.co/functions/v1/subsell-config?key=<config_key>
 ```
 
 ## 4) Web-app glue (already implemented in ../docs/app.js)
@@ -45,7 +45,7 @@ const supabase = createClient(SUPABASE_URL, SUPABASE_ANON_KEY);
 async function load() {
   const { data } = await supabase
     .from("subsell_configs").select("config, config_key").single();
-  const extensionUrl = `${SUPABASE_URL}/functions/v1/config?key=${data.config_key}`;
+  const extensionUrl = `${SUPABASE_URL}/functions/v1/subsell-config?key=${data.config_key}`;
   return { config: data.config, extensionUrl };
 }
 
@@ -65,9 +65,16 @@ async function regenerateKey() {
 }
 ```
 
+## 4b) Central demo videos (optional)
+To upload demo videos in the dashboard (instead of per-machine), run
+[`storage.sql`](./storage.sql) once in the SQL editor. It creates a **public**
+`subsell-videos` bucket (+ policies scoped only to it). The dashboard's Videos tab
+then uploads the mp4 to Storage; each extension downloads it and sends it as a
+**native** attachment (the buyer never sees a link).
+
 ## 5) Test the endpoint
 ```bash
-curl "https://<project-ref>.supabase.co/functions/v1/config?key=<config_key>"
+curl "https://<project-ref>.supabase.co/functions/v1/subsell-config?key=<config_key>"
 # -> should print the settings JSON
 ```
 Paste that URL into the extension (Settings → General → **Remote config URL** → Fetch now).
@@ -80,3 +87,12 @@ Paste that URL into the extension (Settings → General → **Remote config URL*
 - **Zero extension changes**: this uses the extension's existing "Remote config URL"
   feature, which fetches the JSON on startup and every ~10 min and applies it as the
   top settings source.
+
+## Config safety (v0.21.61)
+
+Run `config-safety.sql` once in the SQL editor, after `schema.sql`. It adds
+`subsell_config_history` (what each write replaced, 20 deep, readable only by the
+owner) and a BEFORE UPDATE trigger that refuses to blank `apiKey`, `model`,
+`businessInfo` or `instructions`. The extension refuses the same writes, but this
+holds for every client at once — including machines still running an older build,
+and the dashboard.
