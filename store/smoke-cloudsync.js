@@ -93,7 +93,7 @@ function build(opts) {
   const api = new Function(
     "chrome", "LOG", "fetch", "syncedConfigRead", "syncedConfigWrite", "readManagedConfig", "DEFAULTS", "SEED_CONFIG",
     block +
-    "; return { cloudPull, cloudPullRaw, cloudPush, cloudLiveConfig, healWipedAccount, seedEmptyAccount, looksLikeWipe, configWeight, getSettings, bestKnownConfig };"
+    "; return { cloudPull, cloudPullRaw, cloudPush, cloudLiveConfig, healWipedAccount, seedEmptyAccount, accountIsDead, looksLikeWipe, configWeight, getSettings, bestKnownConfig };"
   )(chrome, () => {}, fetch, syncedConfigRead, syncedConfigWrite, readManagedConfig, DEFAULTS, SEED_CONFIG);
   return { api, store, row, calls };
 }
@@ -163,7 +163,14 @@ function build(opts) {
 
   /* 7 — (v0.21.62) THE FIX THE OPERATOR ASKED FOR: email + password on a fresh
    *      install fills the account from the build, and every machine follows. */
-  const SEED = Object.assign({}, REAL, { apiKey: "" }); // what a build can ship: everything but the secret
+  // What a build can ship — the same SHAPE as the real SEED_CONFIG: identity,
+  // hours, teaching, videos. No secret, and no price list / follow-ups, so the
+  // merge test below can prove those survive from the row.
+  const SEED = {
+    model: REAL.model, businessName: REAL.businessName, businessAddress: REAL.businessAddress,
+    businessHoursText: "9AM–9PM, 7 days", businessInfo: REAL.businessInfo, instructions: REAL.instructions,
+    demoVideoUrls: REAL.demoVideoUrls,
+  };
   m = build({ row: WIPED, store: {}, seed: SEED });
   r = await m.api.cloudPull(true);
   ok(r.ok && r.seeded === true && r.keys > 0, "a fresh install logging into an EMPTY account seeds it from the build — seeded=" + r.seeded);
@@ -180,6 +187,25 @@ function build(opts) {
   m = build({ row: {}, store: {}, seed: SEED });
   r = await m.api.cloudPull(true);
   ok(r.seeded === true && m.calls.push === 1, "an account that was never set up seeds as well");
+
+  /* 7b' — (v0.21.63) THE ROW THE OPERATOR ACTUALLY HAD: the wipe blanked the key
+   *       and the teaching but left the shop name, address and hours — enough
+   *       weight (30) to look alive to v0.21.62, so it logged in to a name, an
+   *       address, and a bot that could not reply. Dead = no key AND no teaching.
+   *       And the seed MERGES: a price list still in the row must survive. */
+  const HALF_WIPED = Object.assign({}, WIPED, {
+    businessName: "SubSell", businessAddress: "757 Rue Beaubien E, Montréal", businessHoursText: "9AM–10PM, 7 days",
+    priceList: "iPhone 13 à partir de 195$", followUps: [{ name: "nudge", afterMinutes: 60, message: "still there?", enabled: true }],
+  });
+  m = build({ row: HALF_WIPED, store: {}, seed: SEED });
+  r = await m.api.cloudPull(true);
+  ok(r.seeded === true && m.calls.push === 1, "a row with a name and address but no key and no teaching is DEAD and gets seeded — seeded=" + r.seeded);
+  ok(m.row.config.businessInfo === REAL.businessInfo && m.row.config.businessHoursText === "9AM–9PM, 7 days",
+     "the seed supplies the teaching and corrects the hours (10PM → 9PM)");
+  ok(m.row.config.priceList === "iPhone 13 à partir de 195$" && m.row.config.followUps.length === 1,
+     "…and MERGES: the price list and follow-ups still in the row survive");
+  ok(m.api.accountIsDead(HALF_WIPED) === true && m.api.accountIsDead(REAL) === false && m.api.accountIsDead(Object.assign({}, REAL, { apiKey: "" })) === false,
+     "accountIsDead: no key + no teaching only; a keyless row that still teaches is NOT dead (it is a key problem, not a wipe)");
 
   /* 7c — the seed must NEVER overwrite real settings */
   m = build({ row: REAL, store: {}, seed: Object.assign({}, SEED, { businessInfo: "seed text" }) });

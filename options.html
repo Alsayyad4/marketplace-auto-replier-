@@ -52,6 +52,12 @@
       <section id="general" class="active">
         <label>Anthropic API key <span class="hint">stored locally in chrome.storage</span></label>
         <input type="password" id="apiKey" placeholder="sk-ant-…" />
+        <div id="apiKeyMissing" class="hint" style="display:none;border:1px solid #c0392b;border-radius:8px;padding:10px;margin:6px 0 10px;">
+          <b>⚠️ No API key — the bot cannot reply until one is pasted here.</b>
+          A key that was lost cannot be recovered by anyone: Anthropic shows a key exactly once, when it is created.
+          Make a new one at <a href="https://console.anthropic.com/settings/keys" target="_blank" rel="noopener">console.anthropic.com → API keys</a>,
+          paste it in the box above, press <b>Save</b>. Every computer has it within a minute, and from now on nothing can blank it again.
+        </div>
         <label>Model</label>
         <select id="model">
           <option value="claude-haiku-4-5">claude-haiku-4-5 (recommended — 3× cheaper)</option>

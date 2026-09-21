@@ -679,6 +679,8 @@
             const p = r.pull || {};
             $("cloudMsg").textContent = p.wiped
               ? "Logged in ✓ — the account was empty, so this computer's settings were put back."
+              : p.seeded
+              ? "Logged in ✓ — the account was empty, so it was set up again. Only the API key is missing — paste it above and press Save."
               : p.empty
               ? "Logged in ✓ — but the account has no settings saved in it."
               : p.keys
@@ -851,6 +853,8 @@
       renderVideos();
       renderCentralVideos();
       checkForWipe(); // (v0.21.60) offer a restore if the account looks emptied
+      // (v0.21.63) The one thing no recovery can supply. Say so where the box is.
+      if ($("apiKeyMissing")) $("apiKeyMissing").style.display = String(settings.apiKey || "").trim() ? "none" : "";
     });
   }
 

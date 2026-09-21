@@ -769,15 +769,29 @@ async function healWipedAccount(mine, stamp) {
 // a machine that knows only an email and a password comes up working. Same two
 // safety rules as the heal: once per row stamp, and re-read the row immediately
 // before writing so whoever gets there first is the only one that writes.
-async function seedEmptyAccount(stamp) {
+// (v0.21.63) "Dead" = the account cannot work at all: no API key AND nothing it
+// has been taught. The v0.21.62 trigger only looked at weight, and a wiped row
+// that still carried the shop name, address and hours weighed enough to look
+// alive — so the operator logged in and got exactly that: a name, an address,
+// and a bot that could neither reply nor say anything. A real, working account
+// always has a key, so this can never fire on one.
+function accountIsDead(cfg) {
+  const blank = (k) => !String((cfg && cfg[k]) == null ? "" : cfg[k]).trim();
+  return blank("apiKey") && blank("businessInfo") && blank("instructions");
+}
+async function seedEmptyAccount(stamp, current) {
   try {
     if (configWeight(SEED_CONFIG) < 20) return { ok: false, skipped: "this build ships no starter setup" };
     const seen = await new Promise((r) => chrome.storage.local.get(["cloudSeededStamp"], (x) => r(x && x.cloudSeededStamp)));
     if (seen && seen === stamp) return { ok: false, skipped: "already seeded this one" };
     await new Promise((r) => chrome.storage.local.set({ cloudSeededStamp: stamp }, () => { void chrome.runtime.lastError; r(); }));
     const live = await cloudLiveConfig();
-    if (live && configWeight(live) >= 20) return { ok: false, skipped: "another machine filled it first" };
-    const cfg = Object.assign({}, SEED_CONFIG);
+    if (live && !accountIsDead(live) && configWeight(live) >= 20) return { ok: false, skipped: "another machine filled it first" };
+    // (v0.21.63) MERGE, never replace: whatever real value the row still holds
+    // (a price list, follow-ups, pacing the operator tuned) survives; the seed
+    // only supplies what makes the account work again.
+    const base = (live && typeof live === "object") ? live : (current && typeof current === "object" ? current : {});
+    const cfg = Object.assign({}, base, SEED_CONFIG);
     delete cfg.enabled; // on/off stays per machine
     const out = await cloudPush(cfg);
     if (out && out.ok) {
@@ -892,11 +906,13 @@ async function cloudPullRaw(force) {
     // everywhere. Applying the emptiness would only reproduce the blank form, so
     // put the shipped starter setup into the account instead and let the sync
     // carry it. Covers an untouched row ({}) and one overwritten with blanks.
-    if (incoming < 20) {
+    // (v0.21.63) …or it weighs something but cannot work: no key, no teaching.
+    if (incoming < 20 || accountIsDead(cfg)) {
       await new Promise((r) => chrome.storage.local.set({ cloudUpdatedAt: stamp }, () => { void chrome.runtime.lastError; r(); }));
-      const seeded = await seedEmptyAccount(stamp);
+      const seeded = await seedEmptyAccount(stamp, cfg);
       if (seeded && seeded.ok) return { ok: true, seeded: true, keys: seeded.keys };
-      return { ok: true, empty: true, rowBlank: !Object.keys(cfg).length, seedError: seeded && (seeded.error || seeded.skipped) };
+      if (incoming < 20) return { ok: true, empty: true, rowBlank: !Object.keys(cfg).length, seedError: seeded && (seeded.error || seeded.skipped) };
+      // dead but not seedable (already seeded this stamp, or offline): apply it as-is below
     }
     await new Promise((r) =>
       chrome.storage.local.set({ cloudConfig: cfg, cloudConfigAt: Date.now(), cloudUpdatedAt: stamp }, r)
