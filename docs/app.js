@@ -336,7 +336,30 @@
     if ($("save")) $("save").disabled = false;
     renderAll();
     buildUrl();
+    // (v0.21.66) A DEAD account — no API key AND nothing it has been taught — is
+    // what a blank-form save leaves behind, and what the operator was looking at:
+    // blank Model, "No central videos yet", "No lessons yet". The extension puts
+    // the starter setup back on login, but this page is where the operator
+    // actually is, already signed in, so it does the same thing right here: merge
+    // the starter setup into whatever the row still holds and save it. Every
+    // machine has it within a minute. Nothing real is overwritten (a dead row has
+    // nothing real in the seeded fields), and a working account never qualifies.
+    if (accountIsDead(data.config || {}) && window.SUBSELL_SEED) {
+      settings = Object.assign({}, settings, window.SUBSELL_SEED);
+      renderAll();
+      const saved = await saveConfig(true);
+      flash(saved
+        ? "Your account was empty — the SubSell starter setup was put back (business info, hours, 2 demo videos). Only the API key is missing: paste it on the General tab."
+        : "Your account is empty and the starter setup could not be saved — press Save to cloud to retry.", !saved);
+      return;
+    }
     flash(data.config && Object.keys(data.config).length ? "Loaded from cloud." : "New config — fill it in and save.");
+  }
+  // Same rule as background.js accountIsDead(): a real, working account always has
+  // a key, so this can never fire on one.
+  function accountIsDead(cfg) {
+    const blank = (k) => !String((cfg && cfg[k]) == null ? "" : cfg[k]).trim();
+    return blank("apiKey") && blank("businessInfo") && blank("instructions");
   }
 
   async function saveConfig(quiet) {

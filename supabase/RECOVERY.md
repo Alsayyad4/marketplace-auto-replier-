@@ -6,13 +6,19 @@ deletes the extension's storage for good, sync included. There was nothing left
 anywhere to pull. This file records exactly what v0.21.62 puts back, where each
 fact came from, and what only the owner can still recover.
 
-## What v0.21.62 does on login
+## What v0.21.62+ does on login — and what the dashboard does on load
 
-A machine that logs into an **empty** account now fills it from `SEED_CONFIG`
-(top of `background.js`), then the normal one-minute sync carries it to every
-other machine. It fires only when the account holds nothing worth having AND the
-machine holds nothing better; it re-reads the row before writing; once per row
-stamp. Covered by `store/smoke-cloudsync.js` (§7).
+A machine that logs into a **dead** account (no API key AND no teaching — the
+state a blank-form save leaves) fills it from `SEED_CONFIG` (top of
+`background.js`), merging over whatever the row still holds, then the normal
+one-minute sync carries it to every other machine. It re-reads the row before
+writing; once per row stamp. Covered by `store/smoke-cloudsync.js` (§7, §8).
+
+The **dashboard** does the same thing on page load (`docs/seed.js` +
+`loadConfig` in `docs/app.js`), because that is where the operator is, already
+signed in, and the fleet may still be on builds that predate the seed. Reload
+the dashboard → the account is filled → every machine has it within a minute.
+`store/smoke-seed.js` keeps the two copies of the seed identical.
 
 ## What is in the seed, and where each fact comes from
 
