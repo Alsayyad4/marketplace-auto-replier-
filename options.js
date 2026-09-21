@@ -513,7 +513,24 @@
       } else if (!s.loggedIn) {
         el.textContent = "Connected to " + s.url + " — log in to start syncing.";
       } else {
-        el.textContent = "Logged in as " + (s.email || "?") + " · last synced " + fmtWhen(s.lastPullAt);
+        // (v0.21.65) The status line now says what the LAST PULL actually did. A
+        // pull that failed used to leave this line reading "logged in · last synced
+        // <old time>" — true, and useless: the operator saw a healthy login while
+        // nothing from the cloud was reaching the form.
+        const lp = s.lastPull || null;
+        let pull = "";
+        if (lp) {
+          pull = lp.ok === false ? "FAILED — " + (lp.error || "unknown error")
+            : lp.wiped ? "refused an emptied account, kept this computer's settings" + (lp.healed ? " and put them back" : "")
+            : lp.seeded ? "account was empty, set it up again (" + (lp.keys || 0) + " settings)"
+            : lp.empty ? "account has no settings in it"
+            : lp.unchanged ? "no change"
+            : lp.keys ? "applied " + lp.keys + " settings from the account"
+            : "ok";
+          pull = " · last pull " + fmtWhen(lp.at) + ": " + pull;
+        }
+        const acct = s.userId ? " · account " + String(s.userId).slice(0, 8) : "";
+        el.textContent = "Logged in as " + (s.email || "?") + acct + " · last synced " + fmtWhen(s.lastPullAt) + pull;
       }
     });
   }
@@ -687,6 +704,8 @@
               ? "Logged in ✓ — pulled " + p.keys + " settings from your account."
               : p.unchanged
               ? "Logged in ✓ — already up to date."
+              : p.ok === false
+              ? "Logged in ✓ — but your settings could NOT be pulled from the account: " + (p.error || "unknown error") + ". Nothing on this page came from the cloud."
               : "Logged in ✓.";
             refreshCloudStatus();
             load(); // re-read merged settings (cloud now wins) into the form

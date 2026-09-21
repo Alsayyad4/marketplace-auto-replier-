@@ -998,6 +998,7 @@ async function cloudStatus() {
     configured: !!(url && key),
     loggedIn: !!(auth && auth.refresh_token),
     email: (auth && auth.email) || null,
+    userId: (auth && auth.user_id) || null, // (v0.21.65) shown so it can be matched against the dashboard's account
     lastPullAt: extra.cloudConfigAt || null,
     url,
     storedCreds: !!(extra.supabaseUrl && extra.supabaseAnonKey),
