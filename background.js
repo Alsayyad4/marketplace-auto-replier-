@@ -186,6 +186,111 @@ function readManagedConfig() {
   });
 }
 
+// ---- (v0.21.60) LAST-KNOWN-GOOD CONFIG BACKUPS + A WIPE GUARD ----
+// The operator's account row came back EMPTY: the options page showed a blank API
+// key and a blank Model box, which is exactly what DEFAULTS look like when there
+// is no cloud config. One press of Save on that blank form would have written
+// apiKey:"" and model:"" over the account, on every machine, for good.
+// So: every time this machine SEES a config worth having, it banks a copy; and
+// nothing that looks like a wipe is allowed out without the good values folded
+// back in. All automatic — nobody has to notice, and nobody has to press anything.
+const CFG_BACKUP_KEY = "configBackups";
+const CFG_BACKUP_MAX = 5;
+// How much is this config actually worth? Key count alone would rate a config of
+// empty strings as highly as a full one, so the fields the operator would grieve
+// over are weighted explicitly.
+const CFG_TEXT_KEYS = ["apiKey", "model", "businessInfo", "instructions", "closerGoals", "priceList", "examples", "businessName", "businessAddress", "businessHoursText", "visitConfirmMessage"];
+const CFG_LIST_KEYS = ["listings", "followUps", "demoVideoUrls", "videos", "coaching"];
+function configWeight(c) {
+  if (!c || typeof c !== "object") return 0;
+  let w = 0;
+  for (const k of CFG_TEXT_KEYS) if (String(c[k] == null ? "" : c[k]).trim()) w += 10;
+  for (const k of CFG_LIST_KEYS) if (Array.isArray(c[k]) && c[k].length) w += 5 * Math.min(c[k].length, 4);
+  return w;
+}
+function getConfigBackups() {
+  return new Promise((r) => chrome.storage.local.get([CFG_BACKUP_KEY], (x) => r((x && x[CFG_BACKUP_KEY]) || [])));
+}
+// Bank a copy whenever a config worth having passes through. Keeps the best one
+// ever seen plus the most recent few, so a wipe can always be undone.
+async function bankConfig(cfg, from) {
+  try {
+    const w = configWeight(cfg);
+    if (w < 20) return; // a blank/defaults-only config is not worth keeping
+    const list = await getConfigBackups();
+    const top = list.length ? Math.max.apply(null, list.map((b) => b.weight || 0)) : 0;
+    const same = list[0] && JSON.stringify(list[0].config) === JSON.stringify(cfg);
+    if (same) return;
+    const next = [{ at: Date.now(), from, weight: w, config: cfg }].concat(list);
+    // always keep the heaviest copy ever seen, then the newest others
+    const best = next.slice().sort((a, b) => (b.weight || 0) - (a.weight || 0))[0];
+    const keep = [best].concat(next.filter((b) => b !== best)).slice(0, CFG_BACKUP_MAX);
+    await new Promise((r) => chrome.storage.local.set({ [CFG_BACKUP_KEY]: keep }, () => { void chrome.runtime.lastError; r(); }));
+    if (w > top) LOG("banked a new best config backup (weight", w, "from", from + ")");
+  } catch (e) { /* a backup must never break a sync */ }
+}
+// Every place on this machine a surviving copy could be, newest/best first.
+// Chrome sync is the important one right now: it is written on every Save from
+// the options page and is NOT touched when the cloud row is overwritten, so on a
+// machine that saved before the wipe it still holds the real settings.
+async function scanConfigSources() {
+  const out = [];
+  const add = (config, from, at) => {
+    if (!config || typeof config !== "object") return;
+    const weight = configWeight(config);
+    if (weight < 20) return;
+    out.push({ from, at: at || 0, weight, config });
+  };
+  try { for (const b of await getConfigBackups()) add(b.config, b.from === "cloud" ? "backup (from the cloud)" : "backup (from a save)", b.at); } catch (e) { /* keep scanning */ }
+  try {
+    const sync = await new Promise((r) => syncedConfigRead((cfg, had) => r(had ? cfg : null)));
+    add(sync, "this computer's Chrome sync", 0);
+  } catch (e) { /* keep scanning */ }
+  try {
+    const loc = await new Promise((r) => chrome.storage.local.get(["settings", "cloudConfig", "cloudConfigAt", "remoteConfig"], (x) => r(x || {})));
+    add(loc.settings, "this computer's saved settings", 0);
+    add(loc.cloudConfig, "the last config pulled from the cloud", loc.cloudConfigAt || 0);
+    add(loc.remoteConfig, "the remote config link", 0);
+  } catch (e) { /* keep scanning */ }
+  // richest first; ties broken by recency
+  out.sort((a, b) => (b.weight - a.weight) || (b.at - a.at));
+  // drop exact duplicates
+  const seen = new Set(), uniq = [];
+  for (const c of out) { const k = JSON.stringify(c.config); if (!seen.has(k)) { seen.add(k); uniq.push(c); } }
+  return uniq;
+}
+
+async function bestKnownConfig() {
+  const all = await scanConfigSources();
+  return all.length ? all[0] : null;
+}
+// Stop a blank form from erasing the account. A normal edit (even clearing ONE
+// field) keeps most of its weight and goes out untouched; a collapse to a
+// fraction of the best copy is treated as an accident, and the missing
+// high-value fields are folded back in rather than published as blanks.
+async function guardOutgoingConfig(cfg) {
+  try {
+    const best = await bestKnownConfig();
+    if (!best || !best.config) return { config: cfg, repaired: [] };
+    const now = configWeight(cfg);
+    if (now >= (best.weight || 0) * 0.5) return { config: cfg, repaired: [] };
+    const out = Object.assign({}, cfg);
+    const repaired = [];
+    for (const k of CFG_TEXT_KEYS) {
+      if (!String(out[k] == null ? "" : out[k]).trim() && String(best.config[k] == null ? "" : best.config[k]).trim()) {
+        out[k] = best.config[k]; repaired.push(k);
+      }
+    }
+    for (const k of CFG_LIST_KEYS) {
+      if ((!Array.isArray(out[k]) || !out[k].length) && Array.isArray(best.config[k]) && best.config[k].length) {
+        out[k] = best.config[k]; repaired.push(k);
+      }
+    }
+    if (repaired.length) LOG("BLOCKED a config wipe — kept", repaired.length, "field(s) from the backup of", new Date(best.at).toLocaleString());
+    return { config: out, repaired };
+  } catch (e) { return { config: cfg, repaired: [] }; }
+}
+
 function getSettings() {
   return new Promise((resolve) => {
     chrome.storage.local.get(["settings", "enabledLocal", "remoteConfig", "cloudConfig"], (res) => {
@@ -592,6 +697,7 @@ async function cloudPull(force) {
     await new Promise((r) =>
       chrome.storage.local.set({ cloudConfig: cfg, cloudConfigAt: Date.now(), cloudUpdatedAt: stamp }, r)
     );
+    await bankConfig(cfg, "cloud"); // (v0.21.60) last-known-good, so a wipe is undoable
     LOG("cloud config applied (", Object.keys(cfg).length, "keys)");
     return { ok: true, keys: Object.keys(cfg).length };
   } catch (e) {
@@ -604,8 +710,11 @@ async function cloudPush(config) {
   const auth = await cloudValidAuth();
   if (!auth) return { ok: false, error: "not logged in" };
   const { url, key } = await getCloudCreds();
-  const clean = Object.assign({}, config);
+  // (v0.21.60) never publish a wipe
+  const guarded = await guardOutgoingConfig(config);
+  const clean = Object.assign({}, guarded.config);
   delete clean.enabled;
+  await bankConfig(clean, "save");
   try {
     const resp = await fetch(`${url}/rest/v1/subsell_configs?on_conflict=user_id`, {
       method: "POST",
@@ -2595,10 +2704,58 @@ async function buildDiagnostic() {
 
 /* ---------------- message router ---------------- */
 
+// (v0.21.60) On every worker start, bank whatever good copy this machine still
+// holds — BEFORE anything can overwrite it. Machines that saved before the wipe
+// carry the real settings in Chrome sync; this is what makes them recoverable.
+(async () => {
+  try {
+    const all = await scanConfigSources();
+    if (all.length) await bankConfig(all[0].config, all[0].from.indexOf("cloud") >= 0 ? "cloud" : "save");
+  } catch (e) { /* never block startup */ }
+})();
+
 chrome.runtime.onMessage.addListener((msg, _sender, sendResponse) => {
   (async () => {
     try {
       switch (msg && msg.type) {
+        case "CONFIG_BACKUPS": {
+          // (v0.21.60) What good copies does THIS machine still hold? Used by the
+          // options page to offer a one-click restore after the account was wiped.
+          const list = await scanConfigSources();
+          const cur = await getSettings();
+          sendResponse({
+            ok: true,
+            currentWeight: configWeight(cur),
+            backups: list.map((b) => ({
+              at: b.at, from: b.from, weight: b.weight,
+              keys: Object.keys(b.config || {}).length,
+              has: {
+                apiKey: !!String((b.config || {}).apiKey || "").trim(),
+                businessInfo: !!String((b.config || {}).businessInfo || "").trim(),
+                instructions: !!String((b.config || {}).instructions || "").trim(),
+                listings: ((b.config || {}).listings || []).length,
+                demoVideoUrls: ((b.config || {}).demoVideoUrls || []).length,
+                coaching: ((b.config || {}).coaching || []).length,
+              },
+            })),
+          });
+          break;
+        }
+        case "CONFIG_RESTORE": {
+          // Put a banked copy back: local + Chrome sync + the cloud row, so every
+          // machine gets it within a minute.
+          const list = await scanConfigSources();
+          const pick = list[Number(msg.index) || 0];
+          if (!pick || !pick.config) { sendResponse({ ok: false, error: "no backup on this machine" }); break; }
+          const cfg = Object.assign({}, pick.config);
+          delete cfg.enabled;
+          await syncedConfigWrite(cfg);
+          await new Promise((r) => chrome.storage.local.set({ cloudConfig: cfg, cloudConfigAt: Date.now() }, r));
+          const auth = await getCloudAuth();
+          const pushed = auth && auth.refresh_token ? await cloudPush(cfg) : null;
+          sendResponse({ ok: true, restoredFrom: pick.at, weight: pick.weight, pushed: !!(pushed && pushed.ok), pushError: pushed && pushed.error });
+          break;
+        }
         case "GET_SETTINGS": {
           sendResponse({ ok: true, settings: await getSettings() });
           break;
@@ -2608,6 +2765,7 @@ chrome.runtime.onMessage.addListener((msg, _sender, sendResponse) => {
           // when logged into the cloud, push there too (it's the source of truth,
           // so the change reaches every machine on the next ~1-min pull).
           const s = msg.settings || {};
+          await bankConfig(s, "save");
           const ok = await syncedConfigWrite(s);
           let cloud = null;
           const auth = await getCloudAuth();

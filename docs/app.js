@@ -93,6 +93,10 @@
   // (v0.21.56) Fields whose REAL default text lives in the extension (background.js
   // DEFAULTS), not here. Blank means "use the extension's", never "".
   const EXT_DEFAULT_TEXT = { businessInfo: 1, instructions: 1, closerGoals: 1 };
+  // (v0.21.60) Blank must never ERASE these two either. A <select> set to a value
+  // it has no option for shows blank and reads back as "", and the API key box can
+  // simply look empty — and an empty model or key stops every bot on the account.
+  const NEVER_BLANK = { model: 1, apiKey: 1 };
   let settings = Object.assign({}, DEFAULTS); // working copy (preserves loaded advanced fields)
   // (v0.21.56) Nothing may be written to the shared row until THIS page has read
   // it. `settings` starts as pristine DEFAULTS and the Save handler is bound at
@@ -136,6 +140,7 @@
         const n = Number(el.value);
         if (el.value.trim() !== "" && Number.isFinite(n)) settings[id] = n;
       }
+      else if (NEVER_BLANK[id] && !String(el.value || "").trim()) { /* keep what is saved */ }
       else if (EXT_DEFAULT_TEXT[id] && !el.value.trim()) {
         // (v0.21.56) A BLANK box must not silently erase real instructions. These
         // three ship with substantial text in background.js DEFAULTS while this

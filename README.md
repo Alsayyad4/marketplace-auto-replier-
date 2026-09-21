@@ -6,6 +6,17 @@ French), built for used-iPhone sales in Montréal. Runs locally per Chrome profi
 by default; **optional cloud sync** turns it into a web app so one change reaches
 every computer.
 
+> ↩ **v0.21.60 — the account was not lost, it was emptied — and now there is a Restore button.**
+> The Settings screenshot said “logged in, last synced 3:40 AM”: the login was fine. What was empty was
+> the saved settings themselves, so every machine pulled a blank config and the page looked like a
+> fresh install. Worse, the Model box rendered blank (its saved value was missing from the dropdown),
+> so pressing Save would have published an empty model and an empty API key to every machine — which
+> stops the bot everywhere. The dropdown is fixed, a blank box can no longer erase a saved value,
+> every machine now keeps last-known-good snapshots, a collapse is repaired instead of published, and
+> **Settings offers “↩ Restore my settings”** when it spots a fuller copy on that computer — usually in
+> Chrome sync, which a cloud wipe never touches. **The demo-video link sender is deleted outright**;
+> video is sent as a file or not at all. 13 new tests, including that an ordinary edit is left alone.
+>
 > 🔐 **v0.21.59 — a key typed in years ago was locking machines out of the account.** Machines set
 > up before the project credentials were built into the extension were configured by typing a Supabase
 > URL and key into Settings. Those typed values persist through every update and always won over the

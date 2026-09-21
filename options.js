@@ -136,6 +136,12 @@
     for (const [id, kind] of FIELDS) {
       const el = $(id);
       if (!el) continue;
+      // (v0.21.60) A <select> shows BLANK when it is set to a value it has no
+      // option for, and then reads back as "". DEFAULTS.model was exactly such a
+      // value, so on any machine without a cloud config the Model box appeared
+      // empty — and pressing Save published model:"" to the whole account, which
+      // stops every bot replying. A blank choice never overwrites a real one.
+      if (id === "model" && kind === "value" && !String(el.value || "").trim()) continue;
       if (kind === "checked") settings[id] = el.checked;
       else if (kind === "number") {
         // A BLANK box must not silently save 0 (Number("") === 0) — that zeroed the
@@ -144,6 +150,9 @@
         const n = Number(el.value);
         if (el.value.trim() !== "" && Number.isFinite(n)) settings[id] = n;
       }
+      // (v0.21.60) Same rule for the API key. It is a password field, it is easy
+      // to see it empty and press Save, and an empty key stops every machine.
+      else if (id === "apiKey" && !String(el.value || "").trim()) { /* keep what is stored */ }
       else settings[id] = el.value;
     }
   }
@@ -466,6 +475,56 @@
       }
     });
   }
+  /* ----- (v0.21.60) recovery: put the settings back after an accidental wipe -----
+   * The account row can end up full of empty strings (a blank form saved over it).
+   * Every bot then runs on defaults with no API key, and the options page looks
+   * like a fresh install — which is what makes it feel as if the login is gone.
+   * This machine may still hold a good copy in Chrome sync or in its own saved
+   * settings; offer the richest one back with one click. */
+  let restoreCandidates = [];
+  function checkForWipe() {
+    chrome.runtime.sendMessage({ type: "CONFIG_BACKUPS" }, (r) => {
+      if (chrome.runtime.lastError || !r || !r.ok) return;
+      restoreCandidates = r.backups || [];
+      const best = restoreCandidates[0];
+      // "Empty" = what is live now is far poorer than something we still hold.
+      const looksWiped = r.currentWeight < 20 || (best && best.weight > r.currentWeight * 2);
+      const box = $("wipeWarn");
+      if (!box) return;
+      if (!looksWiped || !best) { box.style.display = "none"; return; }
+      const bits = [];
+      if (best.has.apiKey) bits.push("the API key");
+      if (best.has.businessInfo || best.has.instructions) bits.push("your business teaching");
+      if (best.has.listings) bits.push(best.has.listings + " listing(s)");
+      if (best.has.demoVideoUrls) bits.push(best.has.demoVideoUrls + " demo video(s)");
+      if (best.has.coaching) bits.push(best.has.coaching + " coaching note(s)");
+      $("wipeDetail").textContent =
+        " This computer still has a fuller copy in " + best.from +
+        (bits.length ? ", including " + bits.join(", ") : "") +
+        ". Restoring puts it back here and on every other computer within about a minute.";
+      box.style.display = "";
+    });
+  }
+  if ($("restoreCfg")) {
+    $("restoreCfg").addEventListener("click", () => {
+      if (!restoreCandidates.length) return;
+      const b = restoreCandidates[0];
+      if (!confirm("Restore the settings from " + b.from + "?\n\nThis replaces what is saved in the cloud, so every computer gets it within about a minute.")) return;
+      $("restoreMsg").textContent = "Restoring…";
+      chrome.runtime.sendMessage({ type: "CONFIG_RESTORE", index: 0 }, (r) => {
+        if (chrome.runtime.lastError || !r || !r.ok) {
+          $("restoreMsg").textContent = "Failed: " + ((r && r.error) || (chrome.runtime.lastError && chrome.runtime.lastError.message) || "?");
+          return;
+        }
+        $("restoreMsg").textContent = r.pushed
+          ? "Restored ✓ — every computer updates within a minute."
+          : "Restored on this computer ✓ (not sent to the cloud: " + (r.pushError || "not logged in") + ")";
+        load();
+        setTimeout(checkForWipe, 800);
+      });
+    });
+  }
+
   function persistCloudCreds(cb) {
     const url = ($("supabaseUrl").value || "").trim();
     let anonKey = ($("supabaseAnonKey").value || "").trim();
@@ -664,6 +723,7 @@
       renderFollowUps();
       renderVideos();
       renderCentralVideos();
+      checkForWipe(); // (v0.21.60) offer a restore if the account looks emptied
     });
   }
 

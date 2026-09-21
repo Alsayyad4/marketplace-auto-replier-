@@ -143,7 +143,6 @@
   }
   refreshPowerFlags();
   const VIDEO_BLIND_RETRIES_DEFAULT = 2; // native retries per chat before the link fallback (setting videoRetryMax)
-  const VIDEO_LINK_TEXT_DEFAULT = "Voici la vidéo démo 🎥 (demo video) {link}";
   let lastHandled = {}; // threadId -> the buyer message we last replied to (persisted)
   // threadId -> how many TEXT replies the bot has sent in this whole conversation.
   // This is the hard per-conversation reply cap (maxRepliesPerConvo). Counted ONLY on a
@@ -2755,75 +2754,18 @@
         clearVideoPending(id);
         if (sidebarKey && sidebarKey !== id) clearVideoPending(sidebarKey);
       };
-      // (v0.21.47) LINK FALLBACK: when native attach keeps failing, the buyer still
-      // gets the demo — as a link typed through the proven text path. Only on an
-      // empty, draft-free composer with nothing staged; never twice (the mark).
-      const sendVideoLink = async (s, centralList) => {
-        try {
-          if (!stillOnThread(id)) return false;
-          const c = findComposer();
-          if (!c || composerText(c)) return false; // never ship on top of an operator draft
-          if (trayRemoveBtns().length > 0) return false; // something IS staged — its own send path owns the composer
-          // (v0.21.54) The link is an OUTBOUND MESSAGE and must obey the same gates
-          // every other one does. typeAndSend is pure DOM — no business hours, no
-          // hourly/daily cap, no per-conversation reply cap — so without this the
-          // fallback could put a link into a buyer's chat at 03:00, or a 4th message
-          // into a chat capped at 3. Refusing here is safe: the chat keeps its
-          // retry state and the next in-hours visit sends the link instead.
-          const cap = Math.max(0, Number(lastSettings.maxRepliesPerConvo) || 0);
-          const usedReplies = Math.max(replyCounts[id] || 0, adoptedAlias[id] != null ? (replyCounts[adoptedAlias[id]] || 0) : 0);
-          if (cap > 0 && usedReplies >= cap) { vstat("link fallback held — this chat is at its reply cap (" + usedReplies + "/" + cap + ")"); return "held"; }
-          const stL = await ask({ type: "GET_STATUS" });
-          if (stL && stL.ok) {
-            if (stL.withinHours === false) { vstat("link fallback held — outside business hours"); return "held"; }
-            if (stL.hourlyCap && stL.hourCount >= stL.hourlyCap) { vstat("link fallback held — hourly cap reached"); return "held"; }
-            const dCapL = stL.fullDailyCap != null ? stL.fullDailyCap : stL.dailyCap;
-            if (dCapL && stL.dayCount >= dCapL) { vstat("link fallback held — daily cap reached"); return "held"; }
-          }
-          // (v0.21.56) FOUR HARD GUARDS. Shipped in .47 as "no buyer is left without
-          // the demo", this became the operator's "weird links and bad stuff": with
-          // every attach channel dead it fired in EVERY chat, posting the raw
-          // Supabase storage URL of a WhatsApp file — to buyers that looks exactly
-          // like phishing, and a dozen identical links across one inbox is what
-          // Marketplace spam detection is built to catch. Worse, it contradicted the
-          // bot's OWN platform-safety rule ("NEVER write any external link/URL"),
-          // because it types through the DOM and never passes Claude.
-          // (a) The safety rule wins. If links are forbidden for the model, they are
-          //     forbidden for us — the two settings silently disagreed and the unsafe
-          //     one won.
-          if (lastSettings.offPlatformGuard !== false) {
-            vstat("link fallback skipped \u2014 off-platform guard is ON (no links may be posted)");
-            return false;
-          }
-          // (b) NEVER the first thing a buyer sees. A bare link into a chat we have
-          //     never spoken in is textbook spam-bot behaviour; the diagnostic showed
-          //     rows with replies=0 whose only message was the link.
-          if (usedReplies < 1) {
-            vstat("link fallback skipped \u2014 no real reply in this chat yet (a link must never be the first message)");
-            return false;
-          }
-          // (c) Only a link the operator deliberately set. Falling back to the raw
-          //     storage object URL is what produced
-          //     "tcqunihripihroseswgy.supabase.co/.../WhatsApp_Video_...mp4".
-          const link = String(s.videoLinkUrl || "").trim();
-          if (!/^https?:\/\//i.test(link)) {
-            vstat("link fallback skipped \u2014 no shareable link set (the raw storage URL is never sent)");
-            return false;
-          }
-          const tpl = String(s.videoLinkText || "").trim() || VIDEO_LINK_TEXT_DEFAULT;
-          const text = tpl.indexOf("{link}") !== -1 ? tpl.replace(/\{link\}/g, link) : tpl + " " + link;
-          const ok = await typeAndSend(c, text);
-          if (ok) rememberSent(text);
-          return ok;
-        } catch (e) { return false; }
-      };
+      // (v0.21.60) The demo-video LINK SENDER IS DELETED. It posted a raw storage
+      // URL into buyer chats — which reads as phishing, went into chats the bot had
+      // never spoken in, and contradicted the bot's own rule never to post a link.
+      // It only ever existed because we believed the native attach was failing, and
+      // it was not: the tray detector was blind (v0.21.58). Videos are sent as FILES
+      // or not at all. Do not reintroduce this.
       // (v0.21.47) NOTHING CONFIRMED in this chat ⇒ never a confirmed mark. Bounded
       // native retries (videoRetryMax, default 2): the mark is dropped, the chat is
       // paced by the short attach backoff and re-queued; every later visit checks
       // the chat for a video FIRST (chatAlreadyHasOurVideo), so a clip that DID land
-      // invisibly is re-marked, never re-sent. Past the cap: the link fallback
-      // (videoLinkFallback) and a terminal mark — the buyer is never left with nothing
-      // AND the chat is never spammed.
+      // invisibly is re-marked, never re-sent. Past the cap: a terminal mark and
+      // nothing else — no link is ever sent (v0.21.60), so a chat is never spammed.
       const zeroEvidenceExit = async (why, total) => {
         const maxTries = Math.max(0, Number(sCfg.videoRetryMax != null ? sCfg.videoRetryMax : VIDEO_BLIND_RETRIES_DEFAULT) || 0);
         const amZ = (await getLocal(["videoAttempts"])).videoAttempts || {};
@@ -2852,41 +2794,14 @@
         if (hooks && typeof hooks.onClipSent === "function") {
           try { await hooks.onClipSent(-1); } catch (e) { /* the reply path reports its own errors */ }
         }
-        let linked = false;
-        // (v0.21.58) THE LINK IS GONE. The operator asked for it plainly ("Video
-        // demo link remove.") after seeing it in buyer chats, and they are right:
-        // it posted a raw storage URL that reads as phishing, it fired in chats the
-        // bot had never spoken in, and it only ever existed because we believed the
-        // attach was failing — which it was not. Kept as unreachable code for one
-        // release so the shape of the terminal branch stays reviewable; delete it
-        // and sendVideoLink outright next time this file is opened.
-        if (false) {
-          const lr = await sendVideoLink(sCfg, central);
-          if (lr === "held") {
-            // (v0.21.54) the link was refused by a GATE (business hours / caps), not
-            // by this chat. Do not spend the terminal mark on it: leave the chat
-            // exactly where it is and let the next in-hours visit send the link, so a
-            // closed-hours drain cannot silently become "gave up, no video and no link".
-            if (dmZ[id] && dmZ[id].done && !dmZ[id].sent) delete dmZ[id];
-            amZ[id] = Object.assign({}, prev, { fails: (prev.fails || 0) + 1, failAt: Date.now(), why: "blind", blindTries: tries });
-            await setLocal({ videoSentThreads: dmZ, videoAttempts: amZ });
-            videoLocked.delete(id);
-            const qkH = sidebarKey || id;
-            if (qkH && videoPending[qkH] == null && videoPending[id] == null) { videoPending[qkH] = Date.now(); persistDedup(); }
-            setStatus({ lastAction: "demo video: link held (outside hours / cap) — will send later", currentThread: name });
-            return;
-          }
-          linked = !!lr;
-        }
         dmZ[id] = { done: true, at: Date.now(), owner: TAB_UID, sent: 0, resumeTotal: total, gaveUp: 1 };
-        if (linked) dmZ[id].link = 1;
         delete amZ[id];
         await setLocal({ videoSentThreads: dmZ, videoAttempts: amZ });
         videoLocked.add(id);
         clearPend();
-        vstat((linked ? "sent the demo video as a LINK to " : "⚠ gave up on native video for ") + (name || id) + " after " + tries + " tries" + (linked ? "" : " (link fallback off / no link)"));
-        setStatus({ lastAction: linked ? "demo video sent as a link ✓ (native attach failed)" : "video: gave up after " + tries + " tries", currentThread: name });
-        ask({ type: "LOG_EVENT", entry: { thread: name, threadId: id, buyer: "(demo video)", action: "video", reply: linked ? "demo video sent as a LINK (native attach failed " + tries + "×)" : "0/" + total + " demo videos — native attach failed " + tries + "×; link fallback off or no link" } });
+        vstat("⚠ gave up on the demo video for " + (name || id) + " after " + tries + " tries (a video is sent as a FILE or not at all)");
+        setStatus({ lastAction: "video: gave up after " + tries + " tries", currentThread: name });
+        ask({ type: "LOG_EVENT", entry: { thread: name, threadId: id, buyer: "(demo video)", action: "video", reply: "0/" + total + " demo videos — native attach failed " + tries + "× (no link is ever sent)" } });
         maybeRunVideoDoctor("gave-up");
       };
       // SYNCHRONOUS guard first (no awaits): if this instance already committed a video
