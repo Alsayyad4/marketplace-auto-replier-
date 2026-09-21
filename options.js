@@ -119,9 +119,8 @@
     ["demoVideoDelaySec", "number"],
     ["demoVideoBetweenSec", "number"],
     ["videoRetryMax", "number"],
-    ["videoLinkOptIn", "checked"],
-    ["videoLinkUrl", "value"],
-    ["videoLinkText", "value"],
+    // videoLinkOptIn / videoLinkUrl / videoLinkText: removed from the form. The
+    // demo is sent as a FILE or not at all (sender deleted in v0.21.60).
   ];
 
   function fieldsToForm() {

@@ -103,13 +103,10 @@ list. There is no second place to teach the bot.
   attach is retried (each time with a different attach channel first) when **nothing
   could be confirmed staged** — no preview tile and Messenger's own send control never
   left its empty state. `0` = no native retry.
-- `videoLinkOptIn` — bool (default `false`). **(v0.21.56)** The only switch that enables the link fallback. `videoLinkFallback` is legacy and ignored. Even when true the link is refused unless `offPlatformGuard` is false, the chat already has a real reply, and `videoLinkUrl` is set — the raw `demoVideoUrls` storage URL is never sent. See the HANDOFF entry for why.
-- `videoLinkFallback` — legacy, ignored since v0.21.56 (was: default `true`). (v0.21.47) After those retries, send the demo
-  as a **link** through the normal text path (the proven send), so the buyer still gets it.
-  The chat is then marked served (`link:1`) — never sent twice.
-- `videoLinkUrl` — string (default blank = the first central video's own URL).
-- `videoLinkText` — string (default blank = built-in `Voici la vidéo démo 🎥 (demo video) {link}`);
-  `{link}` is replaced by the URL.
+- `videoLinkOptIn` / `videoLinkFallback` / `videoLinkUrl` / `videoLinkText` — **REMOVED (v0.21.66).** The
+  demo is sent as a video FILE or not at all; the link sender was deleted in v0.21.60 and the owner asked
+  for the option itself to go ("sounds like a scam"). The keys survive in DEFAULTS only so stored configs
+  still parse; no form shows them and nothing reads them.
 - **Power features** — **(v0.21.53) these are NO LONGER web-app settings.** They moved to each
   machine's own `chrome.storage.local` (extension Settings → Videos), because v0.21.48-.50
   shipped `videoForeground: true` in the dashboard's DEFAULTS: an unrelated Save wrote a `true`

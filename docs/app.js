@@ -55,9 +55,11 @@
     demoVideoBetweenSec: 8,
     videoRetryMax: 2, // native attach retries per chat before the link fallback
     videoLinkFallback: true, // legacy, ignored since .56
-    videoLinkOptIn: false,   // the real switch: posting links is OFF unless deliberately turned on
-    videoLinkUrl: "", // blank = the first central video's URL
-    videoLinkText: "", // blank = built-in FR/EN line; {link} = the URL
+    // (v0.21.66) demo-link keys: kept ONLY so stored configs parse — no form, no
+    // reader, no link is ever sent. Mirrors background.js DEFAULTS.
+    videoLinkOptIn: false,
+    videoLinkUrl: "",
+    videoLinkText: "",
     // (v0.21.53) the four power switches moved OUT of the shared config: a stale
     // videoForeground:true in this row was grabbing the desktop on the whole fleet.
     // They are per-machine now (extension Settings -> Videos), never synced.
@@ -85,7 +87,10 @@
     ["businessInfo", "value"], ["instructions", "value"], ["examples", "value"],
     ["closerGoals", "value"], ["priceList", "value"], ["visitConfirmMessage", "value"],
     ["demoVideoDelaySec", "number"], ["demoVideoBetweenSec", "number"],
-    ["videoRetryMax", "number"], ["videoLinkOptIn", "checked"], ["videoLinkUrl", "value"], ["videoLinkText", "value"],
+    ["videoRetryMax", "number"],
+    // videoLinkOptIn / videoLinkUrl / videoLinkText: no field any more. The demo
+    // is sent as a FILE or not at all — the link sender was deleted in v0.21.60
+    // and the owner asked for the option itself to go ("sounds like a scam").
     ["smartFollowupEnabled", "checked"], ["smartFollowupMaxCount", "number"],
     ["smartFollowupQuietHours", "number"], ["smartFollowupGapHours", "number"],
   ];

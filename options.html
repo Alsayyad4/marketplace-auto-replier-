@@ -256,16 +256,13 @@
                     <div class="hint">Videos are sent instantly, all together in one message, the moment a buyer writes — no waiting, nothing to configure.</div>
         </div>
         <hr />
-        <label>🛟 When a video can't be attached natively <span class="hint">the bot retries a few times with different attach channels, then sends the demo as a LINK so the buyer still gets it. Same fields as the web app (fleet-wide).</span></label>
+        <div class="hint">The demo is sent as a <b>video file</b> in the chat, or not at all. The bot never posts a link to it — a link reads as a scam to buyers and Marketplace flags accounts for it.</div>
+        <div><label>Native attach retries per chat <span class="hint">extra tries when nothing could be confirmed attached; 0 = one attempt only (fleet-wide)</span></label><input type="number" id="videoRetryMax" min="0" max="10" /></div>
         <label>⚙️ Power features — THIS COMPUTER ONLY <span class="hint">all OFF by default, and no longer part of the shared web-app settings: a stale value left in that shared row used to arm every computer at once. Each of these makes this machine visibly do something — turn one on here only while you are watching this machine.</span></label>
         <label class="check"><input type="checkbox" id="videoForeground" /> Bring the Messenger window to the front while a video attaches, uploads and sends <span class="hint">focus is handed back afterwards</span></label>
         <label class="check"><input type="checkbox" id="videoPip" /> Open a small picture-in-picture window during a video set to keep the page awake <span class="hint">no click needed; a floating "SubSell" window appears for the set</span></label>
         <label class="check"><input type="checkbox" id="videoActivateTab" /> Switch an unfocused Chrome window to the Messenger tab</label>
         <label class="check"><input type="checkbox" id="videoTrustedChannels" /> Trusted input: real click on Messenger's attach button / real file drop / real Enter <span class="hint">⚠ on some Messenger builds this opens a real "Open file" dialog on the computer — leave OFF unless told otherwise</span></label>
-        <label class="check"><input type="checkbox" id="videoLinkOptIn" /> Send the demo as a LINK when the video will not attach <span class="hint">⚠️ off by default — posting links got the same storage URL into a dozen chats and reads as phishing to buyers; it also needs Off-platform guardrails OFF, a real reply already in the chat, and a proper shareable link set below</span></label>
-        <div><label>Native attach retries per chat before the link <span class="hint">0 = link right away</span></label><input type="number" id="videoRetryMax" min="0" max="10" /></div>
-        <div><label>Link to send <span class="hint">blank = the first central video's own URL</span></label><input type="text" id="videoLinkUrl" placeholder="https://…" /></div>
-        <div><label>Link message <span class="hint">{link} = the URL; blank = built-in FR/EN line</span></label><input type="text" id="videoLinkText" placeholder="Voici la vidéo démo 🎥 (demo video) {link}" /></div>
         <hr />
         <label>Video URL library <span class="hint">reference list only (not auto-sent)</span></label>
         <div class="row"><button id="addVideo">+ Add video</button></div>

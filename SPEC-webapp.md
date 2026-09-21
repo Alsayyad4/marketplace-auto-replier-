@@ -60,9 +60,7 @@ per-machine on/off).
 | `jitterSec` | number | 60 | Extra random 0–N s added to the delay. |
 | `listings` | array | [] | Inventory rows; included in the prompt. Each: `{title, model, storage, condition, price (number), videoUrl, available (bool)}`. |
 | `videoRetryMax` | number | 2 | (v0.21.47) Native attach retries per chat when nothing could be confirmed staged; `0` = none. |
-| `videoLinkFallback` | bool | true | (v0.21.47) After the retries, send the demo as a LINK via the text path (chat then marked served). |
-| `videoLinkUrl` | string | "" | Link to send; blank = the first `demoVideoUrls` entry's URL. |
-| `videoLinkText` | string | "" | Message carrying the link; `{link}` = the URL; blank = built-in FR/EN line. |
+| `videoLinkFallback` / `videoLinkOptIn` / `videoLinkUrl` / `videoLinkText` | — | — | **REMOVED (v0.21.66).** The demo is a video FILE or nothing; no link is ever sent, no form shows these, nothing reads them. Ignored if present in a stored config. |
 *(v0.21.53: `videoForeground`, `videoPip`, `videoActivateTab` and `videoTrustedChannels` were REMOVED from this config. They are per-machine `chrome.storage.local` flags now — a stale `true` in the shared row was arming the whole fleet. Any copies still present in a stored config are ignored by the extension.)*
 | `followUps` | array | [] | Follow-up nudges. Each: `{name, afterMinutes (number), message, enabled (bool)}`. After the bot replies, it arms a timer; if the buyer stays quiet that long it sends `message` once. |
 

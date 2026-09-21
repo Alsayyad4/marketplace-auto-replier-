@@ -142,7 +142,7 @@
     }));
   }
   refreshPowerFlags();
-  const VIDEO_BLIND_RETRIES_DEFAULT = 2; // native retries per chat before the link fallback (setting videoRetryMax)
+  const VIDEO_BLIND_RETRIES_DEFAULT = 2; // extra native attach tries per chat when nothing could be confirmed staged (setting videoRetryMax). There is NO link fallback: the demo is a video file or nothing (v0.21.60/.66).
   let lastHandled = {}; // threadId -> the buyer message we last replied to (persisted)
   // threadId -> how many TEXT replies the bot has sent in this whole conversation.
   // This is the hard per-conversation reply cap (maxRepliesPerConvo). Counted ONLY on a

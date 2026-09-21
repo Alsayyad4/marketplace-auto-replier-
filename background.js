@@ -86,12 +86,16 @@ const DEFAULTS = {
   // link fallback, and the fallback itself (the demo sent as a LINK through the
   // proven text path when no attach channel can stage a clip on that machine).
   videoRetryMax: 2, // 0 = no native retry (link right away when nothing attaches)
-  // (v0.21.56) The link fallback is OFF unless videoLinkOptIn is explicitly true.
-  // videoLinkFallback is kept only so old configs parse; it is no longer consulted.
-  videoLinkFallback: true, // legacy, ignored since .56
-  videoLinkOptIn: false,   // the real switch — and it requires offPlatformGuard:false too
-  videoLinkUrl: "", // blank = the first central clip's URL
-  videoLinkText: "", // blank = built-in FR/EN line; {link} is replaced by the URL
+  // (v0.21.66) THE DEMO LINK IS GONE. The sender was deleted in v0.21.60 (a raw
+  // storage URL in a buyer's chat reads as a scam and Marketplace flags accounts
+  // for it) and the owner asked for the option itself to be removed. These four
+  // keys exist ONLY so configs stored before then still parse. No form shows
+  // them and nothing reads them. Do not reintroduce a link path — the demo is
+  // sent as a video FILE or not at all.
+  videoLinkFallback: true,
+  videoLinkOptIn: false,
+  videoLinkUrl: "",
+  videoLinkText: "",
   // (v0.21.48) bring the Messenger window to the front while a video set attaches,
   // uploads and sends (Chrome defers media loading in a hidden tab), then hand
   // focus back. Off = never touch window focus (videos may then wait for a click).
@@ -2863,7 +2867,7 @@ async function buildDiagnostic() {
         const e = acs[k];
         return e ? k + ":" + (e.dispatched || 0) + "d/" + (e.tile || 0) + "t/" + (e.blind || 0) + "b/" + (e.none || 0) + "n/" + (e.unverified || 0) + "u" : k + ":-";
       }).join(" ") +
-      " retryMax=" + (settings.videoRetryMax != null ? settings.videoRetryMax : "?") + " linkFallback=" + (settings.videoLinkFallback === false ? "off" : "on") +
+      " retryMax=" + (settings.videoRetryMax != null ? settings.videoRetryMax : "?") +
       " dropRescue=" + (st.videoDropRescue === false ? "off" : ((am2.streak || 0) >= 2 ? "ARMED" : "standby")) +
       " tabActivated=" + (st.tabActivateN || 0) + (st.tabActivateAt ? "(" + ageM(st.tabActivateAt) + ")" : "") +
       " foreground=" + (st.videoForeground === true ? "ON(local)" : "off") + " fg=" + (st.fgN || 0) + (st.fgAt ? "(" + ageM(st.fgAt) + ")" : "") +
