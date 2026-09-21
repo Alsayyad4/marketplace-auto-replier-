@@ -6,6 +6,17 @@ French), built for used-iPhone sales in Montréal. Runs locally per Chrome profi
 by default; **optional cloud sync** turns it into a web app so one change reaches
 every computer.
 
+> 🔐 **v0.21.59 — a key typed in years ago was locking machines out of the account.** Machines set
+> up before the project credentials were built into the extension were configured by typing a Supabase
+> URL and key into Settings. Those typed values persist through every update and always won over the
+> key the build ships — so when the project moved to the new key format, the old typed key stopped
+> being accepted and those machines could no longer log in OR refresh. A machine that cannot refresh
+> keeps running a frozen copy of its settings, so dashboard teaching never reaches it again. The
+> shipped key was correct the whole time; it was simply never used. The extension now ignores an
+> old-style typed key for this project, and if any stored key is ever rejected it drops it and retries
+> with the built-in one automatically. Nobody has to touch a machine. 10 tests cover it, including
+> that a wrong password is never mistaken for a bad key.
+>
 > 👁 **v0.21.58 — the detector was blind; the attach was working all along.** A photo of a live
 > composer showed SEVEN clips staged in the attachment strip while every counter read zero. The cause
 > was one selector: it only recognised the × button if its label contained both “remove” *and*

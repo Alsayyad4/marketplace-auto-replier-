@@ -300,15 +300,85 @@ async function fetchRemoteConfig(auto) {
 const SUPABASE_URL = "https://tcqunihripihroseswgy.supabase.co"; // baked in: per-machine setup is just login
 const SUPABASE_ANON_KEY = "sb_publishable_arlG6dkWL4H7PPW0xVMIUw_3CNzUc8R"; // publishable (public) key — safe to ship
 
+// (v0.21.59) A DEAD STORED KEY LOCKED MACHINES OUT OF THE ACCOUNT.
+// Before the project creds were baked in (792f1d7) the constants above were EMPTY,
+// so every machine was set up by TYPING a Supabase URL + anon key into Settings,
+// which saved them in chrome.storage.local. Those survive every self-update, and
+// this function preferred them over the constants — so the correct key this build
+// ships was never used on any machine set up back then. When the project moved to
+// the new publishable-key system the typed legacy JWT stopped being accepted, and
+// those machines could no longer log in OR refresh: cloudValidAuth returned null,
+// the config froze, and the dashboard teaching never reached them ("can't log in
+// the account where all the AI and all teaching is saved").
+// Two defences, both automatic — this fleet does no manual steps:
+//   (a) a stored key in the LEGACY JWT shape, for the SAME project we ship, is
+//       ignored outright in favour of the shipped publishable key;
+//   (b) credsFallback is set when a live request proves the stored key is rejected
+//       (see cloudAuthFetch), and from then on the shipped key is used.
+// A machine genuinely pointed at a DIFFERENT project keeps its own creds: both
+// rules require the stored URL to be absent or the same project as the shipped one.
+const LEGACY_JWT_KEY = /^eyJ/;
+const SHIPPED_KEY_IS_NEW = /^sb_(publishable|secret)_/.test(SUPABASE_ANON_KEY);
 function getCloudCreds() {
   return new Promise((resolve) => {
-    chrome.storage.local.get(["supabaseUrl", "supabaseAnonKey"], (r) => {
+    chrome.storage.local.get(["supabaseUrl", "supabaseAnonKey", "credsFallback"], (r) => {
+      const trim = (u) => String(u || "").replace(/\/+$/, "");
+      const sUrl = (r && r.supabaseUrl) || "";
+      let sKey = (r && r.supabaseAnonKey) || "";
+      const sameProject = !sUrl || trim(sUrl) === trim(SUPABASE_URL);
+      let dropped = "";
+      if (sKey && sameProject && SHIPPED_KEY_IS_NEW && LEGACY_JWT_KEY.test(sKey)) { sKey = ""; dropped = "legacy-jwt"; }
+      else if (sKey && sameProject && r && r.credsFallback) { sKey = ""; dropped = "rejected"; }
       resolve({
-        url: (((r && r.supabaseUrl) || SUPABASE_URL) || "").replace(/\/+$/, ""),
-        key: ((r && r.supabaseAnonKey) || SUPABASE_ANON_KEY) || "",
+        url: (trim(sUrl) || trim(SUPABASE_URL)) || "",
+        key: (sKey || SUPABASE_ANON_KEY) || "",
+        usingStored: !!sKey,
+        droppedStoredKey: dropped,
       });
     });
   });
+}
+
+// Auth request that heals itself: if the response says the API key is bad and this
+// machine was using a STORED key, remember that and retry once with the shipped
+// key. Every auth call goes through here, so login AND refresh both recover.
+// A REST response that rejects the API key is the same illness as a rejected auth
+// call — mark it so the very next getCloudCreds() switches to the shipped key.
+async function noteRestKeyRejection(resp, creds) {
+  try {
+    if (!creds || !creds.usingStored) return false;
+    if (resp.status !== 401 && resp.status !== 403) return false;
+    const txt = await resp.clone().text().catch(() => "");
+    if (!/api[ _-]?key/i.test(txt)) return false;
+    await new Promise((r) => chrome.storage.local.set({ credsFallback: Date.now() }, () => { void chrome.runtime.lastError; r(); }));
+    LOG("stored Supabase key rejected by the data API — switching to the shipped key");
+    return true;
+  } catch (e) { return false; }
+}
+function looksLikeBadApiKey(status, body) {
+  const t = JSON.stringify(body || "");
+  return (status === 401 || status === 403) && /api[ _-]?key/i.test(t);
+}
+async function cloudAuthFetch(path, payload) {
+  let creds = await getCloudCreds();
+  const once = async (c) => {
+    const resp = await fetch(c.url + path, {
+      method: "POST",
+      headers: { "content-type": "application/json", apikey: c.key },
+      body: JSON.stringify(payload),
+    });
+    const data = await resp.json().catch(() => ({}));
+    return { resp, data };
+  };
+  let out = await once(creds);
+  if (!out.resp.ok && creds.usingStored && looksLikeBadApiKey(out.resp.status, out.data)) {
+    // The typed key is dead. Stop using it — permanently, on this machine.
+    await new Promise((r) => chrome.storage.local.set({ credsFallback: Date.now() }, () => { void chrome.runtime.lastError; r(); }));
+    LOG("stored Supabase key rejected — falling back to the key shipped with this build");
+    creds = await getCloudCreds();
+    out = await once(creds);
+  }
+  return { resp: out.resp, data: out.data, creds };
 }
 
 /* ---------------- central activity log (mirror every sent message to the web app) ----
@@ -422,15 +492,10 @@ function authFromTokenResponse(data, prev) {
 }
 
 async function cloudLogin(email, password) {
-  const { url, key } = await getCloudCreds();
-  if (!url || !key) return { ok: false, error: "Set your Supabase URL + anon key first." };
+  const pre = await getCloudCreds();
+  if (!pre.url || !pre.key) return { ok: false, error: "Set your Supabase URL + anon key first." };
   try {
-    const resp = await fetch(`${url}/auth/v1/token?grant_type=password`, {
-      method: "POST",
-      headers: { "content-type": "application/json", apikey: key },
-      body: JSON.stringify({ email, password }),
-    });
-    const data = await resp.json().catch(() => ({}));
+    const { resp, data } = await cloudAuthFetch("/auth/v1/token?grant_type=password", { email, password });
     if (!resp.ok || !data.access_token)
       return { ok: false, error: data.error_description || data.msg || data.error || ("HTTP " + resp.status) };
     const auth = authFromTokenResponse(data, null);
@@ -443,13 +508,7 @@ async function cloudLogin(email, password) {
 }
 
 async function cloudRefresh(auth) {
-  const { url, key } = await getCloudCreds();
-  const resp = await fetch(`${url}/auth/v1/token?grant_type=refresh_token`, {
-    method: "POST",
-    headers: { "content-type": "application/json", apikey: key },
-    body: JSON.stringify({ refresh_token: auth.refresh_token }),
-  });
-  const data = await resp.json().catch(() => ({}));
+  const { resp, data } = await cloudAuthFetch("/auth/v1/token?grant_type=refresh_token", { refresh_token: auth.refresh_token });
   if (!resp.ok || !data.access_token) throw new Error(data.error_description || data.msg || "token refresh failed");
   const next = authFromTokenResponse(data, auth);
   await setCloudAuth(next);
@@ -492,7 +551,8 @@ async function cloudPull(force) {
     if (!chrome.runtime.lastError && x && x.cloudStale)
       chrome.storage.local.remove(["cloudStale"], () => void chrome.runtime.lastError);
   });
-  const { url, key } = await getCloudCreds();
+  const creds = await getCloudCreds();
+  const { url, key } = creds;
   try {
     if (!force) {
       // Stamp-only probe (~0.1KB) first: the full config row (which can be many
@@ -503,7 +563,10 @@ async function cloudPull(force) {
         headers: { apikey: key, authorization: "Bearer " + auth.access_token },
         cache: "no-store",
       });
-      if (!probe.ok) return { ok: false, error: "HTTP " + probe.status };
+      if (!probe.ok) {
+        const healed = await noteRestKeyRejection(probe, creds);
+        return { ok: false, error: "HTTP " + probe.status + (healed ? " (stale key dropped — retrying next cycle)" : "") };
+      }
       const probeRows = await probe.json().catch(() => []);
       if (!Array.isArray(probeRows) || !probeRows.length) return { ok: true, empty: true }; // nothing saved yet
       const probeStamp = probeRows[0].updated_at || "";
@@ -515,7 +578,10 @@ async function cloudPull(force) {
       headers: { apikey: key, authorization: "Bearer " + auth.access_token },
       cache: "no-store",
     });
-    if (!resp.ok) return { ok: false, error: "HTTP " + resp.status };
+    if (!resp.ok) {
+      const healed = await noteRestKeyRejection(resp, creds);
+      return { ok: false, error: "HTTP " + resp.status + (healed ? " (stale key dropped — retrying next cycle)" : "") };
+    }
     const rows = await resp.json().catch(() => []);
     if (!Array.isArray(rows) || !rows.length) return { ok: true, empty: true }; // nothing saved yet
     const cfg = rows[0].config || {};
@@ -2360,6 +2426,7 @@ async function buildDiagnostic() {
       [
         "enabledLocal", "remoteConfig", "remoteConfigAt", "remoteConfigUrl", "configKey",
         "cloudConfig", "cloudConfigAt", "cloudAuth", "cloudStale", "lastMirror", "debugTick",
+        "supabaseAnonKey", "supabaseUrl", "credsFallback",
         "videoSentThreads", "videoAttempts", "videoUrlFails", "waitingSince", "videoPending",
         "videoCatchUp", "autoCatchUp01213", "autoCatchUp01217", "videoEnabled", "demoVideos",
         "videoCache", "replyLog", "sudBase", "sudDirName", "sudLastCheck", "sudStatus", "cdpStats", "videoDisk", "winRestoreN", "winRestoreAt", "attachPref",
@@ -2382,6 +2449,13 @@ async function buildDiagnostic() {
   L.push("SubSell v" + ver + " · " + new Date(now).toISOString() + " · label: " + (await getMachineLabel()));
   L.push(
     "config: source=" + source +
+    // (v0.21.59) Which Supabase key is in play. A key TYPED into Settings years ago
+    // used to shadow the one shipped with the build, and when the project moved to
+    // publishable keys those machines silently lost the account.
+    " key=" + (!st.supabaseAnonKey ? "shipped"
+              : st.credsFallback ? "shipped(stale typed key dropped)"
+              : /^eyJ/.test(st.supabaseAnonKey) ? "shipped(ignoring legacy typed key)"
+              : "TYPED-on-this-machine") +
     " | cloud: login=" + (st.cloudAuth && st.cloudAuth.refresh_token ? "Y" : "n") +
     " age=" + ageM(st.cloudConfigAt) + " stale=" + (st.cloudStale ? "YES(" + ageM(st.cloudStale.at || st.cloudStale) + ")" : "n") +
     " | remote: host=" + host(st.remoteConfigUrl || "") + " age=" + ageM(st.remoteConfigAt) +

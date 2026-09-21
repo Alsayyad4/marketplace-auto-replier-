@@ -468,7 +468,17 @@
   }
   function persistCloudCreds(cb) {
     const url = ($("supabaseUrl").value || "").trim();
-    const anonKey = ($("supabaseAnonKey").value || "").trim();
+    let anonKey = ($("supabaseAnonKey").value || "").trim();
+    // (v0.21.59) Never re-save a legacy Supabase JWT. Machines set up before the
+    // project creds were baked into the build have one of these typed in, it is no
+    // longer accepted, and while it sat in storage it SHADOWED the working key that
+    // ships with the build — which is what locked those machines out of the account.
+    // The background now ignores such a key; do not write a fresh copy of it either.
+    if (/^eyJ/.test(anonKey)) {
+      anonKey = "";
+      if ($("supabaseAnonKey")) $("supabaseAnonKey").value = "";
+      if ($("cloudMsg")) $("cloudMsg").textContent = "Old-style key cleared — this build has the right one built in.";
+    }
     chrome.runtime.sendMessage({ type: "CLOUD_SET_CREDS", url, anonKey }, () => cb && cb());
   }
   if ($("saveCloudCreds")) {
@@ -533,7 +543,10 @@
   function loadCloud() {
     chrome.storage.local.get(["supabaseUrl", "supabaseAnonKey"], (r) => {
       if ($("supabaseUrl")) $("supabaseUrl").value = (r && r.supabaseUrl) || "";
-      if ($("supabaseAnonKey")) $("supabaseAnonKey").value = (r && r.supabaseAnonKey) || "";
+      // A legacy JWT here is ignored by the background (see getCloudCreds), so do
+      // not show it as though it were the key in use — it would only get re-saved.
+      const shown = (r && r.supabaseAnonKey) || "";
+      if ($("supabaseAnonKey")) $("supabaseAnonKey").value = /^eyJ/.test(shown) ? "" : shown;
       refreshCloudStatus();
     });
   }
