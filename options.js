@@ -809,7 +809,7 @@
    * cloud row by the v0.21.48-.50 dashboard armed the whole fleet at once and gave
    * the operator "crazy stuff on the computer" (PC-1zysp: fg=60 in 7 minutes). They
    * are per-machine local storage now, so arming one machine can never arm the rest. */
-  const POWER_KEYS = ["videoForeground", "videoPip", "videoTrustedChannels", "videoActivateTab"];
+  const POWER_KEYS = ["videoForeground", "videoPip", "videoTrustedChannels", "videoActivateTab", "videoActivationPulse"];
   chrome.storage.local.get(POWER_KEYS, (r) => {
     for (const k of POWER_KEYS) if ($(k)) $(k).checked = !!(r && r[k]);
   });
@@ -819,6 +819,15 @@
       const o = {};
       o[k] = $(k).checked;
       chrome.storage.local.set(o);
+    });
+  }
+  // (v0.21.67) the media prime is ON unless this machine turned it off (stored as
+  // false; absent = on). It plays a silent stream inside the page — nothing visible,
+  // no permission, no click — so it is the one video helper that ships on.
+  if ($("videoMediaPrime")) {
+    chrome.storage.local.get(["videoMediaPrime"], (r) => { $("videoMediaPrime").checked = !(r && r.videoMediaPrime === false); });
+    $("videoMediaPrime").addEventListener("change", () => {
+      chrome.storage.local.set({ videoMediaPrime: $("videoMediaPrime").checked ? true : false });
     });
   }
   if ($("videoDelaySec")) {

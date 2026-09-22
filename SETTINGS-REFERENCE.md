@@ -121,6 +121,15 @@ list. There is no second place to teach the bot.
     trusted Enter/Send. ⚠ On some Messenger builds the click opens a **real "Open file" dialog**
     on the computer and an uncaught drop opens the video in the tab — this is what the operator
     saw as "opening random files". Leave OFF unless a diagnostic shows the quiet channels stage nothing.
+  - `videoMediaPrime` — **default ON** (stored `false` = off; the one video helper that ships on,
+    v0.21.67): Chrome parks every media load of a page that is hidden and has never played media,
+    and Messenger decodes a clip before it stages it. Once per page load the bot probes that gate
+    (a 52-byte silent WAV) and, when parked, plays a silent MediaStream inside the page so the frame
+    counts as having played media — proven by re-probing. Nothing visible, no click, no dialog, no
+    window movement, no permission. 🩺 `gate=… primed=… prime=on|off(local)` on the attach line.
+  - `videoActivationPulse` — default OFF, an experiment: a key press the page ignores (F16, then
+    Shift) through the debugger before a clip is handed over. User activation is NOT what lifts the
+    media gate above; turn this on only when a diagnostic asks for it. 🩺 `pulse=off|ON(local)`.
 
 ## NOT web-managed (per-machine, stay in the extension)
 

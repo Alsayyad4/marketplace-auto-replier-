@@ -1788,7 +1788,7 @@ async function ensureVideoOnDisk(req) {
         const it = await dlItemFresh(hit.id);
         if (it && it.state === "complete" && it.exists !== false && it.filename) {
           if (hit.pending || hit.path !== it.filename) await save({ id: it.id, path: it.filename, size: it.fileSize || 0, at: Date.now() });
-          return { ok: true, path: it.filename, cached: true };
+          return { ok: true, path: it.filename, size: Math.max(0, it.fileSize || 0) || Math.max(0, hit.size || 0), cached: true }; // (v0.21.67) size: the reaction probe recognises OUR clip by it (fileSize is -1 when unknown)
         }
         if (it && it.state === "in_progress") {
           // STALL WATCHDOG (v0.21.41): a download that has not moved in 2 min (a
@@ -1819,7 +1819,7 @@ async function ensureVideoOnDisk(req) {
         return { ok: false, error: r.error || "no path after download" };
       }
       await save({ id: r.item.id, path: r.item.filename, size: r.item.fileSize || 0, at: Date.now() });
-      return { ok: true, path: r.item.filename };
+      return { ok: true, path: r.item.filename, size: Math.max(0, r.item.fileSize || 0) };
     })();
     diskInFlight[key] = p;
     try { return await p; } finally { delete diskInFlight[key]; }
@@ -2234,6 +2234,12 @@ async function cdpSetFiles(tabId, paths, channel) {
     // (v0.21.48) user activation first for the drop (a hidden tab's uploader does
     // not start without one; the chooser's own click provides it). (v0.21.51)
     // the quiet "input" channel clicks nothing at all.
+    // (v0.21.67) OPT-IN EXPERIMENT (local videoActivationPulse:true, read here in
+    // the worker so a stale content script cannot arm it): keys-only sticky
+    // activation inside this same debugger session — see cdpEnsureActivation.
+    // Off by default: activation is not a term of Chrome's media deferral; the
+    // media gate in content.js is the fix.
+    if (await pulseOptIn()) await recordAct(await cdpEnsureActivation(target, false));
     if (channel === "drop") await cdpActivationPulse(target);
     if (channel === "drop") return await cdpDrop(target, paths);
     if (channel === "chooser") return await cdpChooser(target, tabId, paths);
@@ -2440,23 +2446,81 @@ async function cdpActivationPulse(target) {
     return true;
   } catch (e) { return false; }
 }
-// (v0.21.50) Stand-alone activation for the content script's picture-in-picture
-// request: the composer click when it is safe, else a harmless Shift key press
-// (a keydown is an activation-triggering input too). Never the attach button
-// (it would open a real file dialog).
-async function cdpActivate(tabId) {
+// ---- (v0.21.67) STICKY USER ACTIVATION — an OPT-IN EXPERIMENT, keys only ----
+// PC-qwafy on .65: 261 hand-overs over five channels (Messenger's own picker caught
+// by the shim — fired=1 seen=1 —, the file API on a found persistent input, the
+// pure-DOM assignment, a trusted drop, a synthetic paste) and Messenger's own send
+// control never once left "send a like". The doctor ran with vis=hidden/focus: a
+// window that is fully occluded or on a disconnected remote session. On such a
+// page Chrome PARKS every media load until the tab is shown — unless the frame
+// has played media before (prerender::DeferMediaLoad, reached through
+// ChromeContentRendererClient::DeferMediaLoad on every desktop build; verified
+// against the source during the .67 review). Messenger decodes a clip (a <video>
+// on a blob: URL) before it adds the attachment, so every hand-over is accepted
+// and parked, nothing is staged, and the next channel hands over another copy.
+// USER ACTIVATION IS NOT A TERM OF THAT CONDITION — the fix is the media gate in
+// content.js (play a MediaStream once, so the frame "has played media"). This
+// ladder stays as an experiment for the one hypothesis left (an uploader gated on
+// a gesture): local videoActivationPulse:true. Keys only — a keydown of F16 (no
+// page and no browser shortcut is bound to it; it reaches whatever has focus and
+// does nothing), then Shift, read back after each through
+// navigator.userActivation.hasBeenActive. The composer-textbox click rung runs
+// only where a click was always made (the PiP path, allowClick). Never the attach
+// button.
+function pageUserActivation() {
+  try { return navigator.userActivation ? { been: !!navigator.userActivation.hasBeenActive, now: !!navigator.userActivation.isActive } : null; } catch (e) { return null; }
+}
+const pulseOptIn = () => new Promise((r) => { try { chrome.storage.local.get(["videoActivationPulse"], (x) => { void chrome.runtime.lastError; r(!!(x && x.videoActivationPulse === true)); }); } catch (e) { r(false); } });
+async function cdpEnsureActivation(target, allowClick) {
+  const read = async () => { try { return await pageEval(target, pageUserActivation); } catch (e) { return null; } };
+  const before = await read();
+  if (before && before.been) return { ok: true, how: "already", before: true };
+  const key = async (k) => {
+    try {
+      await cdpCmd(target, "Input.dispatchKeyEvent", Object.assign({ type: "keyDown" }, k), 3000);
+      await cdpCmd(target, "Input.dispatchKeyEvent", Object.assign({ type: "keyUp" }, k), 3000);
+    } catch (e) { /* forwarded anyway */ }
+    const r = await read();
+    return !!(r && r.been);
+  };
+  if (await key({ key: "F16", code: "F16", windowsVirtualKeyCode: 127, nativeVirtualKeyCode: 127 })) return { ok: true, how: "f16", before: false };
+  if (await key({ key: "Shift", code: "ShiftLeft", windowsVirtualKeyCode: 16, nativeVirtualKeyCode: 16, modifiers: 8 })) return { ok: true, how: "shift", before: false };
+  if (allowClick && (await cdpActivationPulse(target))) {
+    const r = await read();
+    if (!r) return { ok: true, how: "click?", before: false, keysFailed: true }; // no read-back on this Chrome — the click was delivered
+    if (r.been) return { ok: true, how: "click", before: false, keysFailed: true };
+  }
+  const after = await read();
+  return { ok: !!(after && after.been), how: "none", before: false, keysFailed: true, error: "no trusted input granted user activation" };
+}
+// Telemetry for the 🩺 fileapi line: act=N(age):how, and how often the page already had it.
+async function recordAct(act) {
+  try {
+    if (!act) return;
+    const st = await new Promise((r) => chrome.storage.local.get(["cdpStats"], (x) => r((x && x.cdpStats) || {})));
+    if (act.before) st.actHadN = (st.actHadN || 0) + 1;
+    else { st.actN = (st.actN || 0) + 1; st.actAt = Date.now(); st.actHow = String(act.how || "?").slice(0, 12); if (!act.ok) st.actFailN = (st.actFailN || 0) + 1; if (act.keysFailed) st.actKeysFailN = (st.actKeysFailN || 0) + 1; }
+    chrome.storage.local.set({ cdpStats: st }, () => void chrome.runtime.lastError);
+  } catch (e) { /* telemetry only */ }
+}
+// (v0.21.50) Stand-alone activation for the content script: the picture-in-picture
+// path (opts.force + opts.click — its own opt-in flag governs it, and it always
+// clicked the composer) and, since v0.21.67, the opt-in keys-only pulse before a
+// channel that needs no debugger. Never the attach button (a real file dialog).
+async function cdpActivate(tabId, opts) {
   if (!chrome.debugger) return { ok: false, error: "debugger API unavailable" };
   if (!tabId) return { ok: false, error: "no tab" };
+  const o = opts || {};
+  if (!o.force && !(await pulseOptIn())) return { ok: false, how: "off", error: "activation pulse is off on this machine (local videoActivationPulse)" };
   const target = { tabId };
   let attached = false;
   try {
     await new Promise((res, rej) => chrome.debugger.attach(target, "1.3", () => (chrome.runtime.lastError ? rej(new Error(chrome.runtime.lastError.message)) : res())));
     attached = true;
     await settleViewport(target);
-    if (await cdpActivationPulse(target)) return { ok: true, how: "click" };
-    await cdpCmd(target, "Input.dispatchKeyEvent", { type: "keyDown", key: "Shift", code: "ShiftLeft", windowsVirtualKeyCode: 16, modifiers: 8 }, 3000);
-    await cdpCmd(target, "Input.dispatchKeyEvent", { type: "keyUp", key: "Shift", code: "ShiftLeft", windowsVirtualKeyCode: 16 }, 3000);
-    return { ok: true, how: "key" };
+    const act = await cdpEnsureActivation(target, !!o.click);
+    await recordAct(act);
+    return act;
   } catch (e) {
     return { ok: false, error: String((e && e.message) || e) };
   } finally {
@@ -2500,12 +2564,31 @@ async function pageArmFileShim(blobUrl, name, mime, ms) {
       if (this.type === "file" && live()) {
         window.__subsellShimSeen++;
         try {
-          const dt = new DataTransfer();
-          dt.items.add(file);
-          this.files = dt.files;
-          this.dispatchEvent(new Event("input", { bubbles: true }));
-          this.dispatchEvent(new Event("change", { bubbles: true }));
-          window.__subsellShimFired++;
+          const inp = this;
+          // (v0.21.67) what Messenger clicked, for the 🩺: is its input in the
+          // document, does React own it, what does it accept?
+          let react = false;
+          try { react = Object.keys(inp).some((k) => k.indexOf("__reactProps") === 0 || k.indexOf("__reactEventHandlers") === 0); } catch (e) { /* page world */ }
+          window.__subsellShimInfo = { connected: !!inp.isConnected, react, accept: String((inp.getAttribute && inp.getAttribute("accept")) || ""), multiple: !!inp.multiple, filesRead: 0 };
+          // (v0.21.67) DELIVER LIKE A REAL DIALOG: asynchronously, after this
+          // click() has returned to Messenger. The events used to fire inside the
+          // click call itself — before a listener Messenger attaches right after
+          // calling click() could exist. A dialog never answers synchronously.
+          setTimeout(function () {
+            try {
+              const dt = new DataTransfer();
+              dt.items.add(file);
+              inp.files = dt.files;
+              // did Messenger's handler READ the files after our change event? The
+              // one fact that says "the event reached a handler" — counted for the 🩺.
+              try {
+                Object.defineProperty(inp, "files", { configurable: true, get() { try { window.__subsellShimInfo.filesRead = (window.__subsellShimInfo.filesRead || 0) + 1; } catch (x) { /* ignore */ } return dt.files; }, set(v) { try { delete inp.files; inp.files = v; } catch (x) { /* ignore */ } } });
+              } catch (e) { /* the count is optional */ }
+              inp.dispatchEvent(new Event("input", { bubbles: true }));
+              inp.dispatchEvent(new Event("change", { bubbles: true }));
+              window.__subsellShimFired++;
+            } catch (e) { window.__subsellShimErr = String((e && e.message) || e); }
+          }, 60);
           return; // the original click is never called ⇒ no dialog is possible
         } catch (e) { /* fall through to the real click below */ }
       }
@@ -2531,7 +2614,150 @@ async function pageArmFileShim(blobUrl, name, mime, ms) {
   } catch (e) { return { ok: false, error: String((e && e.message) || e) }; }
 }
 function pageShimStatus() {
-  return { fired: window.__subsellShimFired || 0, seen: window.__subsellShimSeen || 0, armed: !!window.__subsellShim };
+  return { fired: window.__subsellShimFired || 0, seen: window.__subsellShimSeen || 0, armed: !!window.__subsellShim, info: window.__subsellShimInfo || null, err: window.__subsellShimErr || "" };
+}
+// ---- (v0.21.67) THE REACTION PROBE: did Messenger READ the clip we handed over? ----
+// Every verdict so far was read off the composer's rendering or its send control —
+// both silent while Messenger holds a clip it has accepted but not yet staged
+// (decoding it, on a hidden tab, for ever). This watches the page's own hands
+// instead, in the MAIN world, for the length of one attach: URL.createObjectURL,
+// Blob/FileReader reads, <video> creation and blob: src assignments (with their
+// loadedmetadata/error), and XHR/fetch bodies. Our clip is recognised by its byte
+// size. A clip Messenger read is a clip Messenger holds: the engine then waits
+// instead of escalating (another copy), and ends "unverified" (retried on a fresh
+// visit, never piled) instead of "none". Untouched ⇒ "none", escalation stays
+// safe. Everything is restored on a timer and on disarm.
+function pageArmReactionProbe(expectSize, ms) {
+  try {
+    const W = window;
+    if (W.__subsellRx && W.__subsellRx.armed) { W.__subsellRx.reset(expectSize, Date.now() + ms); return { ok: true, already: true }; }
+    const st = { objUrl: 0, vidNew: 0, vidSrc: 0, meta: 0, err: 0, read: 0, up: 0, other: 0, expect: 0, until: 0, armed: true };
+    // OUR clip is recognised by its exact byte size — never guessed: with no size
+    // known nothing counts (an unrelated photo or sticker must not read as "held").
+    const ours = (b) => {
+      try {
+        if (!b || typeof b.size !== "number" || !(st.expect > 0)) return false;
+        return Math.abs(b.size - st.expect) < 4096;
+      } catch (e) { return false; }
+    };
+    const live = () => Date.now() < st.until;
+    // object URLs minted for OUR clip: a <video> counts (v/m/e) only when it is fed one
+    // of these — Facebook's own player also uses blob: sources (MediaSource), and a
+    // buyer's clip playing in the thread must never make ours look "held".
+    let oursUrls = new Set();
+    const hook = (el) => {
+      try {
+        if (!el || el.__subsellRxHooked) return;
+        el.__subsellRxHooked = true;
+        el.addEventListener("loadedmetadata", () => { if (live()) st.meta++; }, { once: true });
+        el.addEventListener("error", () => { if (live()) st.err++; }, { once: true });
+      } catch (e) { /* page world */ }
+    };
+    const isVideoTag = (el) => { try { return String(el.tagName).toUpperCase() === "VIDEO"; } catch (e) { return false; } };
+    const noteSrc = (el, v) => {
+      try {
+        if (!live()) return;
+        const s = String(v || "");
+        if (!/^blob:/i.test(s) || !oursUrls.has(s)) return;
+        let target = el;
+        if (String(el.tagName).toUpperCase() === "SOURCE") target = el.parentElement || el;
+        if (!isVideoTag(target)) return;
+        st.vidSrc++; hook(target);
+      } catch (e) { /* page world */ }
+    };
+    const oCreate = URL.createObjectURL;
+    const oSlice = Blob.prototype.slice;
+    const oAB = Blob.prototype.arrayBuffer;
+    const oStream = Blob.prototype.stream;
+    const oFR = FileReader.prototype.readAsArrayBuffer;
+    const oFRD = FileReader.prototype.readAsDataURL;
+    const oSend = XMLHttpRequest.prototype.send;
+    const oFetch = W.fetch;
+    const oFD = W.FormData && W.FormData.prototype ? W.FormData.prototype.append : null;
+    const dSrc = Object.getOwnPropertyDescriptor(HTMLMediaElement.prototype, "src");
+    const oSA = Element.prototype.setAttribute;
+    const oCE = Document.prototype.createElement;
+    URL.createObjectURL = function (b) {
+      const u = oCreate.apply(this, arguments);
+      try { if (live()) { if (ours(b)) { st.objUrl++; oursUrls.add(String(u)); } else st.other++; } } catch (e) { /* page world */ }
+      return u;
+    };
+    Blob.prototype.slice = function () { if (live() && ours(this)) st.read++; return oSlice.apply(this, arguments); };
+    if (oAB) Blob.prototype.arrayBuffer = function () { if (live() && ours(this)) st.read++; return oAB.apply(this, arguments); };
+    if (oStream) Blob.prototype.stream = function () { if (live() && ours(this)) st.read++; return oStream.apply(this, arguments); };
+    FileReader.prototype.readAsArrayBuffer = function (b) { if (live() && ours(b)) st.read++; return oFR.apply(this, arguments); };
+    FileReader.prototype.readAsDataURL = function (b) { if (live() && ours(b)) st.read++; return oFRD.apply(this, arguments); };
+    XMLHttpRequest.prototype.send = function (b) { if (live() && ours(b)) st.up++; return oSend.apply(this, arguments); };
+    if (typeof oFetch === "function") W.fetch = function (u, init) { try { if (live() && init && ours(init.body)) st.up++; } catch (e) { /* page world */ } return oFetch.apply(this, arguments); };
+    if (oFD) W.FormData.prototype.append = function (n, v) { try { if (live() && ours(v)) st.up++; } catch (e) { /* page world */ } return oFD.apply(this, arguments); }; // a multipart upload of our clip
+    if (dSrc && dSrc.set && dSrc.get && dSrc.configurable) {
+      Object.defineProperty(HTMLMediaElement.prototype, "src", {
+        configurable: true, enumerable: dSrc.enumerable,
+        get() { return dSrc.get.call(this); },
+        set(v) { noteSrc(this, v); return dSrc.set.call(this, v); },
+      });
+    }
+    // React writes <video src> as an ATTRIBUTE, which bypasses the accessor above
+    Element.prototype.setAttribute = function (n, v) { try { if (live() && String(n).toLowerCase() === "src") noteSrc(this, v); } catch (e) { /* page world */ } return oSA.apply(this, arguments); };
+    Document.prototype.createElement = function (tag) {
+      const el = oCE.apply(this, arguments);
+      try { if (live() && String(tag).toLowerCase() === "video") st.vidNew++; } catch (e) { /* page world */ } // telemetry only — never a verdict
+      return el;
+    };
+    let timer = 0;
+    const restore = () => {
+      try { URL.createObjectURL = oCreate; } catch (e) { /* ignore */ }
+      try { Blob.prototype.slice = oSlice; } catch (e) { /* ignore */ }
+      try { if (oAB) Blob.prototype.arrayBuffer = oAB; } catch (e) { /* ignore */ }
+      try { if (oStream) Blob.prototype.stream = oStream; } catch (e) { /* ignore */ }
+      try { FileReader.prototype.readAsArrayBuffer = oFR; } catch (e) { /* ignore */ }
+      try { FileReader.prototype.readAsDataURL = oFRD; } catch (e) { /* ignore */ }
+      try { XMLHttpRequest.prototype.send = oSend; } catch (e) { /* ignore */ }
+      try { if (typeof oFetch === "function") W.fetch = oFetch; } catch (e) { /* ignore */ }
+      try { if (oFD) W.FormData.prototype.append = oFD; } catch (e) { /* ignore */ }
+      try { if (dSrc && dSrc.set && dSrc.get && dSrc.configurable) Object.defineProperty(HTMLMediaElement.prototype, "src", dSrc); } catch (e) { /* ignore */ }
+      try { Element.prototype.setAttribute = oSA; } catch (e) { /* ignore */ }
+      try { Document.prototype.createElement = oCE; } catch (e) { /* ignore */ }
+      if (timer) { clearTimeout(timer); timer = 0; }
+      st.armed = false;
+      W.__subsellRx = null;
+    };
+    const arm = (until) => {
+      st.until = until;
+      if (timer) clearTimeout(timer);
+      timer = setTimeout(restore, Math.min(Math.max(until - Date.now(), 1000), 180000) + 500);
+    };
+    st.reset = (size, until) => { st.objUrl = st.vidNew = st.vidSrc = st.meta = st.err = st.read = st.up = st.other = 0; st.expect = Number(size) || 0; oursUrls = new Set(); arm(until); };
+    st.restore = restore;
+    W.__subsellRx = st;
+    st.reset(expectSize, Date.now() + ms);
+    return { ok: true };
+  } catch (e) { return { ok: false, error: String((e && e.message) || e) }; }
+}
+function pageReactionStatus() {
+  const st = window.__subsellRx;
+  let userAct = null;
+  try { userAct = navigator.userActivation ? { been: !!navigator.userActivation.hasBeenActive, now: !!navigator.userActivation.isActive } : null; } catch (e) { userAct = null; }
+  if (!st) return { armed: false, userAct };
+  return { armed: !!st.armed, objUrl: st.objUrl, vidNew: st.vidNew, vidSrc: st.vidSrc, meta: st.meta, err: st.err, read: st.read, up: st.up, other: st.other, expect: st.expect, userAct };
+}
+function pageDisarmReactionProbe() {
+  try { if (window.__subsellRx && window.__subsellRx.restore) window.__subsellRx.restore(); } catch (e) { /* ignore */ }
+  return true;
+}
+async function armReactionProbe(tabId, size, ms) {
+  if (!tabId || !chrome.scripting) return { ok: false, error: "no tab / scripting API" };
+  try {
+    const r = await chrome.scripting.executeScript({ target: { tabId }, world: "MAIN", func: pageArmReactionProbe, args: [Number(size) || 0, Math.min(Math.max(Number(ms) || 90000, 1000), 180000)] });
+    return (r && r[0] && r[0].result) || { ok: false, error: "probe not applied" };
+  } catch (e) { return { ok: false, error: String((e && e.message) || e) }; }
+}
+async function reactionStatus(tabId, disarm) {
+  if (!tabId || !chrome.scripting) return { ok: false };
+  try {
+    const r = await chrome.scripting.executeScript({ target: { tabId }, world: "MAIN", func: disarm ? pageDisarmReactionProbe : pageReactionStatus });
+    return { ok: true, status: (r && r[0] && r[0].result) || null };
+  } catch (e) { return { ok: false, error: String((e && e.message) || e) }; }
 }
 function pageDisarmFileShim() {
   try { if (window.__subsellShim) window.__subsellShim.restore(); } catch (e) { /* ignore */ }
@@ -2583,6 +2809,8 @@ async function cdpDoctor(tabId) {
     F.push("composerPt=" + (cp ? cp.x + "," + cp.y + (cp.hit === false ? " COVERED-by:" + String(cp.hitLabel || "?").slice(0, 24) : "") : "none"));
     const ev = await cdpCmd(target, "Runtime.evaluate", { expression: "!!(" + pageFindComposerFileInput.toString() + ")()", returnByValue: true }, 8000);
     F.push("persistentInput=" + (ev && ev.result && ev.result.value ? "found" : "none"));
+    // (v0.21.67) the bit Chrome's media deferral reads: has this document ever had a user activation?
+    try { const ua = await pageEval(target, pageUserActivation); F.push("userAct=" + (ua ? (ua.been ? "Y" : "n") + (ua.now ? "/now" : "") : "?")); } catch (e) { F.push("userAct=?"); }
     try {
       const vd = await new Promise((r) => chrome.storage.local.get(["videoDisk"], (x) => r((x && x.videoDisk) || {})));
       const first = Object.keys(vd).map((k) => vd[k]).find((e) => e && e.path);
@@ -2786,6 +3014,7 @@ async function buildDiagnostic() {
         "attachChannelStats", "attachMiss", "videoDoctorLast", "tabActivateN", "tabActivateAt", "fgN", "fgAt", "winSlot", "fgFail", "pipN", "pipAt", "pipFail",
         "videoForeground", "videoPip", "videoTrustedChannels", "videoActivateTab",
         "videoDropRescue",
+        "videoActivationPulse", "videoMediaPrime", "videoMediaGate", "attachPile", // (v0.21.67)
       ],
       (x) => r(x || {})
     )
@@ -2853,6 +3082,7 @@ async function buildDiagnostic() {
       (cs.unverifiedN ? " unverified=" + cs.unverifiedN + "(" + ageM(cs.lastUnverifiedAt) + ")" : "") +
       " err=" + (cs.errN || 0) + "(" + ageM(cs.lastErrAt) + ")" +
       (cs.lastErr ? " lastErr=\"" + cut(cs.lastErr, 70) + "\"" : "") +
+      (cs.actN || cs.actHadN ? " act=" + (cs.actN || 0) + (cs.actAt ? "(" + ageM(cs.actAt) + ":" + (cs.actHow || "?") + ")" : "") + (cs.actHadN ? " had=" + cs.actHadN : "") + (cs.actFailN ? " actFail=" + cs.actFailN : "") + (cs.actKeysFailN ? " keysFail=" + cs.actKeysFailN : "") : "") +
       (/not allowed/i.test(cs.lastErr || "") && (cs.lastErrAt || 0) > (cs.lastOkAt || 0) ? " ⚠ turn ON 'Allow access to file URLs' for SubSell in chrome://extensions" : "") +
       " | disk=" + onDisk + " clip(s)" + (missing ? " missing=" + missing : "") + (pending ? " downloading=" + pending : "") + (failed ? " failed=" + failed : "")
     );
@@ -2861,13 +3091,23 @@ async function buildDiagnostic() {
     // (v0.21.47) per-channel evidence + machine attach health + the last doctor line
     const acs = st.attachChannelStats || {};
     const am2 = st.attachMiss || {};
+    const mg = st.videoMediaGate || null;   // (v0.21.67)
+    const pile = st.attachPile || null;     // (v0.21.67)
     L.push(
       "attach: missStreak=" + (am2.streak || 0) + (am2.at ? "(" + ageM(am2.at) + ")" : "") +
       " channels=" + ["btn", "chooser", "drop", "input", "dom", "paste"].map((k) => {
         const e = acs[k];
-        return e ? k + ":" + (e.dispatched || 0) + "d/" + (e.tile || 0) + "t/" + (e.blind || 0) + "b/" + (e.none || 0) + "n/" + (e.unverified || 0) + "u" : k + ":-";
+        // (v0.21.67) [rx:…] = the last reaction-probe code for the channel (o objectURLs,
+        // v video src, m loadedmetadata, e media errors, r blob reads, u upload bodies —
+        // of OUR clip); "held" = Messenger read the clip but never staged it that time
+        return e ? k + ":" + (e.dispatched || 0) + "d/" + (e.tile || 0) + "t/" + (e.blind || 0) + "b/" + (e.none || 0) + "n/" + (e.unverified || 0) + "u" + (e.rx ? "[rx:" + e.rx + (e.held ? " held" + e.held : "") + "]" : "") + (e.picker ? "[picker:" + e.picker + "]" : "") : k + ":-";
       }).join(" ") +
       " retryMax=" + (settings.videoRetryMax != null ? settings.videoRetryMax : "?") +
+      // (v0.21.67) gate = are this page's media loads parked? primed = how the frame was made to play media
+      " gate=" + (mg ? mg.state + (mg.hidden ? "(hidden-proven" : "(" + (mg.vis || "?")) + (mg.at ? "," + ageM(mg.at) : "") + ")" + " primed=" + (mg.primed || "-") + (mg.primes ? "/" + mg.primes + "x" : "") : "-") +
+      " prime=" + (st.videoMediaPrime === false ? "off(local)" : "on") +
+      (pile && pile.n ? " pile=" + pile.n + "(max" + pile.max + "," + ageM(pile.at) + "," + (pile.vis || "?") + ",via " + (pile.via || "-") + ")" : "") +
+      " pulse=" + (st.videoActivationPulse === true ? "ON(local)" : "off") +
       " dropRescue=" + (st.videoDropRescue === false ? "off" : ((am2.streak || 0) >= 2 ? "ARMED" : "standby")) +
       " tabActivated=" + (st.tabActivateN || 0) + (st.tabActivateAt ? "(" + ageM(st.tabActivateAt) + ")" : "") +
       " foreground=" + (st.videoForeground === true ? "ON(local)" : "off") + " fg=" + (st.fgN || 0) + (st.fgAt ? "(" + ageM(st.fgAt) + ")" : "") +
@@ -2876,7 +3116,7 @@ async function buildDiagnostic() {
       " trusted=" + (st.videoTrustedChannels === true ? "ON(local)" : "off") + " pipMode=" + (st.videoPip === true ? "ON(local)" : "off") + " activateTab=" + (st.videoActivateTab === true ? "ON(local)" : "off") +
       (settings.videoForeground === true || settings.videoPip === true || settings.videoTrustedChannels === true || settings.videoActivateTab === true ? " [stale power keys in the cloud row — IGNORED since .53]" : "") +
       " slot=" + (st.winSlot != null ? st.winSlot : "-") +
-      (st.videoDoctorLast ? " | doctor(" + ageM(st.videoDoctorLast.at) + "): " + cut(st.videoDoctorLast.text, 400) : "")
+      (st.videoDoctorLast ? " | doctor(" + ageM(st.videoDoctorLast.at) + "): " + cut(st.videoDoctorLast.text, 640) : "")
     );
   }
   const c = rollWindows(await getCounters(), now);
@@ -3272,7 +3512,18 @@ chrome.runtime.onMessage.addListener((msg, _sender, sendResponse) => {
         case "CDP_ACTIVATE": {
           // (v0.21.50) a trusted activation for the sender's page (picture-in-picture needs one)
           const tabId = _sender && _sender.tab && _sender.tab.id;
-          sendResponse(await cdpActivate(tabId));
+          sendResponse(await cdpActivate(tabId, { click: msg.reason === "pip", force: msg.reason === "pip" }));
+          break;
+        }
+        case "ARM_RX_PROBE": {
+          // (v0.21.67) watch the page's own reaction to a handed-over clip (MAIN world)
+          const tabId = _sender && _sender.tab && _sender.tab.id;
+          sendResponse(await armReactionProbe(tabId, msg.size, msg.ms));
+          break;
+        }
+        case "RX_STATUS": {
+          const tabId = _sender && _sender.tab && _sender.tab.id;
+          sendResponse(await reactionStatus(tabId, !!msg.disarm));
           break;
         }
         case "VIS_SHIM": {

@@ -133,7 +133,7 @@
   // the desktop, so these four now live in chrome.storage.local and are set on ONE
   // machine at a time, deliberately, while someone watches it.
   let powerFlags = {};
-  const POWER_KEYS = ["videoForeground", "videoPip", "videoTrustedChannels", "videoActivateTab", "videoDropRescue"];
+  const POWER_KEYS = ["videoForeground", "videoPip", "videoTrustedChannels", "videoActivateTab", "videoDropRescue", "videoActivationPulse", "videoMediaPrime"];
   const powerOn = (k) => powerFlags[k] === true;
   function refreshPowerFlags() {
     safe(() => chrome.storage.local.get(POWER_KEYS, (r) => {
@@ -1300,10 +1300,18 @@
   // strategy actually needs the File.
   async function attachVideo(file, knownCount, tid, diskPath, opts) {
     lastAttachVia = "-";
+    lastAttachRx = "-"; // (v0.21.67) the legacy ladder has no reaction probe — never report a stale code
+    lastAttachHeld = false;
     const composer = findComposer();
     if (composer) composer.focus();
     // "aborted" (v0.21.41) = navigated away BEFORE anything was dispatched: the
     // clip was never touched, the caller resumes AT it (not after it).
+    if (tid && !stillOnThread(tid)) return "aborted";
+    // (v0.21.67) THE MEDIA GATE FIRST — on a hidden page that has never played
+    // media Chrome parks the clip's decode and Messenger never stages it. Probe,
+    // and prime the frame when parked (see ensureMediaGate). Local
+    // videoMediaPrime:false turns it off. Never blocks an attach.
+    if (powerFlags.videoMediaPrime !== false) { try { await ensureMediaGate(); } catch (e) { /* never blocks an attach */ } }
     if (tid && !stillOnThread(tid)) return "aborted";
     let fileObj = file && file.lazy ? null : file;
     const ensureFile = async () => {
@@ -1447,7 +1455,15 @@
         }
         lastShimFired = st ? st.fired : 0;
         lastShimSeen = st ? st.seen : 0;
-        if (!st || !st.fired) { setStatus({ videoLast: "clicked attach but Messenger never opened a file picker (seen=" + ((st && st.seen) || 0) + ")" }); return false; }
+        if (st && st.info) {
+          // (v0.21.67) which input Messenger clicked (in DOM? React-owned? accept=)
+          // and whether its handler READ input.files after our change event —
+          // persisted on the btn channel so a 6-h reload cannot lose it.
+          lastShimInfo = st.info;
+          const pk = (st.info.connected ? "inDOM" : "detached") + "/" + (st.info.react ? "react" : "native") + (st.info.filesRead != null ? "/read" + st.info.filesRead : "") + (st.info.accept ? "/accept:" + trunc(st.info.accept, 16) : "");
+          bumpChannelStats("btn", (e) => { e.picker = pk; e.pickerAt = Date.now(); });
+        }
+        if (!st || !st.fired) { setStatus({ videoLast: "clicked attach but Messenger never opened a file picker (seen=" + ((st && st.seen) || 0) + (st && st.err ? ", shim error: " + trunc(st.err, 40) : "") + ")" }); return false; }
         return true;
       } catch (e) { return false; }
       finally { if (url) setTimeout(() => safe(() => URL.revokeObjectURL(url)), 30000); }
@@ -1543,6 +1559,37 @@
         const k = attachMiss.streak % order.length;
         order = order.slice(k).concat(order.slice(0, k));
       }
+      // (v0.21.67) USER-ACTIVATION PULSE — an OPT-IN EXPERIMENT (local
+      // videoActivationPulse:true), keys only (F16, then Shift) through the
+      // debugger, before a channel that needs no debugger. The media gate above
+      // is the fix; activation is not a term of Chrome's media deferral. Kept so a
+      // machine can test the remaining hypothesis (a gesture-gated uploader).
+      if (powerOn("videoActivationPulse") && !userActivated() && cdpAvailable() && order.length && order[0] !== "input" && order[0] !== "drop" && order[0] !== "chooser") {
+        setStatus({ lastAction: "giving the page a user activation before the clip (experiment)…" });
+        const a = await Promise.race([ask({ type: "CDP_ACTIVATE" }), sleep(15000).then(() => null)]);
+        lastActPulse = { at: Date.now(), how: a ? (a.how || "err:" + trunc(a.error || "?", 30)) : "no answer", ok: !!(a && a.ok), after: userActivated() };
+        setStatus({ videoLast: "user activation: " + lastActPulse.how + (lastActPulse.after ? " ✓" : " — page still reports none") });
+      }
+      // (v0.21.67) THE REACTION PROBE: watch what Messenger does with the clip
+      // (MAIN world, auto-restored). A clip Messenger HOLDS (rxHeld) gets no
+      // second channel on top and ends "unverified" (paced fresh retry) rather
+      // than "none"; a clip it REJECTED (rxRejected) is "none" as before. Armed
+      // only when the clip's exact byte size is known — never a guess.
+      const rxSize = (diskPath && diskSizeByPath[diskPath]) || (fileObj && fileObj.size) || 0;
+      const rxArmed = rxSize > 0 ? await Promise.race([ask({ type: "ARM_RX_PROBE", size: rxSize, ms: 150000 }), sleep(6000).then(() => null)]) : null;
+      const rxOn = !!(rxArmed && rxArmed.ok);
+      const rxRead = async () => { if (!rxOn) return null; const r = await Promise.race([ask({ type: "RX_STATUS" }), sleep(6000).then(() => null)]); return r && r.ok && r.status ? r.status : null; };
+      // Every exit reads the probe once more, records the channel's code (a healthy
+      // machine's signature is what a dead one is compared against) and disarms.
+      const rxFinish = async (ch, verdict) => {
+        const s = await rxRead();
+        const code = rxCode(s);
+        if (code !== "-") { lastAttachRx = code; noteChannelRx(ch, code, false); }
+        if (rxOn) ask({ type: "RX_STATUS", disarm: true });
+        return verdict;
+      };
+      let held = null; // the channel whose clip Messenger read but never staged
+      lastAttachRx = "-";
       const JUST_SEND_WAIT_MS = 75000;
       const CHANNEL_WINDOW_MS = 20000;
       const t0 = Date.now();
@@ -1607,11 +1654,27 @@
           }
           const seen = tileNow();
           if (seen && !seenAt) { seenAt = Date.now(); noteChannelStat(ch, "tile"); await rememberAttachPref(ch); }
-          if (seen && trayUploads() === 0 && Date.now() - seenAt > 2000) return true; // tile visible, upload done
+          if (seen && trayUploads() === 0 && Date.now() - seenAt > 2000) return await rxFinish(ch, true); // tile visible, upload done
           if (!seen && flippedToSend()) { if (!flippedAt) flippedAt = Date.now(); escalate = false; if (Date.now() - flippedAt > 45000) break; } // staged per Messenger: no further channel, give the tile 45 s
         }
-        if (tileNow()) return true; // visible (upload may still run — the caller waits it out)
-        if (flippedToSend()) { noteChannelStat(ch, "blind"); await rememberAttachPref(ch); return "blind"; } // staged for sure, tile pending — send on the control alone
+        if (tileNow()) return await rxFinish(ch, true); // visible (upload may still run — the caller waits it out)
+        if (flippedToSend()) { noteChannelStat(ch, "blind"); await rememberAttachPref(ch); return await rxFinish(ch, "blind"); } // staged for sure, tile pending — send on the control alone
+        // (v0.21.67) Nothing shows — but did Messenger READ the clip? Then it holds
+        // it (decoding, validating, uploading) and a second channel would stage a
+        // second copy: stop escalating, wait the budget out. A decode ERROR on our
+        // clip means it was rejected — the next channel stays duplicate-safe.
+        {
+          const rxS = await rxRead();
+          const codeS = rxCode(rxS);
+          if (codeS !== "-") { lastAttachRx = codeS; noteChannelRx(ch, codeS, false); }
+          if (rxHeld(rxS)) {
+            held = ch;
+            escalate = false;
+            setStatus({ videoLast: "Messenger took the clip via " + ch + " (" + codeS + ") but has not staged it yet — waiting, never a second copy" });
+          } else if (rxRejected(rxS)) {
+            setStatus({ videoLast: "Messenger tried the clip via " + ch + " and its decode failed (" + codeS + ") — nothing staged" });
+          }
+        }
         if (!escalate) break;
         noteChannelStat(ch, "none"); // control still says empty: this channel put nothing in — the next one is duplicate-safe
       }
@@ -1632,12 +1695,29 @@
       while (Date.now() - t0 < JUST_SEND_WAIT_MS) {
         await sleep(1000); tick();
         if (tid && !stillOnThread(tid)) return "navigated";
-        if (tileNow()) { noteChannelStat(dispatched, "tile"); await rememberAttachPref(dispatched); return true; }
-        if (flippedToSend()) { noteChannelStat(dispatched, "blind"); await rememberAttachPref(dispatched); return "blind"; }
+        if (tileNow()) { noteChannelStat(dispatched, "tile"); await rememberAttachPref(dispatched); return await rxFinish(dispatched, true); }
+        if (flippedToSend()) { noteChannelStat(dispatched, "blind"); await rememberAttachPref(dispatched); return await rxFinish(dispatched, "blind"); }
       }
       if (pref && dispatched === pref.channel) await notePrefMiss();
+      // (v0.21.67) the final reading of the probe (a late decode still counts)
+      {
+        const rxF = await rxRead();
+        const codeF = rxCode(rxF);
+        if (codeF !== "-") { lastAttachRx = codeF; if (rxHeld(rxF) && !held) held = dispatched; }
+        if (rxOn) ask({ type: "RX_STATUS", disarm: true });
+      }
       // Decide from Messenger's state, never assume: the control still reads
       // like-type with an empty tray and no upload ⇒ nothing was staged.
+      // (v0.21.67) …unless Messenger READ the clip: then it is held, not absent —
+      // "unverified" (a fresh, paced retry that sweeps any late tile first; never
+      // a second copy in this visit) instead of "none".
+      if (held) {
+        lastAttachHeld = true;
+        noteChannelRx(held, lastAttachRx, true);
+        noteChannelStat(dispatched, "unverified");
+        setStatus({ videoLast: "clip handed over via " + held + " and read by Messenger (" + lastAttachRx + ") but never staged — retrying on a later visit" });
+        return "unverified";
+      }
       if (!maybeIn && stillEmptyPerControl() && trayRemoveBtns().length === 0 && trayUploads() === 0) {
         noteChannelStat(dispatched, "none");
         return "none";
@@ -1950,7 +2030,7 @@
       if (!document.pictureInPictureEnabled || !HTMLVideoElement.prototype.requestPictureInPicture) return false;
       if (document.pictureInPictureElement && document.pictureInPictureElement === pipVideo) { pipDraw(label); return true; }
       // the activation: a trusted click on the composer (or a harmless Shift key)
-      const act = await Promise.race([ask({ type: "CDP_ACTIVATE" }), sleep(12000).then(() => null)]);
+      const act = await Promise.race([ask({ type: "CDP_ACTIVATE", reason: "pip" }), sleep(12000).then(() => null)]); // (v0.21.67) reason:"pip" keeps the composer-click rung this opt-in path always had
       if (!(act && act.ok)) { setStatus({ videoLast: "no trusted activation for picture-in-picture (" + trunc((act && act.error) || "no answer", 60) + ")" }); return false; }
       if (!pipCanvas) { pipCanvas = document.createElement("canvas"); pipCanvas.width = 320; pipCanvas.height = 180; }
       pipSince = Date.now();
@@ -2008,7 +2088,10 @@
       // ours = a set in flight / left stuck / a partial tail / a bounded-retry chat.
       // A plain confirmed mark is NOT enough: an attachment the operator staged
       // later in a served chat must never be sent by us.
-      const ours = !!((mk && recent(mk.at) && (mk.via === "lock" || mk.stuck || mk.unverifiedTail || typeof mk.resumeFrom === "number"))
+      // (v0.21.67) a given-up chat counts too: a copy that surfaces late on it
+      // (the tab finally shown) is ours — trimmed to one and sent, not left for
+      // the next text reply's Enter.
+      const ours = !!((mk && recent(mk.at) && (mk.via === "lock" || mk.stuck || mk.unverifiedTail || mk.gaveUp || typeof mk.resumeFrom === "number"))
         || (at && (recent(at.failAt) || recent(at.claimAt))));
       if (!ours) return;
       const lk = (st.threadLocks || {})[id];
@@ -2036,7 +2119,26 @@
       }
       if (now - sw.at < 15000) return;
       sw.at = now; sw.n++;
-      const before = btns.length;
+      // (v0.21.67) EXACTLY ONE before any press. The engine keeps at most one clip
+      // of ours in flight per chat; more tiles here are copies that surfaced late
+      // (a hidden tab finally shown — the strongest confirmation of the media-gate
+      // diagnosis, so the pile is RECORDED for the 🩺). Trim to the newest first —
+      // a pile must never ride the watcher's Enter ("double sending videos"). One
+      // FRESH read decides both the trim and the press (the count read before the
+      // storage await above is stale by now).
+      const n0 = trayRemoveBtns().length;
+      if (n0 > 1) {
+        safe(() => chrome.storage.local.get(["attachPile"], (rP) => {
+          if (chrome.runtime.lastError) return;
+          const p = (rP && rP.attachPile) || {};
+          p.n = (p.n || 0) + 1; p.max = Math.max(p.max || 0, n0); p.at = Date.now();
+          p.vis = document.visibilityState + (safe(() => document.hasFocus(), false) ? "/focus" : ""); p.via = lastAttachVia || "-";
+          chrome.storage.local.set({ attachPile: p }, () => void chrome.runtime.lastError);
+        }));
+        if (!(await trimTraySurplus(1))) { setStatus({ lastAction: "watcher: " + n0 + " staged copies would not trim to one — not sending a pile" }); return; }
+      }
+      const before = trayRemoveBtns().length;
+      if (before !== 1) return; // 0: nothing to send; >1: a copy landed during the trim — next tick decides
       const step = sw.n % 4;
       setStatus({ lastAction: "watcher: sending a staged clip (" + trigger + ", try " + sw.n + ")" });
       if (step === 1) { if (!(await cdpPress("enter"))) pressEnter(c); }
@@ -2377,7 +2479,165 @@
   const ATTACH_RE = /attach|joindre|jointe|fichier|pi[èe]ce|\bfile\b|photo|m[ée]dia|upload|t[ée]l[ée]vers|image|vid[ée]o/i;
   const ATTACH_BAD_RE = /sticker|autocollant|gif|emoji|like|j'?aime|pouce|thumb|voice|vocal|audio|micro|record|enregistr|press enter|entr[eé]e pour|^send$|^envoyer$|listing|annonce|call|appel/i;
   const ATTACH_MORE_RE = /more actions|plus d.actions|ouvrir plus|open more|more options|plus d.options/i;
-  let lastShimFired = 0, lastShimSeen = 0;
+  let lastShimFired = 0, lastShimSeen = 0, lastShimInfo = null;
+  // (v0.21.67) the last activation pulse this tab asked for (an opt-in experiment),
+  // the last reaction-probe code (see background pageArmReactionProbe) and whether
+  // the last attach ended "held" — for the 🩺 and for the engine's routing.
+  let lastActPulse = null;
+  let lastAttachRx = "-";
+  let lastAttachHeld = false;
+  const userActivated = () => safe(() => !!(navigator.userActivation && navigator.userActivation.hasBeenActive), false);
+  const rxCode = (s) => (s && s.armed !== undefined && s.objUrl !== undefined
+    ? "o" + (s.objUrl || 0) + "v" + (s.vidSrc || 0) + "m" + (s.meta || 0) + "e" + (s.err || 0) + "r" + (s.read || 0) + "u" + (s.up || 0)
+    : "-");
+  // Messenger tried OUR clip and its decode FAILED (a media error, no metadata): the
+  // clip was rejected, not held — the next channel is duplicate-safe.
+  const rxRejected = (s) => !!s && (s.err || 0) > 0 && (s.meta || 0) === 0;
+  // Messenger HOLDS our clip: an object URL for it, its metadata decoded, an upload
+  // body, or repeated byte reads. One lone read (a header sniff) is telemetry only.
+  const rxHeld = (s) => !!s && !rxRejected(s) && ((s.objUrl || 0) > 0 || (s.meta || 0) > 0 || (s.up || 0) > 0 || (s.read || 0) >= 2);
+
+  // ---- (v0.21.67) THE MEDIA GATE ----
+  // Chrome PARKS every media load of a page that is HIDDEN and has NEVER PLAYED
+  // MEDIA (prerender::DeferMediaLoad, reached through ChromeContentRendererClient::
+  // DeferMediaLoad on every desktop build; released only when the page is shown or
+  // when the frame has played media before — user activation is not a term of it).
+  // Messenger decodes a clip through a <video> on a blob: URL before it stages the
+  // attachment, so on such a page every hand-over is accepted and parked: nothing
+  // staged, nothing to see, and the next channel adds another copy (PC-qwafy: five
+  // channels, 261 hand-overs, the send control never left "send a like", doctor
+  // vis=hidden/focus; the .58 photo: seven tiles surfacing at once when the operator
+  // finally connected). Two things, both inside this frame, no debugger, no UI:
+  //  - mediaGateOpen(): loads a 52-byte silent WAV in an <audio>. loadedmetadata (or
+  //    error) within the wait means loads run; silence means they are parked.
+  //  - primeMedia(): plays a MediaStream in a muted element. A MediaStream player is
+  //    built without the defer callback, and its play() marks the FRAME as having
+  //    played media — after which every later clip load in this document runs,
+  //    hidden or not. Proven by re-probing the gate, never assumed.
+  const TINY_WAV_URL = (() => {
+    try {
+      const n = 8, b = new Uint8Array(44 + n);
+      const w = (o, s) => { for (let i = 0; i < s.length; i++) b[o + i] = s.charCodeAt(i); };
+      const u32 = (o, v) => { b[o] = v & 255; b[o + 1] = (v >> 8) & 255; b[o + 2] = (v >> 16) & 255; b[o + 3] = (v >>> 24) & 255; };
+      const u16 = (o, v) => { b[o] = v & 255; b[o + 1] = (v >> 8) & 255; };
+      w(0, "RIFF"); u32(4, 36 + n); w(8, "WAVE"); w(12, "fmt "); u32(16, 16); u16(20, 1); u16(22, 1); u32(24, 8000); u32(28, 8000); u16(32, 1); u16(34, 8); w(36, "data"); u32(40, n);
+      for (let i = 0; i < n; i++) b[44 + i] = 128;
+      let s = ""; for (let i = 0; i < b.length; i++) s += String.fromCharCode(b[i]);
+      return "data:audio/wav;base64," + btoa(s);
+    } catch (e) { return ""; }
+  })();
+  const mediaGate = { state: "?", at: 0, primed: "-", probes: 0, primes: 0, provenHidden: false }; // this document's gate, as last probed
+  const hideEl = (el) => { try { el.setAttribute("aria-hidden", "true"); el.style.cssText = "position:fixed;left:-9999px;top:-9999px;width:2px;height:2px;opacity:0;pointer-events:none;"; } catch (e) { /* cosmetic */ } };
+  // true = a media load completed (loads run), false = nothing happened within the
+  // wait (parked), null = could not probe.
+  async function mediaGateOpen(waitMs) {
+    if (!TINY_WAV_URL) return null;
+    let a = null;
+    try {
+      a = document.createElement("audio");
+      a.muted = true; a.preload = "auto";
+      const done = new Promise((res) => {
+        a.addEventListener("loadedmetadata", () => res(true), { once: true });
+        a.addEventListener("error", () => res(true), { once: true }); // an error is a load that RAN
+      });
+      a.src = TINY_WAV_URL;
+      try { a.load(); } catch (e) { /* ignore */ }
+      mediaGate.probes++;
+      return await Promise.race([done, sleep(waitMs || 3000).then(() => false)]);
+    } catch (e) { return null; }
+    finally { try { if (a) { a.removeAttribute("src"); a.load(); } } catch (e) { /* ignore */ } }
+  }
+  const primeEls = [];
+  let primeCtx = null;
+  // Returns how the frame was made to play media ("stream-audio" | "stream-canvas"),
+  // or "-". With verify=true only a re-probed OPEN gate counts as success.
+  async function primeMedia(verify) {
+    const parent = document.body || document.documentElement;
+    const played = async (el) => {
+      let ok = false;
+      try { ok = await Promise.race([Promise.resolve(el.play()).then(() => true, () => false), sleep(3000).then(() => false)]); } catch (e) { ok = false; }
+      return ok || safe(() => el.paused === false, false);
+    };
+    const proven = async () => (verify ? !!(await mediaGateOpen(3000)) : true);
+    // (a) an audio-only MediaStream: needs no frames and no gesture (muted)
+    try {
+      const AC = window.AudioContext || window.webkitAudioContext;
+      if (AC) {
+        if (!primeCtx) primeCtx = new AC();
+        const dest = primeCtx.createMediaStreamDestination();
+        const el = document.createElement("audio");
+        el.muted = true; hideEl(el);
+        el.srcObject = dest.stream;
+        parent.appendChild(el); primeEls.push(el);
+        if ((await played(el)) && (await proven())) return "stream-audio";
+      }
+    } catch (e) { /* next */ }
+    // (b) a canvas stream with a frame requested by hand (no rendering needed)
+    try {
+      const cv = document.createElement("canvas"); cv.width = 16; cv.height = 16;
+      const g = cv.getContext("2d"); if (g) { g.fillStyle = "#000"; g.fillRect(0, 0, 16, 16); }
+      if (cv.captureStream) {
+        const stream = cv.captureStream(0);
+        const track = stream.getVideoTracks()[0];
+        const v = document.createElement("video");
+        v.muted = true; v.playsInline = true; hideEl(v);
+        v.srcObject = stream;
+        parent.appendChild(v); primeEls.push(v);
+        const frame = () => { try { if (g) g.fillRect(0, 0, 1, 1); if (track && track.requestFrame) track.requestFrame(); } catch (e) { /* ignore */ } };
+        frame();
+        const pl = played(v);
+        frame();
+        if ((await pl) && (await proven())) return "stream-canvas";
+      }
+    } catch (e) { /* give up */ }
+    return "-";
+  }
+  let mediaGateBusy = null;
+  // Once per document: probe while hidden, prime when parked (re-tried every 10 min
+  // while it stays closed). On a visible page loads run anyway — prime unverified so
+  // they still run later, when the page is hidden; the first hidden probe proves it.
+  async function ensureMediaGate() {
+    if (mediaGateBusy) return mediaGateBusy;
+    // The runner may return synchronously (gate already decided): the busy slot is
+    // therefore cleared by THIS frame after awaiting it, never inside the runner —
+    // a runner-side clear ran before the slot was even assigned and froze it for good.
+    const run = mediaGateRun();
+    mediaGateBusy = run;
+    try { await run; } finally { if (mediaGateBusy === run) mediaGateBusy = null; }
+  }
+  async function mediaGateRun() {
+    {
+      try {
+        const now = Date.now();
+        const hidden = document.visibilityState !== "visible";
+        if (mediaGate.state === "open" && mediaGate.provenHidden) return;
+        if (mediaGate.state === "closed" && now - mediaGate.at < 10 * 60 * 1000) return;
+        if (!hidden) {
+          if (mediaGate.primed === "-") { mediaGate.primes++; mediaGate.primed = await primeMedia(false); }
+          mediaGate.state = "open"; mediaGate.at = Date.now();
+          return;
+        }
+        const open = await mediaGateOpen(3000);
+        mediaGate.at = Date.now();
+        if (open === null) { mediaGate.state = "?"; return; }
+        if (open) { mediaGate.state = "open"; mediaGate.provenHidden = true; return; }
+        mediaGate.state = "closed"; mediaGate.primes++;
+        setStatus({ lastAction: "this page's media loads are parked (hidden tab) — priming it so the clip can load…" });
+        const how = await primeMedia(true);
+        mediaGate.at = Date.now();
+        if (how !== "-") {
+          mediaGate.primed = how; mediaGate.state = "open"; mediaGate.provenHidden = true;
+          setStatus({ videoLast: "media gate opened (" + how + ") — clips can load on this hidden tab now" });
+        } else {
+          mediaGate.primed = "-";
+          setStatus({ videoLast: "media gate still closed after priming — this window must be shown once for clips to load" });
+        }
+      } catch (e) { /* diagnostics must never disturb the bot */ }
+      finally {
+        safe(() => chrome.storage.local.set({ videoMediaGate: { state: mediaGate.state, at: mediaGate.at, primed: mediaGate.primed, probes: mediaGate.probes, primes: mediaGate.primes, hidden: mediaGate.provenHidden, vis: document.visibilityState } }, () => void chrome.runtime.lastError));
+      }
+    }
+  }
   function findAttachControl() {
     const main = getMain();
     const c = findComposer();
@@ -2415,16 +2675,33 @@
   // (v0.21.47) Per-channel outcome counters for the 🩺 line: how often each
   // channel dispatched, showed a tile, flipped the send control (blind), showed
   // nothing (none) or could not be judged (unverified). Fire-and-forget.
+  // (v0.21.67) SERIALISED: two back-to-back read-modify-writes on this key used to
+  // race (both reads saw the old value, the second write won) — the rx/held fields
+  // were lost on every escalating step. One promise chain, still fire-and-forget.
+  let channelStatsQ = Promise.resolve();
+  function bumpChannelStats(ch, mutate) {
+    channelStatsQ = channelStatsQ.then(() => new Promise((res) => {
+      const ok = safe(() => {
+        chrome.storage.local.get(["attachChannelStats"], (r) => {
+          if (chrome.runtime.lastError) return res();
+          const all = (r && r.attachChannelStats) || {};
+          const e = all[ch] || {};
+          try { mutate(e); } catch (x) { /* bookkeeping only */ }
+          all[ch] = e;
+          chrome.storage.local.set({ attachChannelStats: all }, () => { void chrome.runtime.lastError; res(); });
+        });
+        return true;
+      }, false);
+      if (!ok) res();
+    })).catch(() => { /* never breaks the chain */ });
+  }
   function noteChannelStat(ch, outcome) {
-    safe(() => chrome.storage.local.get(["attachChannelStats"], (r) => {
-      if (chrome.runtime.lastError) return;
-      const all = (r && r.attachChannelStats) || {};
-      const e = all[ch] || {};
-      e[outcome] = (e[outcome] || 0) + 1;
-      e.at = Date.now();
-      all[ch] = e;
-      chrome.storage.local.set({ attachChannelStats: all }, () => void chrome.runtime.lastError);
-    }));
+    bumpChannelStats(ch, (e) => { e[outcome] = (e[outcome] || 0) + 1; e.at = Date.now(); });
+  }
+  // (v0.21.67) The last reaction-probe code per channel (+ how often the channel
+  // ended "held": Messenger read the clip but never staged it that time).
+  function noteChannelRx(ch, code, held) {
+    bumpChannelStats(ch, (e) => { e.rx = String(code || "-").slice(0, 24); e.rxAt = Date.now(); if (held) e.held = (e.held || 0) + 1; });
   }
   // Machine-wide attach health (see attachMiss): a set with zero confirmed clips
   // extends the streak, any confirmed clip resets it.
@@ -2505,6 +2782,7 @@
   // only briefly (2 min) so a deleted file is re-validated by the background (it
   // re-checks `exists`); failures are remembered 15 min so we don't re-ask per clip.
   const diskPathMem = {};
+  const diskSizeByPath = {}; // absolute path -> byte size (from the download record)
   let diskFailStreak = 0;
   function forgetDiskPaths(paths) {
     for (const k of Object.keys(diskPathMem)) {
@@ -2528,6 +2806,7 @@
       if (r && r.ok && r.path) {
         diskFailStreak = 0;
         diskPathMem[key] = { path: r.path, at: Date.now() };
+        if (r.size > 0) diskSizeByPath[r.path] = r.size; // (v0.21.67) the reaction probe recognises our clip by its size
         return r.path;
       }
       // A SOFT miss (download still running / lookup timed out) is re-asked in
@@ -2676,6 +2955,14 @@
     const F = [];
     const c = findComposer();
     F.push("vis=" + document.visibilityState + (safe(() => document.hasFocus(), false) ? "/focus" : "") + " pip=" + (document.pictureInPictureEnabled ? (document.pictureInPictureElement ? "on" : "off") : "DISABLED"));
+    // (v0.21.67) the media gate (are this page's media loads parked?), how it was
+    // primed, sticky user activation (the opt-in experiment), the last reaction code
+    F.push("gate=" + mediaGate.state + (mediaGate.provenHidden ? "(hidden-proven" : "(") + (mediaGate.at ? "," + Math.round((Date.now() - mediaGate.at) / 60000) + "m)" : ")") +
+           " primed=" + mediaGate.primed + (mediaGate.primes ? "/" + mediaGate.primes + "x" : "") +
+           " userAct=" + (safe(() => !!navigator.userActivation, false) ? (userActivated() ? "Y" : "n") + (safe(() => navigator.userActivation.isActive, false) ? "/now" : "") : "?") +
+           " pulse=" + (lastActPulse ? lastActPulse.how + (lastActPulse.after ? "✓" : "✗") + "(" + Math.round((Date.now() - lastActPulse.at) / 60000) + "m)" : "-") +
+           " rx=" + lastAttachRx + (lastAttachHeld ? "(held)" : "") +
+           (lastShimInfo ? " picker=" + (lastShimInfo.connected ? "inDOM" : "detached") + (lastShimInfo.react ? "/react" : "/native") + (lastShimInfo.accept ? "/accept:" + trunc(lastShimInfo.accept, 20) : "") : ""));
     F.push("composer=" + (c ? (composerText(c) ? "has-text" : "empty") : "NONE"));
     const ctl = sendControlLabel();
     F.push("ctl=\"" + trunc(ctl || "-", 24) + "\"" + (ctl && LIKE_CTL_RE.test(ctl) && !SEND_CTL_RE.test(ctl) ? "(like)" : ctl && SEND_CTL_RE.test(ctl) ? "(send)" : "(?)"));
@@ -3547,7 +3834,7 @@
         safe(() => chrome.storage.local.get(["videoAttachTrace"], (rT) => {
           if (chrome.runtime.lastError) return;
           const tr = (rT && rT.videoAttachTrace) || [];
-          tr.push({ at: Date.now(), clip: i + 1, of: files.length, res: resTrace + (resVia && resVia !== "-" ? "/" + resVia : ""), tray: trayRemoveBtns().length, up: trayUploads() });
+          tr.push({ at: Date.now(), clip: i + 1, of: files.length, res: resTrace + (resVia && resVia !== "-" ? "/" + resVia : "") + (lastAttachRx && lastAttachRx !== "-" ? " rx:" + lastAttachRx : ""), tray: trayRemoveBtns().length, up: trayUploads() });
           while (tr.length > 12) tr.shift();
           chrome.storage.local.set({ videoAttachTrace: tr }, () => void chrome.runtime.lastError);
         }));
@@ -3802,7 +4089,11 @@
         // signal at all ("unverified", flush Enter already pressed) has nothing
         // confirmed: the bounded-retry policy takes it now, instead of skipping
         // forward one clip per visit for the rest of the set.
-        if (unverifiedStop && !loadStop && startAt === 0 && okCount + adoptedN === 0) {
+        // (v0.21.67) …except a clip Messenger provably HOLDS (the reaction probe
+        // saw it read): it may surface in the tray once the tab is shown, so it
+        // gets the ONE adopt visit below first (trimmed to one and sent), and only
+        // an empty tray on that visit reaches the bounded retry.
+        if (unverifiedStop && !loadStop && startAt === 0 && okCount + adoptedN === 0 && !(lastAttachHeld && !(done[id] && done[id].unverifiedTail))) {
           await zeroEvidenceExit("unconfirmed", files.length);
           return;
         }

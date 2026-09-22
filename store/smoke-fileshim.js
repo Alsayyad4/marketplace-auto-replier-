@@ -27,8 +27,8 @@ const ok = (cond, msg) => { console.log((cond ? "  PASS  " : "  FAIL  ") + msg);
   // --- minimal page stubs ---
   let realClickCalls = 0;
   class FakeInput {
-    constructor(type) { this.type = type; this.files = null; this._events = []; }
-    dispatchEvent(e) { this._events.push(e.type); return true; }
+    constructor(type) { this.type = type; this.files = null; this._events = []; this.listening = true; }
+    dispatchEvent(e) { if (this.listening) this._events.push(e.type); return true; }
   }
   const HTMLInputElement = { prototype: { click() { realClickCalls++; return "REAL-CLICK"; } } };
   const events = [];
@@ -63,12 +63,17 @@ const ok = (cond, msg) => { console.log((cond ? "  PASS  " : "  FAIL  ") + msg);
 
   // 1. Messenger clicks ITS file input -> we fill it, and never open a dialog
   const inp = new FakeInput("file");
+  inp.listening = false; // Messenger attaches its change listener AFTER calling click() — a real dialog never answers synchronously
   const r1 = HTMLInputElement.prototype.click.call(inp);
   ok(realClickCalls === 0, "the ORIGINAL click is NEVER called for a file input (no OS dialog is possible)");
-  ok(inp.files && inp.files.length === 1 && inp.files[0].name === "demo.mp4", "our clip was placed on the input Messenger clicked");
-  ok(inp._events.includes("change"), "a change event is dispatched so React picks the file up");
   ok(r1 === undefined, "the shimmed click returns without a value, like a real one");
+  ok(!inp.files && (win.__subsellShimFired || 0) === 0, "(v0.21.67) nothing is delivered synchronously inside click() — like a real dialog");
+  inp.listening = true; // the listener Messenger adds right after click() returns
+  await new Promise((r) => setTimeout(r, 150));
+  ok(inp.files && inp.files.length === 1 && inp.files[0].name === "demo.mp4", "our clip was placed on the input Messenger clicked");
+  ok(inp._events.includes("change"), "a change event reaches a listener attached AFTER click() returned");
   ok((win.__subsellShimFired || 0) === 1, "the fire is counted, so the machine can report whether Messenger ever asked for a file");
+  ok(win.__subsellShimInfo && win.__subsellShimInfo.connected === false && win.__subsellShimInfo.react === false, "(v0.21.67) the input Messenger clicked is described for the doctor (here: detached, native)");
 
   // 2. A NON-file input must be untouched
   const txt = new FakeInput("text");

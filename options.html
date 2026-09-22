@@ -263,6 +263,8 @@
         <label class="check"><input type="checkbox" id="videoPip" /> Open a small picture-in-picture window during a video set to keep the page awake <span class="hint">no click needed; a floating "SubSell" window appears for the set</span></label>
         <label class="check"><input type="checkbox" id="videoActivateTab" /> Switch an unfocused Chrome window to the Messenger tab</label>
         <label class="check"><input type="checkbox" id="videoTrustedChannels" /> Trusted input: real click on Messenger's attach button / real file drop / real Enter <span class="hint">⚠ on some Messenger builds this opens a real "Open file" dialog on the computer — leave OFF unless told otherwise</span></label>
+        <label class="check"><input type="checkbox" id="videoActivationPulse" /> Experiment: user-activation key press before a video <span class="hint">OFF by default — a key press the page ignores (F16, then Shift) through the debugger; leave OFF unless a diagnostic asks for it</span></label>
+        <label class="check"><input type="checkbox" id="videoMediaPrime" /> Let a hidden Messenger tab load the video (ON by default) <span class="hint">Chrome parks media loads on a hidden page that has never played media, so the clip never gets staged; once per page load the bot plays a silent stream inside the page and checks the gate — nothing visible, no click, no dialog</span></label>
         <hr />
         <label>Video URL library <span class="hint">reference list only (not auto-sent)</span></label>
         <div class="row"><button id="addVideo">+ Add video</button></div>
