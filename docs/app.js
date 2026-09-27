@@ -456,8 +456,16 @@
     L.push(`You are the auto-reply assistant for "${settings.businessName || "(no name)"}".`);
     L.push(`Address: ${settings.businessAddress || "(none)"}. Hours: ${settings.businessHoursText || "(none)"}.`);
     const sec = (title, body) => { if (body && String(body).trim()) { L.push(""); L.push("\u2500\u2500 " + title + " \u2500\u2500"); L.push(String(body).trim()); } };
-    sec("BUSINESS INFO", settings.businessInfo);
-    sec("INSTRUCTIONS / TONE", settings.instructions);
+    sec("OWNER — BUSINESS INFO (the bot is told to find the line here that answers the buyer, and use it)", settings.businessInfo);
+    sec("OWNER — INSTRUCTIONS / TONE", settings.instructions);
+    const co = settings.coaching || [];
+    const isRule = (c) => c && c.kind !== "good" && (c.note === "always applies" || c.buyer === "(general rule from the boss)");
+    const rules = co.filter(isRule);
+    if (rules.length) {
+      L.push("");
+      L.push("\u2500\u2500 OWNER \u2014 STANDING RULES (orders, at the top of every bot's instructions) \u2500\u2500");
+      for (const c of rules) L.push(`\u2022 ${truncTxt(c.better, 160)}`);
+    }
     sec("STARTING PRICES the bot may share", settings.priceList);
     sec("HOW TO CLOSE", settings.closerMode ? settings.closerGoals : "");
     sec("EXAMPLE CONVERSATIONS / RULES", settings.examples);
@@ -468,11 +476,11 @@
       for (const l of av.slice(0, 20)) L.push(`\u2022 ${l.title || l.model || "item"} ${l.storage || ""} ${l.condition || ""}`.replace(/\s+/g, " ").trim());
       if (av.length > 20) L.push(`\u2026 and ${av.length - 20} more`);
     }
-    const co = settings.coaching || [];
-    if (co.length) {
+    const graded = co.filter((c) => !isRule(c));
+    if (graded.length) {
       L.push("");
-      L.push("\u2500\u2500 YOUR COACHING (outranks every style rule) \u2500\u2500");
-      for (const c of co.slice(-12)) {
+      L.push("\u2500\u2500 OWNER \u2014 COACHING FROM REAL CHATS (outranks every style rule) \u2500\u2500");
+      for (const c of graded.slice(-12)) {
         L.push(c.kind === "good"
           ? `\u2714 answer like this \u2014 "${truncTxt(c.buyer, 70)}" \u2192 "${truncTxt(c.reply, 120)}"`
           : `\u2718 NOT "${truncTxt(c.bad || "", 60)}" \u2014 say instead: "${truncTxt(c.better, 120)}"${c.note ? "  (" + truncTxt(c.note, 60) + ")" : ""}`);
@@ -480,7 +488,7 @@
     }
     L.push("");
     L.push("\u2500\u2500 plus, built into every bot \u2500\u2500");
-    L.push("The closing playbook, the platform-safety rules (never share a phone number or move off Messenger), the sound-like-a-person rules, and the reply-format rules. Those ship with the extension \u2014 they are not editable here.");
+    L.push("An authority order (your text wins over the built-in playbook), a before-you-write lookup step (find the line in YOUR business info that answers the buyer before writing), the current time with every message, the closing playbook, the platform-safety rules (never share a phone number or move off Messenger), the sound-like-a-person rules, and the reply-format rules. Those ship with the extension \u2014 they are not editable here.");
     el.textContent = L.join("\n");
   }
   if ($("teachPreviewBtn")) {

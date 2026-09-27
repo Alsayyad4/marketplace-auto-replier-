@@ -9,7 +9,12 @@ all chrome.debugger/CDP work) + Supabase dashboard in docs/. Live branch:
   permissions ships OFF by default behind a cloud setting and goes to ONE machine first.
 - The operator wants zero manual steps in normal operation.
 
-## Known state (v0.21.67)
+## Known state (v0.21.68)
+- Teaching (.68): `buildSystemPrompt` puts the owner's text first with a stated
+  authority order, renders Activity-tab RULES at the top as orders (not as
+  corrections), adds a silent BEFORE-YOU-WRITE lookup step, and `nowLine()` puts
+  the clock in the USER turn only (system prompt stays byte-identical = cache).
+  `store/smoke-prompt.js` locks this in. Operator: engine + video untouched.
 - The periodic alarms are `ensureAlarm()` (create-if-absent): a top-level
   `chrome.alarms.create` re-ran on every worker wake and reset the 10-min updater
   and remote-config alarms forever. Machines still on ≤ .50 must update ONCE by hand
