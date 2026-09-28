@@ -52,7 +52,7 @@
     demoVideoDelaySec: 10,
     demoVideoBetweenSec: 8,
     videoRetryMax: 2,
-    videoLinkFallback: true, // legacy, ignored since .56
+    videoLinkFallback: false, // (v0.21.69) legacy — machines stuck on .47-.51 read it from the row; must be exactly false
     videoLinkOptIn: false,
     videoLinkUrl: "",
     videoLinkText: "",
@@ -526,6 +526,8 @@
             : lp.unchanged ? "no change"
             : lp.keys ? "applied " + lp.keys + " settings from the account"
             : "ok";
+          // (v0.21.69) visible proof that the old builds' demo-link sender was switched off in the account
+          if (lp.linkDisarm === "patched") pull += " · switched the old demo-link fallback OFF for every computer";
           pull = " · last pull " + fmtWhen(lp.at) + ": " + pull;
         }
         const acct = s.userId ? " · account " + String(s.userId).slice(0, 8) : "";

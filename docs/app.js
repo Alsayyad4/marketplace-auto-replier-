@@ -54,7 +54,7 @@
     demoVideoDelaySec: 10,
     demoVideoBetweenSec: 8,
     videoRetryMax: 2, // native attach retries per chat before the link fallback
-    videoLinkFallback: true, // legacy, ignored since .56
+    videoLinkFallback: false, // (v0.21.69) legacy — but machines stuck on .47-.51 READ it from the row and send a link unless it is exactly false
     // (v0.21.66) demo-link keys: kept ONLY so stored configs parse — no form, no
     // reader, no link is ever sent. Mirrors background.js DEFAULTS.
     videoLinkOptIn: false,
@@ -102,6 +102,11 @@
   // it has no option for shows blank and reads back as "", and the API key box can
   // simply look empty — and an empty model or key stops every bot on the account.
   const NEVER_BLANK = { model: 1, apiKey: 1 };
+  // (v0.21.69) Machines stuck on v0.21.47-.51 (their self-updater never fires)
+  // still read `videoLinkFallback` from this row and send the demo as a raw
+  // storage LINK unless it is exactly false. Every save writes these four so no
+  // edit here can ever re-arm them. Mirrors LEGACY_LINK_OFF in background.js.
+  const LEGACY_LINK_OFF = { videoLinkFallback: false, videoLinkOptIn: false, videoLinkUrl: "", videoLinkText: "" };
   let settings = Object.assign({}, DEFAULTS); // working copy (preserves loaded advanced fields)
   // (v0.21.56) Nothing may be written to the shared row until THIS page has read
   // it. `settings` starts as pristine DEFAULTS and the Save handler is bound at
@@ -358,7 +363,26 @@
         : "Your account is empty and the starter setup could not be saved — press Save to cloud to retry.", !saved);
       return;
     }
+    // (v0.21.69) The row still carries the stale builds' link gate armed (every
+    // save before .69 wrote videoLinkFallback:true). This page is signed in and
+    // already holds the row, so it switches the gate off right now — the same
+    // write an updated machine would make on its next pull, only sooner. Fires
+    // once per account: after this save the row reads off and never qualifies.
+    if (legacyLinkArmed(data.config || {})) {
+      const saved = await saveConfig(true);
+      flash(saved
+        ? "Switched the old demo-link fallback OFF for every computer — machines on old builds stop sending the video as a link on their next sync."
+        : "Loaded from cloud.");
+      return;
+    }
     flash(data.config && Object.keys(data.config).length ? "Loaded from cloud." : "New config — fill it in and save.");
+  }
+  // Mirrors legacyLinkArmed() in background.js: the .47-.55 sender fires unless
+  // videoLinkFallback is exactly false; .56/.57 fire on videoLinkOptIn === true.
+  function legacyLinkArmed(cfg) {
+    if (!cfg || typeof cfg !== "object") return false;
+    const txt = (k) => String(cfg[k] == null ? "" : cfg[k]).trim();
+    return cfg.videoLinkFallback !== false || cfg.videoLinkOptIn === true || !!txt("videoLinkUrl") || !!txt("videoLinkText");
   }
   // Same rule as background.js accountIsDead(): a real, working account always has
   // a key, so this can never fire on one.
@@ -377,6 +401,7 @@
     formToFields();
     const clean = Object.assign({}, settings);
     delete clean.enabled; // per-machine
+    Object.assign(clean, LEGACY_LINK_OFF); // (v0.21.69) the stale builds' link sender stays off
     // (v0.21.56) OPTIMISTIC CONCURRENCY. Both this page and every extension write
     // the whole config column, with no precondition — so whoever saved last simply
     // erased the other's edits, and the loser was never told. Send the stamp we

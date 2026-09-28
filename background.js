@@ -90,9 +90,14 @@ const DEFAULTS = {
   // storage URL in a buyer's chat reads as a scam and Marketplace flags accounts
   // for it) and the owner asked for the option itself to be removed. These four
   // keys exist ONLY so configs stored before then still parse. No form shows
-  // them and nothing reads them. Do not reintroduce a link path — the demo is
-  // sent as a video FILE or not at all.
-  videoLinkFallback: true,
+  // them and nothing in THIS build reads them. Do not reintroduce a link path —
+  // the demo is sent as a video FILE or not at all.
+  // (v0.21.69) …but machines stuck on v0.21.47-.51 (their self-updater never
+  // fires) DO read `videoLinkFallback` from the shared account row, and send the
+  // link whenever it is anything but `false`. `true` here meant every save
+  // re-armed them. The value must be `false`, and it must reach the row — see
+  // LEGACY_LINK_OFF / disarmLegacyLinkInCloud.
+  videoLinkFallback: false,
   videoLinkOptIn: false,
   videoLinkUrl: "",
   videoLinkText: "",
@@ -755,6 +760,80 @@ async function cloudLiveConfig() {
   } catch (e) { return null; }
 }
 
+/* (v0.21.69) THE LINK THAT WOULD NOT DIE. The demo-as-a-link sender was deleted
+ * in .60, yet buyers kept getting "Voici la vidéo démo 🎥 (demo video) https://…
+ * supabase.co/storage/…mp4" — from machines stuck on v0.21.47-.51, whose
+ * self-updater never fires (.52 fixed it, so those builds can never receive a
+ * fix). Their sender is gated on `videoLinkFallback !== false`, read from the
+ * shared account row — which every build until now shipped as `true`, so every
+ * dashboard save re-armed them. Nothing ON those machines can be changed from
+ * here, but the ROW can: once it carries these four values, every stale machine
+ * reads them on its next pull (~1 min) and goes quiet.
+ *   - every push from a current build writes LEGACY_LINK_OFF into the row, and
+ *   - a current build whose own pulled copy still reads armed patches the four
+ *     keys in with a compare-and-set on updated_at, so it can never overwrite a
+ *     concurrent save: whoever gets there first is the only writer, the rest see
+ *     the fixed row on their next pull and do nothing.
+ * No form shows these keys and this build never reads them for anything else. */
+const LEGACY_LINK_OFF = Object.freeze({ videoLinkFallback: false, videoLinkOptIn: false, videoLinkUrl: "", videoLinkText: "" });
+function legacyLinkArmed(cfg) {
+  if (!cfg || typeof cfg !== "object") return false;
+  const txt = (k) => String(cfg[k] == null ? "" : cfg[k]).trim();
+  return cfg.videoLinkFallback !== false || cfg.videoLinkOptIn === true || !!txt("videoLinkUrl") || !!txt("videoLinkText");
+}
+const LINK_DISARM_RETRY_MS = 10 * 60 * 1000;
+// `held` = the copy this machine applied (the reason we are here). Nothing is
+// stored locally on success: the next pull sees the new stamp and brings the
+// fixed row in through cloudPullRaw's own wipe guard, like any other change.
+async function disarmLegacyLinkInCloud(held) {
+  try {
+    const auth = await cloudValidAuth();
+    if (!auth) return { ok: false, skipped: "not logged in" };
+    const last = await new Promise((r) => chrome.storage.local.get(["linkDisarmAt"], (x) => r((x && x.linkDisarmAt) || 0)));
+    if (last && Date.now() - last < LINK_DISARM_RETRY_MS) return { ok: false, skipped: "tried recently" };
+    // A rate limit on FAILURE only (cleared below once the row reads off), so a
+    // row re-armed later by a stale machine's Settings page is fixed on the very
+    // next pull, not ten minutes on.
+    const setTried = () => new Promise((r) => chrome.storage.local.set({ linkDisarmAt: Date.now() }, () => { void chrome.runtime.lastError; r(); }));
+    const clearTried = () => new Promise((r) => chrome.storage.local.remove(["linkDisarmAt"], () => { void chrome.runtime.lastError; r(); }));
+    await setTried();
+    const { url, key } = await getCloudCreds();
+    const headers = { apikey: key, authorization: "Bearer " + auth.access_token };
+    // Re-read right before writing: the copy that triggered this may be stale.
+    const resp = await fetch(`${url}/rest/v1/subsell_configs?select=config,updated_at`, { headers, cache: "no-store" });
+    if (!resp.ok) return { ok: false, error: "HTTP " + resp.status };
+    const rows = await resp.json().catch(() => []);
+    if (!Array.isArray(rows) || !rows.length) return { ok: false, skipped: "no row" };
+    const live = rows[0].config;
+    const stamp = rows[0].updated_at || "";
+    if (!live || typeof live !== "object") return { ok: false, skipped: "no config" };
+    if (!stamp) return { ok: false, skipped: "no stamp" }; // never write without the precondition
+    if (!legacyLinkArmed(live)) { await clearTried(); return { ok: true, already: true }; }
+    // The same test cloudPullRaw applies to an incoming row: a row this machine
+    // would refuse as a wipe is not ours to touch — the heal owns it.
+    const heldW = held && typeof held === "object" ? configWeight(held) : 0;
+    if (heldW >= 20 && (looksLikeWipe(live, held) || configWeight(live) < heldW * 0.5)) return { ok: false, skipped: "row looks emptied — left to the heal" };
+    const patched = Object.assign({}, live, LEGACY_LINK_OFF); // the row as it is, four keys changed, nothing dropped
+    // Compare-and-set: the update lands only if the row is still the one just read.
+    // RLS already scopes the write to this account's row; the user_id term is
+    // belt-and-braces and is left out when a session stored by an older build
+    // has not carried the id yet.
+    const scope = auth.user_id ? `user_id=eq.${encodeURIComponent(auth.user_id)}&` : "";
+    const q = `${url}/rest/v1/subsell_configs?${scope}updated_at=eq.${encodeURIComponent(stamp)}`;
+    const put = await fetch(q, {
+      method: "PATCH",
+      headers: Object.assign({ "content-type": "application/json", prefer: "return=representation" }, headers),
+      body: JSON.stringify({ config: patched }),
+    });
+    const data = await put.json().catch(() => null);
+    if (!put.ok) return { ok: false, error: (data && (data.message || data.error)) || ("HTTP " + put.status) };
+    if (!Array.isArray(data) || !data.length) return { ok: false, lost: true }; // another write landed first — the next pull re-reads
+    await clearTried();
+    LOG("switched the legacy demo-link fallback OFF in the account row — stale builds stop sending links on their next pull");
+    return { ok: true, patched: true };
+  } catch (e) { return { ok: false, error: e.message }; }
+}
+
 // (v0.21.61) An emptied account leaves every bot on every machine mute, and the
 // operator sees a settings page that looks like a fresh install. A machine that
 // still holds the real settings puts them back by itself — nobody has to notice.
@@ -828,6 +907,18 @@ async function seedEmptyAccount(stamp, current) {
 // "pulled your cloud settings" whatever came back — including nothing at all.
 async function cloudPull(force) {
   const out = await cloudPullRaw(force);
+  // (v0.21.69) The copy this machine holds is the copy every stale build holds.
+  // If it still reads armed, the row still reads armed: fix the row. Costs
+  // nothing once the row is off (the copy then reads off too).
+  if (out && out.ok && !out.wiped) {
+    try {
+      const held = await new Promise((r) => chrome.storage.local.get(["cloudConfig"], (x) => r(x && x.cloudConfig)));
+      if (legacyLinkArmed(held)) {
+        const d = await disarmLegacyLinkInCloud(held);
+        out.linkDisarm = d.patched ? "patched" : d.already ? "already off" : d.lost ? "lost the race" : (d.skipped || d.error || "?");
+      }
+    } catch (e) { /* the sweep must never break a pull */ }
+  }
   try {
     await new Promise((r) =>
       chrome.storage.local.set({ lastPull: Object.assign({ at: Date.now() }, out) }, () => { void chrome.runtime.lastError; r(); })
@@ -953,6 +1044,7 @@ async function cloudPush(config) {
   const guarded = await guardOutgoingConfig(config);
   const clean = Object.assign({}, guarded.config);
   delete clean.enabled;
+  Object.assign(clean, LEGACY_LINK_OFF); // (v0.21.69) no save from any build may re-arm the stale builds' link sender
   await bankConfig(clean, "save");
   try {
     const resp = await fetch(`${url}/rest/v1/subsell_configs?on_conflict=user_id`, {
@@ -3276,7 +3368,7 @@ chrome.runtime.onMessage.addListener((msg, _sender, sendResponse) => {
           const list = await scanConfigSources();
           const pick = list[Number(msg.index) || 0];
           if (!pick || !pick.config) { sendResponse({ ok: false, error: "no backup on this machine" }); break; }
-          const cfg = Object.assign({}, pick.config);
+          const cfg = Object.assign({}, pick.config, LEGACY_LINK_OFF); // (v0.21.69) a backup from before .69 still carries the armed keys
           delete cfg.enabled;
           await syncedConfigWrite(cfg);
           await new Promise((r) => chrome.storage.local.set({ cloudConfig: cfg, cloudConfigAt: Date.now() }, r));
@@ -3301,7 +3393,7 @@ chrome.runtime.onMessage.addListener((msg, _sender, sendResponse) => {
           // "Run test" saves too, so the operator troubleshooting a dead bot was
           // one button away from publishing the blank form to the whole account.
           const guarded = await guardOutgoingConfig(s);
-          const safe = Object.assign({}, guarded.config);
+          const safe = Object.assign({}, guarded.config, LEGACY_LINK_OFF); // (v0.21.69) the Chrome-sync mirror may not re-arm a stale machine either
           await bankConfig(safe, "save");
           const ok = await syncedConfigWrite(safe);
           let cloud = null;

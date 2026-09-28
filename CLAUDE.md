@@ -9,7 +9,17 @@ all chrome.debugger/CDP work) + Supabase dashboard in docs/. Live branch:
   permissions ships OFF by default behind a cloud setting and goes to ONE machine first.
 - The operator wants zero manual steps in normal operation.
 
-## Known state (v0.21.68)
+## Known state (v0.21.69)
+- Demo LINK (.69): the current build has NO link sender (deleted .60). Links a buyer
+  still receives come from machines stuck on v0.21.47-.51 (self-updater dead there),
+  gated on `videoLinkFallback !== false` read from the SHARED account row. Fix = the
+  row: all DEFAULTS now `false`, every outgoing write (push, sync mirror, restore,
+  dashboard save) carries `LEGACY_LINK_OFF`, `disarmLegacyLinkInCloud(held)` compare-
+  and-sets the four keys into the row after a pull whose held copy is still armed
+  (stores nothing locally; the fixed row comes back through the guarded pull), and the
+  dashboard does the same on open. Unreachable: a stale machine whose cloud session
+  died (frozen copy) — needs a re-login or Load unpacked. Never ship `true` again;
+  `store/smoke-linkoff.js`.
 - Teaching (.68): `buildSystemPrompt` puts the owner's text first with a stated
   authority order, renders Activity-tab RULES at the top as orders (not as
   corrections), adds a silent BEFORE-YOU-WRITE lookup step, and `nowLine()` puts

@@ -109,6 +109,15 @@ const ok = (cond, msg) => { console.log((cond ? "  PASS  " : "  FAIL  ") + msg);
      "a blank businessInfo/instructions/closerGoals deletes the key instead of persisting \"\"");
   ok(/model: "claude-haiku-4-5"/.test(src),
      "dashboard model default matches the extension (no silent re-pin to a pricier model)");
+  // (v0.21.69) machines stuck on .47-.51 read videoLinkFallback from this row and
+  // send the demo as a raw LINK unless it is exactly false — a save here must never re-arm them.
+  ok(/^\s*videoLinkFallback:\s*false,/m.test(src) && !/^\s*videoLinkFallback:\s*true,/m.test(src),
+     "dashboard DEFAULTS ship videoLinkFallback: false (the stale builds' link gate)");
+  ok(/delete clean\.enabled;[^\n]*\n\s*Object\.assign\(clean, LEGACY_LINK_OFF\)/.test(src),
+     "saveConfig clamps the four legacy link keys off on every write");
+  ok(/if \(legacyLinkArmed\(data\.config \|\| \{\}\)\) \{\s*\n\s*const saved = await saveConfig\(true\)/.test(src) &&
+     /function legacyLinkArmed\(cfg\)/.test(src) && /videoLinkFallback !== false \|\| cfg\.videoLinkOptIn === true/.test(src),
+     "loadConfig disarms an armed row the moment the page opens (quiet save), with the same test as background.js");
 
   console.log(failed ? "\n" + failed + " CHECK(S) FAILED" : "\nall checks passed");
   process.exit(failed ? 1 : 0);
