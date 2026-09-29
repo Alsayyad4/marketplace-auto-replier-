@@ -1,5 +1,7 @@
--- SubSell — config safety net (v0.21.61). Run once in the Supabase SQL editor.
--- Safe to re-run. Touches only subsell_* objects.
+-- SubSell — config safety net (v0.21.61, fixed v0.21.70). Run once in the Supabase
+-- SQL editor. Safe to re-run — and if you ran the v0.21.61 copy, RUN THIS ONE AGAIN:
+-- the old trigger blocked every save (see "WHY IT BROKE" below).
+-- Touches only subsell_* objects.
 --
 -- WHY THIS EXISTS
 -- The settings row is overwritten in place by whoever saves last, and it had no
@@ -18,6 +20,19 @@
 --      bot dead: apiKey, model, businessInfo, instructions.
 -- Anything else — listings, videos, coaching — is left alone, because emptying
 -- those is a thing an operator legitimately does. History covers them instead.
+--
+-- WHY IT BROKE (v0.21.61 → fixed here, v0.21.70)
+-- A trigger function runs as whoever made the write — the signed-in operator,
+-- through the dashboard or through an extension — and the history table let that
+-- role READ, never INSERT. So from the first save after the v0.21.61 copy was run
+-- (Sep 22 2026), every update of a live row died with
+--   new row violates row-level security policy for table "subsell_config_history"
+-- The dashboard said "Not saved", every extension's push failed silently, and no
+-- teaching reached any machine. The snapshot now runs as the function's owner
+-- (SECURITY DEFINER, search_path pinned), which the history policies do not bind;
+-- clients still cannot touch the history directly. And the snapshot can never
+-- again be the thing that stops a save: if writing history fails, the failure is
+-- logged as a warning and the operator's write goes through.
 
 -- 1) What each write replaced.
 create table if not exists public.subsell_config_history (
@@ -34,10 +49,16 @@ drop policy if exists "owner reads own config history" on public.subsell_config_
 create policy "owner reads own config history"
   on public.subsell_config_history for select
   using (auth.uid() = user_id);
+-- Only the trigger writes history. No client role may insert, change or prune it.
+revoke insert, update, delete on public.subsell_config_history from anon, authenticated;
 
 -- 2) Snapshot the old row, then refuse to blank out what keeps the bots alive.
 create or replace function public.subsell_guard_config()
-returns trigger language plpgsql as $$
+returns trigger
+language plpgsql
+security definer
+set search_path = public, pg_temp
+as $$
 declare
   k      text;
   oldv   text;
@@ -59,15 +80,21 @@ begin
   end loop;
 
   if worth and oldcfg is distinct from new.config then
-    insert into public.subsell_config_history (user_id, config) values (old.user_id, oldcfg);
-    delete from public.subsell_config_history
-     where user_id = old.user_id
-       and id not in (
-         select id from public.subsell_config_history
-          where user_id = old.user_id
-          order by replaced_at desc
-          limit 20
-       );
+    begin
+      insert into public.subsell_config_history (user_id, config) values (old.user_id, oldcfg);
+      delete from public.subsell_config_history
+       where user_id = old.user_id
+         and id not in (
+           select id from public.subsell_config_history
+            where user_id = old.user_id
+            order by replaced_at desc
+            limit 20
+         );
+    exception when others then
+      -- The safety net must never be what stops a save. A copy that cannot be
+      -- kept is a warning in the Postgres log, not a refused write.
+      raise warning 'subsell_config_history: % — the save went through without a snapshot', sqlerrm;
+    end;
   end if;
 
   -- A blank may not replace a real value in these four. Every one of them, left

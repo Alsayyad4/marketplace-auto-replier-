@@ -346,6 +346,7 @@
     if ($("save")) $("save").disabled = false;
     renderAll();
     buildUrl();
+    try { // (v0.21.70) the draft offer is in the finally: nothing on this load may clear it first
     // (v0.21.66) A DEAD account — no API key AND nothing it has been taught — is
     // what a blank-form save leaves behind, and what the operator was looking at:
     // blank Model, "No central videos yet", "No lessons yet". The extension puts
@@ -357,7 +358,7 @@
     if (accountIsDead(data.config || {}) && window.SUBSELL_SEED) {
       settings = Object.assign({}, settings, window.SUBSELL_SEED);
       renderAll();
-      const saved = await saveConfig(true);
+      const saved = await saveConfig(true, SYSTEM_SAVE);
       flash(saved
         ? "Your account was empty — the SubSell starter setup was put back (business info, hours, 2 demo videos). Only the API key is missing: paste it on the General tab."
         : "Your account is empty and the starter setup could not be saved — press Save to cloud to retry.", !saved);
@@ -369,13 +370,16 @@
     // write an updated machine would make on its next pull, only sooner. Fires
     // once per account: after this save the row reads off and never qualifies.
     if (legacyLinkArmed(data.config || {})) {
-      const saved = await saveConfig(true);
+      const saved = await saveConfig(true, SYSTEM_SAVE);
       flash(saved
         ? "Switched the old demo-link fallback OFF for every computer — machines on old builds stop sending the video as a link on their next sync."
         : "Loaded from cloud.");
       return;
     }
     flash(data.config && Object.keys(data.config).length ? "Loaded from cloud." : "New config — fill it in and save.");
+    } finally {
+      offerDraft(); // (v0.21.70) teaching a refused save left behind in this browser — after the load-time saves, which never touch it
+    }
   }
   // Mirrors legacyLinkArmed() in background.js: the .47-.55 sender fires unless
   // videoLinkFallback is exactly false; .56/.57 fire on videoLinkOptIn === true.
@@ -391,7 +395,143 @@
     return blank("apiKey") && blank("businessInfo") && blank("instructions");
   }
 
-  async function saveConfig(quiet) {
+  /* ---- (v0.21.70) WHEN A SAVE IS REFUSED ----
+   * For a week every save died in the database with a message nobody could act
+   * on — "new row violates row-level security policy for table
+   * subsell_config_history": the safety-net trigger from config-safety.sql ran
+   * with the operator's rights and could not write its own history table, so the
+   * dashboard said "Not saved" and every extension's push failed silently. The
+   * page now (1) says what that means and hands over the cure: one click copies
+   * the corrected SQL, one opens the SQL editor; and (2) never lets the typed
+   * teaching evaporate: the text fields of a refused save are kept in this
+   * browser and offered back the next time the page loads. ---- */
+  const SQL_FIX_URLS = [
+    "https://raw.githubusercontent.com/alsayyad4/marketplace-auto-replier-/claude/wizardly-noether-Oi6vP/supabase/config-safety.sql",
+    "../supabase/config-safety.sql",
+  ];
+  function sqlEditorUrl() {
+    try { return "https://supabase.com/dashboard/project/" + new URL(window.SUBSELL_SUPABASE_URL).hostname.split(".")[0] + "/sql/new"; }
+    catch (e) { return "https://supabase.com/dashboard"; }
+  }
+  // The one save error with a known, one-paste cure.
+  function isHistoryRlsError(error) {
+    const m = String((error && error.message) || "");
+    return /subsell_config_history/i.test(m) && /row-level security|permission denied/i.test(m);
+  }
+  function explainSaveError(error) {
+    if (isHistoryRlsError(error)) {
+      return "Not saved \u2014 the account's safety net (a database trigger) is refusing every write, from every computer. One-time fix below. Your text stays on this page.";
+    }
+    return "Not saved: " + ((error && error.message) || "unknown error");
+  }
+  async function fetchSqlFix() {
+    for (const u of SQL_FIX_URLS) {
+      try {
+        const r = await fetch(u, { cache: "no-store" });
+        if (r.ok) { const t = await r.text(); if (/subsell_guard_config/.test(t) && /security definer/i.test(t)) return t; }
+      } catch (e) { /* try the next copy */ }
+    }
+    return "";
+  }
+  function hideFixBanner() { const el = $("fixBanner"); if (el) { el.classList.add("hidden"); el.innerHTML = ""; } }
+  function showFixBanner(error) {
+    const el = $("fixBanner");
+    if (!el) return;
+    el.innerHTML = "";
+    el.classList.remove("hidden");
+    const msg = document.createElement("span");
+    msg.textContent = "The database refused the save (" + String((error && error.message) || "").slice(0, 110) + "). Fix it once, for every computer: ";
+    const copy = document.createElement("button");
+    copy.type = "button"; copy.className = "primary"; copy.textContent = "1. Copy the fix";
+    copy.addEventListener("click", async () => {
+      copy.disabled = true; copy.textContent = "Fetching\u2026";
+      const sql = await fetchSqlFix();
+      copy.disabled = false;
+      if (!sql) {
+        // Never hand over a file that did not pass the check: right after a push the
+        // CDN can still serve the OLD copy, and pasting that re-installs the bug.
+        copy.textContent = "1. The corrected file is not published yet (or you are offline) \u2014 try again in a few minutes";
+        return;
+      }
+      let copied = false;
+      if (navigator.clipboard && navigator.clipboard.writeText) {
+        try { await navigator.clipboard.writeText(sql); copied = true; } catch (e) { /* clipboard blocked */ }
+      }
+      if (copied) { copy.textContent = "1. Copied \u2713 \u2014 paste it in the SQL editor and press Run"; return; }
+      // Clipboard blocked: the text appears right here, ready to select.
+      copy.textContent = "1. Clipboard blocked \u2014 click the box below, Ctrl+A, Ctrl+C";
+      const ta = document.createElement("textarea");
+      ta.readOnly = true; ta.value = sql; ta.style.cssText = "width:100%;height:140px;font:12px/1.3 monospace;";
+      ta.addEventListener("focus", () => ta.select());
+      el.appendChild(ta);
+    });
+    const open = document.createElement("a");
+    open.href = sqlEditorUrl(); open.target = "_blank"; open.rel = "noopener"; open.textContent = "2. Open the SQL editor";
+    const then = document.createElement("span");
+    then.textContent = "3. Paste, Run (\u201cSuccess. No rows returned\u201d), come back here and press Save to cloud.";
+    el.appendChild(msg); el.appendChild(copy); el.appendChild(open); el.appendChild(then);
+  }
+
+  // The teaching typed into a save the database refused, kept in THIS browser only
+  // (never the API key), per account, and offered back on the next load. The offer
+  // has its own element (#draftBanner) and its own lifecycle: load-time SYSTEM saves
+  // (the seed, the legacy-link disarm) never keep or clear it, and while an offer is
+  // on screen no later save may overwrite or delete the stored draft — only the
+  // operator's own click ("Put my text back" / "Discard it") ends it. The first
+  // draft of this code ran the offer BEFORE those load-time saves, which then
+  // destroyed it on every reload; the 3-refuter review caught that.
+  const DRAFT_KEY = "subsell_unsaved_teaching";
+  const DRAFT_FIELDS = ["businessName", "businessAddress", "businessHoursText", "businessInfo", "instructions", "examples", "closerGoals", "priceList", "visitConfirmMessage"];
+  const asText = (v) => (v == null ? "" : String(v));
+  let draftOffered = false; // an offer is on screen: the stored draft is frozen until the operator decides
+  function draftKey() { return DRAFT_KEY + (session && session.user && session.user.id ? ":" + session.user.id : ""); }
+  function keepDraft() {
+    try {
+      const d = { at: Date.now(), user: session && session.user ? session.user.id : null, fields: {}, coaching: Array.isArray(settings.coaching) ? settings.coaching : [] };
+      for (const k of DRAFT_FIELDS) d.fields[k] = asText(settings[k]);
+      localStorage.setItem(draftKey(), JSON.stringify(d));
+    } catch (e) { /* storage blocked or full: nothing to keep */ }
+  }
+  function keepTypedDraft() { if (!draftOffered) keepDraft(); }
+  function clearDraft() { try { localStorage.removeItem(draftKey()); } catch (e) { /* ignore */ } }
+  function readDraft() { try { return JSON.parse(localStorage.getItem(draftKey()) || "null"); } catch (e) { return null; } }
+  function hideDraftBanner() { const el = $("draftBanner"); if (el) { el.classList.add("hidden"); el.innerHTML = ""; } }
+  function offerDraft() {
+    const d = readDraft();
+    if (!d || !d.fields) return;
+    if (d.user && session && session.user && d.user !== session.user.id) return; // another account's text
+    const diff = DRAFT_FIELDS.filter((k) => asText(d.fields[k]) !== asText(settings[k]));
+    const coachDiff = JSON.stringify(d.coaching || []) !== JSON.stringify(settings.coaching || []);
+    if (!diff.length && !coachDiff) { clearDraft(); draftOffered = false; hideDraftBanner(); return; } // it landed after all (or was retyped)
+    const el = $("draftBanner");
+    if (!el) return;
+    el.innerHTML = "";
+    el.classList.remove("hidden");
+    draftOffered = true;
+    const msg = document.createElement("span");
+    msg.textContent = "Teaching you typed on " + new Date(d.at).toLocaleString() + " never reached the cloud \u2014 text and lessons only (" +
+      diff.concat(coachDiff ? ["lessons"] : []).join(", ") + "). ";
+    const put = document.createElement("button");
+    put.type = "button"; put.className = "primary"; put.textContent = "Put my text back and save";
+    put.addEventListener("click", async () => {
+      for (const k of diff) settings[k] = d.fields[k];
+      if (coachDiff) settings.coaching = d.coaching;
+      renderAll();
+      draftOffered = false;
+      hideDraftBanner();
+      await saveConfig(false); // a landed save clears the draft; a refused one keeps it again
+    });
+    const drop = document.createElement("button");
+    drop.type = "button"; drop.textContent = "Discard it";
+    drop.addEventListener("click", () => {
+      if (!confirm("Throw away the teaching typed on " + new Date(d.at).toLocaleString() + "? This cannot be undone.")) return;
+      clearDraft(); draftOffered = false; hideDraftBanner();
+    });
+    el.appendChild(msg); el.appendChild(put); el.appendChild(drop);
+  }
+
+  const SYSTEM_SAVE = true; // (v0.21.70) a save this page makes on its own (seed, legacy-link disarm): carries no typed text
+  async function saveConfig(quiet, system) {
     // (v0.21.56) never write a config this page has not read (see rowLoaded above)
     if (!rowLoaded) {
       if (autoMsg) { autoMsg.textContent = "Not saved — still loading your settings"; autoMsg.className = "hint"; }
@@ -415,20 +555,28 @@
     if (!error && (!wrote || !wrote.length)) {
       // Someone (another tab, or a machine's own save) wrote first.
       if (autoMsg) { autoMsg.textContent = "Someone else saved first — reloading their version"; autoMsg.className = "err"; }
-      flash("Another device saved these settings while you were editing — reloaded theirs so nothing is lost. Re-apply your change and save again.", true);
+      flash("Another device saved these settings while you were editing — reloaded theirs. Your text is kept — the banner offers it back.", true);
+      if (!system) keepTypedDraft(); // (v0.21.70) the text on screen is about to be replaced by theirs
       await loadConfig();
       return false;
     }
     if (!error && wrote && wrote[0]) loadedStamp = wrote[0].updated_at || loadedStamp;
     if (error) {
-      if (autoMsg) { autoMsg.textContent = "Not saved: " + error.message; autoMsg.className = "err"; }
-      flash("Save failed: " + error.message, true);
+      // (v0.21.70) Keep what was typed, say what the error means, and when it is
+      // the safety-net trigger, hand over the one-paste cure right here.
+      if (!system) keepTypedDraft(); // a load-time save carries no typed text; a pending offer is never overwritten
+      const why = explainSaveError(error);
+      if (autoMsg) { autoMsg.textContent = why; autoMsg.className = "err"; autoMsg.title = error.message || ""; }
+      if (isHistoryRlsError(error)) showFixBanner(error);
+      flash(why, true);
       return false;
     }
+    if (!system && !draftOffered) clearDraft(); // a landed save clears the draft — unless an older offer is still on screen
+    hideFixBanner();
     // Machines on cloud sync re-pull once a minute; the old copy said ~10 min,
     // which is the REMOTE-URL cadence, and made the operator think their edits
     // had not landed. Say the true number and show the clock.
-    if (autoMsg) { autoMsg.textContent = "Saved " + new Date().toLocaleTimeString() + " \u2014 live on every bot within ~1 min"; autoMsg.className = "saved"; }
+    if (autoMsg) { autoMsg.textContent = "Saved " + new Date().toLocaleTimeString() + " \u2014 live on every bot within ~1 min (computers on the config link: ~10 min)"; autoMsg.className = "saved"; autoMsg.title = ""; }
     if (!quiet) flash("Saved \u2713 \u2014 every bot picks this up within ~1 min.");
     renderTeachPreview();
     return true;

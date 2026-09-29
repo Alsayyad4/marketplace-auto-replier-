@@ -115,9 +115,36 @@ const ok = (cond, msg) => { console.log((cond ? "  PASS  " : "  FAIL  ") + msg);
      "dashboard DEFAULTS ship videoLinkFallback: false (the stale builds' link gate)");
   ok(/delete clean\.enabled;[^\n]*\n\s*Object\.assign\(clean, LEGACY_LINK_OFF\)/.test(src),
      "saveConfig clamps the four legacy link keys off on every write");
-  ok(/if \(legacyLinkArmed\(data\.config \|\| \{\}\)\) \{\s*\n\s*const saved = await saveConfig\(true\)/.test(src) &&
+  ok(/if \(legacyLinkArmed\(data\.config \|\| \{\}\)\) \{\s*\n\s*const saved = await saveConfig\(true, SYSTEM_SAVE\)/.test(src) &&
      /function legacyLinkArmed\(cfg\)/.test(src) && /videoLinkFallback !== false \|\| cfg\.videoLinkOptIn === true/.test(src),
      "loadConfig disarms an armed row the moment the page opens (quiet save), with the same test as background.js");
+
+  // (v0.21.70) A refused save must never dead-end. The safety-net trigger's RLS error
+  // ("new row violates row-level security policy for table subsell_config_history")
+  // gets a human sentence plus the one-paste cure, and the typed teaching is kept.
+  ok(/function isHistoryRlsError\(error\)/.test(src) && /subsell_config_history/.test(src) && /row-level security/.test(src),
+     "the history-table RLS error is recognised by name");
+  ok(/if \(!system\) keepTypedDraft\(\);[^\n]*\n\s*const why = explainSaveError\(error\);/.test(src),
+     "a refused save keeps the typed teaching (draft) BEFORE reporting — unless it is a load-time SYSTEM save");
+  ok(/if \(isHistoryRlsError\(error\)\) showFixBanner\(error\);/.test(src),
+     "the safety-net error shows the fix banner (copy the SQL, open the SQL editor)");
+  ok(/if \(!system && !draftOffered\) clearDraft\(\);[^\n]*\n\s*hideFixBanner\(\);/.test(src),
+     "a landed save clears the draft and the fix banner — never a SYSTEM save, never while an offer is on screen");
+  ok(/const DRAFT_FIELDS = \[[^\]]*\]/.test(src) && !/const DRAFT_FIELDS = \[[^\]]*apiKey/.test(src),
+     "the draft never holds the API key");
+  ok(/\} finally \{\s*\n\s*offerDraft\(\);/.test(src) && src.indexOf("offerDraft();") > src.indexOf("legacyLinkArmed(data.config || {})) {"),
+     "loadConfig offers the draft back LAST (finally), after the seed / legacy-link load-time saves");
+  ok(/accountIsDead\(data\.config \|\| \{\}\) && window\.SUBSELL_SEED\) \{[\s\S]{0,200}saveConfig\(true, SYSTEM_SAVE\)/.test(src) &&
+     /legacyLinkArmed\(data\.config \|\| \{\}\)\) \{\s*\n\s*const saved = await saveConfig\(true, SYSTEM_SAVE\)/.test(src) &&
+     /autoPending = false; await saveConfig\(true\);/.test(src),
+     "the seed and legacy-link load-time saves are SYSTEM saves; the keystroke auto-save stays a normal quiet save (runtime proof: store/smoke-draft.js)");
+  ok(/id="draftBanner"[^>]*class="hint hidden"/.test(html), "the draft offer has its own element, so the fix banner cannot replace it");
+  ok(/if \(!sql\) \{[\s\S]{0,400}return;\s*\}/.test(src) && !/window\.open\(SQL_FIX_URLS/.test(src),
+     "'Copy the fix' never opens or hands over a file that failed the security-definer check");
+  ok(/app\.js\?v=20260929/.test(html), "app.js cache-buster bumped for this release");
+  ok(/config-safety\.sql/.test(src) && /\/sql\/new/.test(src), "the banner points at config-safety.sql and the project's SQL editor");
+  ok(/d\.user !== session\.user\.id\) return;/.test(src), "a draft from another account is never offered");
+  ok(/id="fixBanner"[^>]*class="hint hidden"/.test(html), "the fix banner starts hidden in the markup");
 
   console.log(failed ? "\n" + failed + " CHECK(S) FAILED" : "\nall checks passed");
   process.exit(failed ? 1 : 0);

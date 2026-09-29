@@ -395,6 +395,7 @@
   document.querySelector('.tab[data-tab="log"]').addEventListener("click", loadLog);
 
   /* ----- save / load ----- */
+  let savedMsgTimer = null; // (v0.21.70) a 15-s red message must not blank a later green one
   function save() {
     formToFields();
     // Synced across all computers on the same Google account (via background).
@@ -402,11 +403,34 @@
       // (v0.21.61) When the guard folds values back into a save that would have
       // cleared them, say so — a silent repair is how you find out months later.
       const rep = (r && r.repaired) || [];
-      $("savedMsg").textContent = rep.length
+      let text = rep.length
         ? "Saved ✓ — kept " + rep.length + " field(s) a blank form would have cleared (" +
           rep.slice(0, 3).join(", ") + (rep.length > 3 ? "…" : "") + ")"
         : "Saved ✓ (syncs to your other computers)";
-      setTimeout(() => ($("savedMsg").textContent = ""), rep.length ? 6000 : 2500);
+      // (v0.21.70) Say what actually happened. For a week the account refused every
+      // push (its safety-net trigger could not write its history table) and this
+      // line still said "Saved ✓": the running bot reads cloudConfig, which a refused
+      // push never updates, so the edit took effect NOWHERE — it only sits in this
+      // machine's backup bank (Settings → General → "Earlier copies of my settings").
+      const c = r && r.cloud; // null = not logged in; {ok:false} = the account refused the write
+      const lastErr = chrome.runtime.lastError;
+      let bad = true;
+      if (lastErr || !r) {
+        text = "Not saved — the extension did not answer (" + ((lastErr && lastErr.message) || "no reply") + "). Reload the extension and try again.";
+      } else if (c && c.ok === false) {
+        const err = String(c.error || "");
+        text = "NOT applied — the cloud refused the save, so every computer (this one too) keeps the previous settings. " +
+          (/subsell_config_history/i.test(err)
+            ? "Cure (once): open the web dashboard and press Save to cloud — it hands you the SQL to paste."
+            : "Reason: " + err) +
+          " Your text is kept in this computer's backup (Settings → General → Earlier copies of my settings).";
+      } else if (r.ok === false) {
+        text = "Saved to the cloud — but Chrome sync refused its copy on this computer.";
+      } else bad = false;
+      clearTimeout(savedMsgTimer);
+      $("savedMsg").textContent = text;
+      $("savedMsg").style.color = bad ? "#c0392b" : "";
+      savedMsgTimer = setTimeout(() => ($("savedMsg").textContent = ""), bad ? 15000 : rep.length ? 6000 : 2500);
     });
   }
   $("save").addEventListener("click", save);

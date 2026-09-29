@@ -88,9 +88,16 @@ Paste that URL into the extension (Settings → General → **Remote config URL*
   feature, which fetches the JSON on startup and every ~10 min and applies it as the
   top settings source.
 
-## Config safety (v0.21.61)
+## Config safety (v0.21.61, fixed v0.21.70 — run it again)
 
-Run `config-safety.sql` once in the SQL editor, after `schema.sql`. It adds
+Run `config-safety.sql` once in the SQL editor, after `schema.sql`. **If you ran the
+v0.21.61 copy, run the current file again:** that copy's trigger ran with the caller's
+rights and could not write its own history table, so every save on a live account was
+refused with "new row violates row-level security policy for table
+subsell_config_history" (dashboard and extensions alike). The current file is
+idempotent; the trigger is SECURITY DEFINER and a failed snapshot can no longer block a
+save. The dashboard shows a "Copy the fix / Open the SQL editor" banner whenever it
+meets that error. It adds
 `subsell_config_history` (what each write replaced, 20 deep, readable only by the
 owner) and a BEFORE UPDATE trigger that refuses to blank `apiKey`, `model`,
 `businessInfo` or `instructions`. The extension refuses the same writes, but this

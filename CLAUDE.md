@@ -9,7 +9,16 @@ all chrome.debugger/CDP work) + Supabase dashboard in docs/. Live branch:
   permissions ships OFF by default behind a cloud setting and goes to ONE machine first.
 - The operator wants zero manual steps in normal operation.
 
-## Known state (v0.21.69)
+## Known state (v0.21.70)
+- SAVES (.70): config-safety.sql v0.21.61 blocked EVERY save on a live account from
+  Sep 22 to Sep 29 2026 — the guard trigger ran as the caller and the history table
+  had no INSERT policy, so the dashboard said "Not saved … subsell_config_history",
+  every extension push failed behind "Saved ✓", and the .69 disarm never landed.
+  Fixed SQL = SECURITY DEFINER + non-fatal snapshot. **The owner must paste
+  supabase/config-safety.sql once more** (idempotent) — the dashboard now hands it
+  over itself on that error (copy button + SQL-editor link) and keeps refused
+  teaching as a browser draft. Never ship a trigger that can refuse a save.
+  `store/smoke-sqlguard.js`.
 - Demo LINK (.69): the current build has NO link sender (deleted .60). Links a buyer
   still receives come from machines stuck on v0.21.47-.51 (self-updater dead there),
   gated on `videoLinkFallback !== false` read from the SHARED account row. Fix = the
