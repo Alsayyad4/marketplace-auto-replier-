@@ -90,8 +90,7 @@ Paste that URL into the extension (Settings → General → **Remote config URL*
 
 ## Config safety (v0.21.61, fixed v0.21.70 — run it again)
 
-Run `config-safety.sql` once in the SQL editor, after `schema.sql`. **If you ran the
-v0.21.61 copy, run the current file again:** that copy's trigger ran with the caller's
+Run `config-safety.sql` once in the SQL editor, after `schema.sql`. **Done Sep 29 2026. If you ever ran only the v0.21.61 copy, run the current file again:** that copy's trigger ran with the caller's
 rights and could not write its own history table, so every save on a live account was
 refused with "new row violates row-level security policy for table
 subsell_config_history" (dashboard and extensions alike). The current file is

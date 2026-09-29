@@ -14,8 +14,7 @@ all chrome.debugger/CDP work) + Supabase dashboard in docs/. Live branch:
   Sep 22 to Sep 29 2026 — the guard trigger ran as the caller and the history table
   had no INSERT policy, so the dashboard said "Not saved … subsell_config_history",
   every extension push failed behind "Saved ✓", and the .69 disarm never landed.
-  Fixed SQL = SECURITY DEFINER + non-fatal snapshot. **The owner must paste
-  supabase/config-safety.sql once more** (idempotent) — the dashboard now hands it
+  Fixed SQL = SECURITY DEFINER + non-fatal snapshot. **PASTED by the owner Sep 29 2026** (history count=1 verified) — the dashboard now hands it
   over itself on that error (copy button + SQL-editor link) and keeps refused
   teaching as a browser draft. Never ship a trigger that can refuse a save.
   `store/smoke-sqlguard.js`.
