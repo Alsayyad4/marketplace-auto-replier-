@@ -10,6 +10,8 @@
     model: "claude-haiku-4-5",
     responseDelaySec: 30,
     jitterSec: 60,
+    typingPaceMaxSec: 20, // (v0.21.71) extra wait per reply, grows with its length (wpmMin..wpmMax); 0 = off
+    threadMemory: true, // (v0.21.71) read the Activity log before every reply/video: never answer twice, never re-send the demo
     hourlyCap: 30,
     dailyCap: 200,
     wpmMin: 38,
@@ -80,6 +82,8 @@
     ["model", "value"],
     ["responseDelaySec", "number"],
     ["jitterSec", "number"],
+    ["typingPaceMaxSec", "number"],
+    ["threadMemory", "checked"],
     ["hourlyCap", "number"],
     ["dailyCap", "number"],
     ["wpmMin", "number"],

@@ -58,6 +58,20 @@
     }
   }
   const rand = (a, b) => a + Math.random() * (b - a);
+  // (v0.21.71) TYPING PACE: a person needs time to type a reply, and that time
+  // grows with its length. Adds min(cap, chars / speed) to the configured reply
+  // delay, speed drawn from the Typing WPM range (settings wpmMin..wpmMax, ~5
+  // chars per word). Pure arithmetic on an existing sleep — the send itself is
+  // untouched. 0 = off. store/smoke-memory.js.
+  function typingPaceMs(text, settings) {
+    const cap = Math.max(0, Number(settings && settings.typingPaceMaxSec) || 0) * 1000;
+    if (!cap) return 0;
+    const lo = Math.max(10, Number(settings.wpmMin) || 38);
+    const hi = Math.max(lo, Number(settings.wpmMax) || 78);
+    const cps = (rand(lo, hi) * 5) / 60;
+    const n = String(text || "").length;
+    return Math.min(cap, Math.round((n / cps) * 1000));
+  }
   const log = (...a) => console.log("[SubSell]", ...a);
   const safe = (fn, fb) => {
     try {
@@ -157,10 +171,19 @@
   // reload (common on laggy Remote Desktop) doesn't re-arm the self-reply bug.
   let recentSent = [];
   const normMsg = (s) => (s || "").toLowerCase().replace(/\s+/g, " ").trim();
+  // (v0.21.71) threadId -> when a sidebar row for that chat last read "You sent a
+  // video." (Facebook's own words, no layout involved). The snippet only says it
+  // while our clip is the chat's LAST message; the moment the buyer writes back
+  // the words are gone — and a bounded retry that then found no video "in the
+  // chat" (hidden tab, no geometry) could send a second copy. The scan loop sees
+  // every rendered row every 8 s, so the words are remembered here (persisted,
+  // 30 days) and chatServedVideo() still knows. Positive-only evidence.
+  let sidebarVideoSeen = {};
   // Hydrate persisted state at boot.
   safe(() =>
-    chrome.storage.local.get(["recentSent", "cooldowns", "lastHandled", "replyCounts", "waitingSince", "videoPending", "videoCatchUp", "attachMiss"], (r) => {
+    chrome.storage.local.get(["recentSent", "cooldowns", "lastHandled", "replyCounts", "waitingSince", "videoPending", "videoCatchUp", "attachMiss", "sidebarVideoSeen"], (r) => {
       if (r && Array.isArray(r.recentSent)) recentSent = r.recentSent;
+      if (r && r.sidebarVideoSeen && typeof r.sidebarVideoSeen === "object") sidebarVideoSeen = r.sidebarVideoSeen;
       if (r && r.attachMiss && typeof r.attachMiss === "object") attachMiss = r.attachMiss;
       if (r && r.cooldowns && typeof r.cooldowns === "object") cooldowns = r.cooldowns;
       if (r && r.lastHandled && typeof r.lastHandled === "object") lastHandled = r.lastHandled;
@@ -309,7 +332,7 @@
   }
   function persistDedup() {
     // keep the persisted maps from growing unbounded (cap ~400 threads)
-    for (const map of [cooldowns, lastHandled, replyCounts, waitingSince]) {
+    for (const map of [cooldowns, lastHandled, replyCounts, waitingSince, sidebarVideoSeen]) {
       const keys = Object.keys(map);
       if (keys.length > 400) for (const k of keys.slice(0, keys.length - 400)) delete map[k];
     }
@@ -319,7 +342,7 @@
       const pk = Object.keys(videoPending);
       if (pk.length > 2000) for (const k of pk.slice(2000)) delete videoPending[k];
     }
-    safe(() => chrome.storage.local.set({ cooldowns, lastHandled, replyCounts, waitingSince, videoPending, videoCatchUp }));
+    safe(() => chrome.storage.local.set({ cooldowns, lastHandled, replyCounts, waitingSince, videoPending, videoCatchUp, sidebarVideoSeen }));
   }
   function clearVideoPending(id) {
     if (id && videoPending[id] != null) {
@@ -871,16 +894,21 @@
       last.text === "[attachment]"
         ? "(the buyer sent a photo/video attachment with no text)"
         : last.text;
-    const transcript = convo
-      .slice(-12)
-      .map((m) => (m.role === "buyer" ? "Buyer: " : "You: ") + m.text)
-      .join("\n");
+    const transcript = convo.slice(-12).map(convoLine).join("\n");
     return {
       buyerMessage,
       transcript,
+      // (v0.21.71) a wider read for the thread memory only (the model still gets the
+      // 12 lines above): the memory must see an older reply that scrolled out of
+      // those 12, or it could take a repeated "ok" for one already answered.
+      memTranscript: convo.slice(-40).map(convoLine).join("\n"),
       dedupeKey: lastMine + "\u0001" + trailing + "\u0001" + last.text,
     };
   }
+  // One bubble = one line. A bubble's innerText can hold newlines; unflattened, a
+  // buyer bubble "Salut\nYou: …" would read as a line of OURS to everything that
+  // parses these transcripts (the memory line, the answered check).
+  const convoLine = (m) => (m.role === "buyer" ? "Buyer: " : "You: ") + String(m.text || "").replace(/\s*\n\s*/g, " ");
   function buyerSpokeLast() {
     return turnFromConvo(readConversation(), null);
   }
@@ -888,13 +916,11 @@
     return turnFromConvo(readConversation(hint), hint);
   }
   // Transcript regardless of who spoke last (used for smart follow-ups on quiet chats).
-  function fullTranscript() {
+  // `n` (v0.21.71) = how many bubbles; the memory reads 40, the model keeps 12.
+  function fullTranscript(n) {
     const convo = readConversation();
     if (!convo.length) return null;
-    return convo
-      .slice(-12)
-      .map((m) => (m.role === "buyer" ? "Buyer: " : "You: ") + m.text)
-      .join("\n");
+    return convo.slice(-(n || 12)).map(convoLine).join("\n");
   }
   // How many times WE (the bot) spoke in a row at the very end of the chat.
   // 0 = buyer spoke last; 1 = we replied once; 2+ = we've already followed up.
@@ -1008,6 +1034,7 @@
     // Send ONCE. The box clearing = it sent. Wait generously (laggy Remote Desktop),
     // and only escalate to the Send button if the box STILL holds exactly our text —
     // so we can NEVER fire a second send / a stray sticker after it already went.
+    const hrefAtSend = location.href; // (v0.21.71) the Send click below must never land in a chat the operator switched to meanwhile
     pressEnter(el);
     if (await composerEmptied(el, 5000)) return true;
     if (norm(composerText(el)) === norm(want)) {
@@ -1016,15 +1043,27 @@
       // composer still shows the text for another moment; clicking Send then posts
       // it a SECOND time — the operator's "sometimes double texting". If our exact
       // message is already the last thing in the conversation, it went out: stop.
-      const already = safe(() => {
+      const alreadyDelivered = () => safe(() => {
         const cv = readConversation() || [];
         const last = cv.length ? cv[cv.length - 1] : null;
         return !!(last && last.role === "me" && norm(last.text || "") === norm(want));
       }, false);
-      if (already) {
+      if (alreadyDelivered()) {
         setStatus({ lastAction: "reply already delivered — skipped the duplicate send" });
         return true;
       }
+      // (v0.21.71) One more beat before the click. On these machines the composer
+      // can clear, or our bubble render, a moment AFTER the 5-s window closed —
+      // and the click would then be the second copy. Re-read both once more, and
+      // never click if the box no longer holds exactly our text.
+      await sleep(2500);
+      if (!composerText(el)) return true;
+      if (alreadyDelivered()) {
+        setStatus({ lastAction: "reply already delivered — skipped the duplicate send" });
+        return true;
+      }
+      if (norm(composerText(el)) !== norm(want)) return !composerText(el);
+      if (location.href !== hrefAtSend) return false; // another chat is open now — a click would post ITS draft; the memo replays ours next cycle
       clickSend();
       if (await composerEmptied(el, 4000)) return true;
     }
@@ -2328,6 +2367,13 @@
       if (!rid || !want.has(rid)) continue;
       if (WE_SENT_VIDEO_RE.test(rowText(a))) return true;
     }
+    // (v0.21.71) …or it said so at an earlier scan (the words vanish from the row
+    // the moment the buyer writes back; the scan loop remembers them 30 days).
+    const nowS = Date.now();
+    for (const k of want) {
+      const at = sidebarVideoSeen[k];
+      if (typeof at === "number" && nowS - at < 30 * 24 * 3600 * 1000) return true;
+    }
     return false;
   }
   // The union of both signals: geometry when the page is actually rendered,
@@ -3041,6 +3087,30 @@
         clearVideoPending(id);
         if (sidebarKey && sidebarKey !== id) clearVideoPending(sidebarKey);
       };
+      // (v0.21.71) A chat judged SERVED by somebody else (a cloud row, the DOM, the
+      // sidebar) may still hold THIS machine's own leftovers: a clip staged in its
+      // composer draft (a hidden-tab attach whose tile surfaced late) and the retry
+      // state (videoAttempts: failAt / claimAt / blindTries) that keeps the watcher's
+      // Enter armed for it six hours. Both must go, or the watcher — or the next
+      // text reply's Enter — ships a second copy on top of the other computer's.
+      // Only when this machine DID try here (an attempts entry exists), only on
+      // an empty composer (an operator's typed draft is theirs), never mid-upload.
+      const servedCleanup = async () => {
+        try {
+          const amS = (await getLocal(["videoAttempts"])).videoAttempts || {};
+          if (!amS[id]) return;
+          delete amS[id];
+          await setLocal({ videoAttempts: amS });
+          if (!stillOnThread(id)) return;
+          const t0 = Date.now();
+          while (Date.now() - t0 < 60000 && uploadingInBand()) { if (!stillOnThread(id)) return; await sleep(1000); }
+          const c0 = findComposer();
+          if (c0 && !composerText(c0) && !uploadingInBand() && trayRemoveBtns().length > 0) {
+            await sweepTrayExtras(0);
+            console.debug("[SubSell] video: removed this machine's leftover staged clip(s) from a chat served elsewhere", id);
+          }
+        } catch (e) { /* the stop itself stands */ }
+      };
       // (v0.21.60) The demo-video LINK SENDER IS DELETED. It posted a raw storage
       // URL into buyer chats — which reads as phishing, went into chats the bot had
       // never spoken in, and contradicted the bot's own rule never to post a link.
@@ -3247,7 +3317,7 @@
         // via:"lock" (a set in flight in another pass — or a crash) is re-read on
         // every visit so heal (i) can run without a page reload, and its pending
         // entry is kept.
-        const confirmedMark = !!(dmk.sent || dmk.recon || dmk.via === "dom" || dmk.via === "taildrop" || dmk.resumeTotal != null);
+        const confirmedMark = !!(dmk.sent || dmk.recon || dmk.via === "dom" || dmk.via === "cloud" || dmk.via === "taildrop" || dmk.resumeTotal != null);
         if (confirmedMark) { videoLocked.add(id); clearPend(); }
         vstat("skip — chat already marked sent (" + (name || id) + ")");
         return;
@@ -3259,6 +3329,7 @@
         clearPend();
         done[id] = { done: true, at: now, via: "dom" }; // inert marker: DOM-detected, not a confirmed send
         await setLocal({ videoSentThreads: done });
+        await servedCleanup(); // (v0.21.71) our own leftover tile / retry state must not outlive the stop
         vstat("skip — detected an existing video in chat (" + (name || id) + ")");
         return;
       }
@@ -3268,6 +3339,44 @@
       if (done[id] === true) {
         delete done[id];
         await setLocal({ videoSentThreads: done });
+      }
+      // (v0.21.71) CLOUD MEMORY: an Activity row "N/M demo video(s) sent" for this
+      // chat from ANY computer — or from this one before its storage was wiped or
+      // reinstalled — means the buyer has our clip: mark + stop, never a second
+      // set. Read-only, bounded, no login / no rows = today's behaviour. Exceptions:
+      // THIS machine's own deliberate bounded retry (blindTries after a zero-evidence
+      // exit) against its OWN row — the .47 retry design stands — and the popup's
+      // "Resend video to OPEN chat" (manualResend, 10 min), the operator's eyes
+      // outrank the log. In RESUME mode (our own partial set is in the chat) only
+      // ANOTHER computer's row stops the tail.
+      {
+        const cm = await ask({ type: "MEMORY_VIDEO", threadId: id });
+        const attC = (cfg.videoAttempts || {})[id];
+        const manual = !!(attC && attC.manualResend && now - attC.manualResend < 10 * 60 * 1000);
+        const stop = !!(cm && cm.ok && cm.sent && !manual && (resumeFrom == null ? !(cm.mine && attC && attC.blindTries) : !cm.mine));
+        if (stop) {
+          videoLocked.add(id);
+          clearPend();
+          // re-read right before writing: the snapshot in `done` is seconds old now
+          const dmC = (await getLocal(["videoSentThreads"])).videoSentThreads || {};
+          dmC[id] = { done: true, at: now, via: "cloud", recon: 1, by: cm.by || "" };
+          await setLocal({ videoSentThreads: dmC });
+          await servedCleanup();
+          vstat("skip — the Activity log already shows a demo video sent in this chat (" + (cm.by || "another computer") + ")");
+          console.debug("[SubSell] video: skip — cloud memory says already sent", id, cm.by || "");
+          return;
+        }
+        // Another computer claimed this chat's newest message BEFORE we did (or we
+        // hold no claim) and has not logged a video since: it sends its clips before
+        // its text, so its video row is not there yet. Not this visit — nothing
+        // marked, the chat stays queued; the next visit finds that computer's video
+        // row (→ mark) or nothing (→ send). Not in resume mode, not on a manual resend.
+        if (cm && cm.ok && cm.inflight && resumeFrom == null && !manual) {
+          const qkI = sidebarKey || id;
+          if (qkI && videoPending[qkI] == null && videoPending[id] == null) { videoPending[qkI] = Date.now(); persistDedup(); }
+          vstat("another computer (" + (cm.inflightBy || "?") + ") is handling this chat right now — video left to it (re-checked later)");
+          return;
+        }
       }
       // (2) Backoff so a chat whose clip keeps failing to LOAD isn't retried every
       // scan. NOT permanent anymore: after 24h the fail count resets — a transient
@@ -3334,6 +3443,7 @@
             fresh[id] = { done: true, at: Date.now(), via: "dom" };
             await setLocal({ videoSentThreads: fresh });
           }
+          await servedCleanup(); // (v0.21.71) same rule: nothing of ours may ride a later Enter here
           vstat("skip after delay — video appeared meanwhile (" + (name || id) + ")");
           console.debug("[SubSell] video: skip after delay — chat already has a video", id);
           return;
@@ -4309,7 +4419,7 @@
       const fp = JSON.stringify(settings);
       const memoValid = !!(st.pendingText && st.pendingFor === transcript && st.pendingFp === fp);
       if (!memoValid && st.pendingText) { delete st.pendingText; delete st.pendingFor; delete st.pendingFp; }
-      const r = await ask({ type: "GET_FOLLOWUP", context: transcript, threadName: name, pendingText: memoValid ? st.pendingText : undefined });
+      const r = await ask({ type: "GET_FOLLOWUP", context: transcript, memContext: fullTranscript(40) || transcript, threadName: name, threadId: id, pendingText: memoValid ? st.pendingText : undefined });
       if (!r || !r.ok) {
         setStatus({ lastError: "follow-up: " + (r && r.error), currentThread: name });
         return;
@@ -4348,7 +4458,7 @@
         await setLocal({ followUpState: store });
         cooldowns[id] = Date.now() + COOLDOWN_MS;
         setStatus({ lastAction: `follow-up sent ✓ (${followupsDone + 1}/${maxCount})`, lastReplySent: trunc(r.text, 200), currentThread: name });
-        ask({ type: "LOG_EVENT", entry: { thread: name, action: "followup", reply: r.text } });
+        ask({ type: "LOG_EVENT", entry: { thread: name, threadId: id, action: "followup", reply: r.text } });
       } else {
         setStatus({ lastError: "follow-up: typed but couldn't send" });
       }
@@ -4632,7 +4742,7 @@
     // configured delay, counted from this instant), and the remaining clips
     // stream out one by one, yielding whenever another buyer is waiting.
     // Still exactly one API call per reply.
-    const replyPromise = ask({ type: "GET_REPLY_SIMPLE", buyerMessage: turn.buyerMessage, context: turn.transcript, threadName: name, cachedText: memoOk ? memo.text : undefined });
+    const replyPromise = ask({ type: "GET_REPLY_SIMPLE", buyerMessage: turn.buyerMessage, context: turn.transcript, memContext: turn.memTranscript, threadName: name, threadId: id, cachedText: memoOk ? memo.text : undefined });
     const replyClockStart = Date.now();
     const targetDelayMs = (settings.responseDelaySec || 15) * 1000 + rand(0, (settings.jitterSec || 15) * 1000);
 
@@ -4648,12 +4758,21 @@
         return;
       }
       if (reply.skip) {
-        if (reply.reason === "empty reply") {
+        if (reply.reason === "empty reply" || reply.memory === "answered" || reply.memory === "echo") {
           // Claude DELIBERATELY chose silence (system/meta message, nothing to answer).
           // Mark handled so the same unanswerable message isn't re-billed every
           // cooldown; a NEW buyer message (different text) still gets handled fresh.
+          // (v0.21.71) same for a message the thread memory says another computer
+          // already answered, or that was ours to begin with.
           lastHandled[id] = turn.dedupeKey;
           clearWaiting(id, sidebarId);
+          persistDedup();
+        } else if (reply.memory === "claimed") {
+          // (v0.21.71) another computer claimed this message first: its reply lands
+          // within its own delay. Look again in 2 min — by then the chat reads
+          // "we spoke last", or the memory says answered. Not marked handled: if
+          // that computer never delivers, its claim expires and this one answers.
+          cooldowns[id] = Date.now() + 2 * 60 * 1000;
           persistDedup();
         }
         setStatus({ lastAction: "skip — " + reply.reason, currentThread: name });
@@ -4675,9 +4794,15 @@
 
       // Only the REMAINDER of the configured delay — the clip-1 attach/upload time
       // already counted toward it. Zero extra waiting is ever added on top.
-      const delayMs = Math.max(0, targetDelayMs - (Date.now() - replyClockStart));
+      // (v0.21.71) …plus the TYPING PACE: the time a person needs to type THIS
+      // reply (length × Typing WPM, capped by typingPaceMaxSec). Right after a
+      // clip went out the pace is the floor — the seller sends the clip, then
+      // types — instead of the text landing on the clip's heels.
+      const typingMs = typingPaceMs(reply.text, settings);
+      const delayMs = Math.max(afterClip ? typingMs : 0, targetDelayMs + typingMs - (Date.now() - replyClockStart));
       if (delayMs > 0) {
-        setStatus({ lastAction: "waiting " + Math.round(delayMs / 1000) + "s before replying", currentThread: name });
+        refreshThreadLock(sidebarId); // (v0.21.71) the sleep can approach LOCK_MS with the typing pace on top — stamp before it too
+        setStatus({ lastAction: "waiting " + Math.round(delayMs / 1000) + "s before replying" + (typingMs ? " (" + Math.round(typingMs / 1000) + "s of it is typing pace)" : ""), currentThread: name });
         await sleep(delayMs);
       }
       refreshThreadLock(sidebarId); // the delay is the longest window — re-stamp the lease
@@ -4688,6 +4813,25 @@
       // already memoized above).
       if (!stillOnThread(id)) {
         setStatus({ lastAction: "aborted — you switched chats during the wait (will retry)", currentThread: name });
+        return;
+      }
+      // (v0.21.71) THREAD MEMORY, fresh, right before typing: during the wait
+      // another computer may have delivered its reply to this very message, or
+      // claimed it before we did. One bounded read; unavailable = go on as before.
+      // After the navigation check (the transcript must be THIS chat's), before the
+      // conversation recheck. The 40-bubble read lets it see an older reply to the
+      // same words that has scrolled out of the model's 12.
+      const pre = await ask({ type: "MEMORY_PRESEND", threadId: id, threadName: name, buyerMessage: turn.buyerMessage, transcript: fullTranscript(40) || turn.memTranscript || turn.transcript });
+      if (pre && pre.ok && pre.skip) {
+        if (pre.memory === "claimed") {
+          cooldowns[id] = Date.now() + 2 * 60 * 1000; // the earlier claim delivers; look again soon (memo kept — replayed free if it never lands)
+        } else {
+          lastHandled[id] = turn.dedupeKey;
+          clearWaiting(id, sidebarId);
+          delete pendingReply[id];
+        }
+        persistDedup();
+        setStatus({ lastAction: "skip — " + pre.reason, currentThread: name });
         return;
       }
       // Make sure the chat didn't move on while we waited (buyer sent more) — better
@@ -4725,6 +4869,11 @@
       clearWaiting(id, sidebarId); // ANSWERED — off the never-miss ledger
       cooldowns[id] = Date.now() + COOLDOWN_MS;
       persistDedup(); // survive a content-script reload — don't re-reply the same message (and keep the cap count)
+      // (v0.21.71) The Activity row is written HERE, on delivery (it used to be
+      // written when the reply was generated, so an aborted send still showed as
+      // sent and a replayed one showed twice). This row is also every other
+      // computer's memory that this message is answered. Fire-and-forget.
+      ask({ type: "LOG_EVENT", entry: { thread: name, threadId: id, buyer: trunc(turn.buyerMessage, 400), action: "text", reply: reply.text } });
       setStatus({
         lastAction: "replied ✓" + (replyCap > 0 ? " (" + replyCounts[id] + "/" + replyCap + ")" : ""),
         lastReplySent: trunc(reply.text, 200),
@@ -5095,6 +5244,11 @@
       lastCapN = capN;
       for (const a of anchors) {
         if (safe(() => isUnreadAnchor(a), false)) unread++;
+        // (v0.21.71) remember Facebook's own "You sent a video." while the row shows it
+        if (safe(() => WE_SENT_VIDEO_RE.test(rowText(a)), false)) {
+          const vid = threadId(a);
+          if (vid && (sidebarVideoSeen[vid] == null || nowT - sidebarVideoSeen[vid] > 30 * 24 * 3600 * 1000)) { sidebarVideoSeen[vid] = nowT; purgedStale = true; }
+        }
         if (safe(() => snippetSuggestsBuyerLast(a), false)) {
           waiting++;
           const wid = threadId(a);
@@ -5327,7 +5481,7 @@
     let cleared = 0;
     for (const k of Object.keys(vt)) {
       const e = vt[k];
-      const confirmed = e && e.done && (e.sent || e.via === "dom" || e.resumeFrom != null || e.resumeTotal != null);
+      const confirmed = e && e.done && (e.sent || e.via === "dom" || e.via === "cloud" || e.resumeFrom != null || e.resumeTotal != null); // (v0.21.71) a cloud-memory mark is confirmed too
       // A bare via:"lock" younger than the in-flight window is a set being sent
       // RIGHT NOW in some pass — clearing it (and its claim) would let a second
       // full set go out in parallel. Skip; a genuinely orphaned lock ages past
@@ -5469,9 +5623,16 @@
         const am = st.videoAttempts || {};
         const had = !!vt[id];
         delete vt[id];
-        delete am[id];
+        // (v0.21.71) the operator's eyes outrank every memory for the next 10 min:
+        // the engine's cloud stop and the remembered sidebar words both yield to
+        // this flag (the live DOM/sidebar checks still apply — see the refusal above).
+        am[id] = { manualResend: Date.now() };
         await setLocal({ videoSentThreads: vt, videoAttempts: am });
         videoLocked.delete(id); // mandatory: the in-memory lock short-circuits before storage
+        delete sidebarVideoSeen[id];
+        if (adoptedAlias[id] != null) delete sidebarVideoSeen[adoptedAlias[id]];
+        for (const k of Object.keys(adoptedAlias)) if (adoptedAlias[k] === id) delete sidebarVideoSeen[k];
+        persistDedup();
         send({ ok: true, cleared: had });
       })();
       return true;
@@ -5553,6 +5714,8 @@
             persistDedup();
           }
           setStatus({ lastAction: ok ? "follow-up sent ✓" : "follow-up failed", currentThread: anchorName(anchor) });
+          // (v0.21.71) this path never reached the Activity feed — same row as the smart follow-up
+          if (ok) ask({ type: "LOG_EVENT", entry: { thread: anchorName(anchor), threadId: msg.threadId, buyer: msg.kind === "visitconfirm" ? "(visit check)" : "(timed follow-up)", action: "followup", reply: msg.text } });
           send({ ok });
         } catch (e) {
           send({ ok: false, error: e.message });

@@ -15,6 +15,8 @@
     model: "claude-haiku-4-5", // MUST match background.js DEFAULTS — a mismatch here silently re-pins the whole fleet on the next save
     responseDelaySec: 30,
     jitterSec: 60,
+    typingPaceMaxSec: 20, // (v0.21.71) MUST match background.js DEFAULTS
+    threadMemory: true, // (v0.21.71) MUST match background.js DEFAULTS
     hourlyCap: 30,
     dailyCap: 200,
     maxRepliesPerConvo: 5,
@@ -75,6 +77,7 @@
   const FIELDS = [
     ["apiKey", "value"], ["model", "value"],
     ["responseDelaySec", "number"], ["jitterSec", "number"],
+    ["typingPaceMaxSec", "number"], ["threadMemory", "checked"], // (v0.21.71)
     ["hourlyCap", "number"], ["dailyCap", "number"],
     ["maxRepliesPerConvo", "number"], ["convoCapBehavior", "value"],
     ["wpmMin", "number"], ["wpmMax", "number"],
@@ -747,9 +750,12 @@
     const totalsEl = $("activityTotals");
     totalsEl.className = "hint";
     totalsEl.textContent = "Loading…";
+    // (v0.21.71) kind "claim" rows are the machines' own bookkeeping (which computer
+    // is answering a message) — never a message, so never in the feed or the counts.
     const { data, error } = await client
       .from("subsell_messages")
       .select("created_at, sent_at, machine, thread_name, kind, buyer_text, bot_text")
+      .neq("kind", "claim")
       .order("created_at", { ascending: false })
       .limit(300);
     if (error) {
@@ -764,10 +770,10 @@
     // All-time + today totals (cheap head counts).
     let total = rows.length, today = 0;
     try {
-      const all = await client.from("subsell_messages").select("id", { count: "exact", head: true });
+      const all = await client.from("subsell_messages").select("id", { count: "exact", head: true }).neq("kind", "claim");
       if (all.count != null) total = all.count;
       const start = new Date(); start.setHours(0, 0, 0, 0);
-      const td = await client.from("subsell_messages").select("id", { count: "exact", head: true }).gte("created_at", start.toISOString());
+      const td = await client.from("subsell_messages").select("id", { count: "exact", head: true }).neq("kind", "claim").gte("created_at", start.toISOString());
       if (td.count != null) today = td.count;
     } catch (e) { /* counts are best-effort */ }
 

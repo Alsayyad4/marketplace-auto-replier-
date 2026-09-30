@@ -9,7 +9,22 @@ all chrome.debugger/CDP work) + Supabase dashboard in docs/. Live branch:
   permissions ships OFF by default behind a cloud setting and goes to ONE machine first.
 - The operator wants zero manual steps in normal operation.
 
-## Known state (v0.21.70)
+## Known state (v0.21.71)
+- MEMORY (.71): the Activity log (`subsell_messages`) is READ BACK per chat before every
+  reply and video (`memThreadRows` → `memVerdict` / `memVideoSent` / `memoryLine`,
+  background.js; `store/smoke-memory.js`): a message another computer answered is
+  skipped, our own text read as the buyer's is skipped, a video any computer sent (or
+  this one before a wipe) is never re-sent (`via:"cloud"` mark; every "served
+  elsewhere" stop also sweeps this machine's own leftover tile + retry state), two
+  computers on one account settle a new message with a hidden `kind:"claim"` row
+  (earlier `created_at` wins; withdrawn on a failed model call, never written by a
+  machine whose last call failed, dead once its text row lands), and the model is
+  told what it already said (facts/openers/video, user turn only — system prompt
+  still byte-stable). The text Activity row is now written ON DELIVERY by
+  content.js, not at generation. `typingPaceMaxSec` (20) adds a length-proportional
+  typing wait from `wpmMin..wpmMax`. `threadMemory` is the switch; the popup's
+  "Resend video to OPEN chat" overrides the memories for 10 min. Needs the cloud-sync
+  login; 🩺 `memory:` line must read `reads>0 fails=0`.
 - SAVES (.70): config-safety.sql v0.21.61 blocked EVERY save on a live account from
   Sep 22 to Sep 29 2026 — the guard trigger ran as the caller and the history table
   had no INSERT policy, so the dashboard said "Not saved … subsell_config_history",

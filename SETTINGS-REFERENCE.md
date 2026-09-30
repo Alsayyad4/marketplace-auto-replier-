@@ -18,12 +18,14 @@ endpoint serves that object to the extension.
 | Model | `model` | enum | `claude-haiku-4-5` | `claude-haiku-4-5-20251001` (recommended — 3× cheaper) / `claude-sonnet-4-6` / `claude-opus-4-8`. |
 | Response delay (s) | `responseDelaySec` | number | `30` | Wait before replying (human-like). |
 | Jitter (s) | `jitterSec` | number | `60` | Extra random 0–N s added to the delay. |
+| Typing pace max (s) | `typingPaceMaxSec` | number | `20` | (v0.21.71) Extra wait per reply that grows with its length: `reply chars ÷ typing speed`, speed drawn from `wpmMin`–`wpmMax`, capped at this many seconds. Right after a demo clip it is the floor (the seller sends the clip, then types). `0` = off. |
+| Chat memory across computers | `threadMemory` | bool | `true` | (v0.21.71) Before every reply and every video the extension reads that chat's rows in the Activity log (`subsell_messages`, through the Cloud-sync login): a buyer message another computer already answered is skipped, a message that was ours is never answered, a demo video any computer already sent (or this one before a reinstall) is never re-sent, two computers opening the same chat settle it with a hidden `claim` row, and the model is told what it already said to this buyer (facts, openers, the video). Off = pre-.71 behaviour. Needs Cloud sync (config-link-only machines have no read access, so they simply run without it). |
 | Hourly cap | `hourlyCap` | number | `30` | Max replies/hour. |
 | Daily cap | `dailyCap` | number | `200` | Max replies/day. |
 | Max replies / conversation | `maxRepliesPerConvo` | number | `5` | **Hard cap** on bot **text replies** in one chat, counted across the whole conversation. Once hit, the bot stays silent even if the buyer keeps asking more questions. Demo videos and follow-ups are separate and do **not** count toward it. `0` = unlimited. |
 | When that cap is hit | `convoCapBehavior` | enum | `stop` | `stop` (go quiet) or `notify` (flag the chat as needs-you in the popup). |
-| Typing WPM min | `wpmMin` | number | `38` | Lower bound of human typing speed. |
-| Typing WPM max | `wpmMax` | number | `78` | Upper bound of human typing speed. |
+| Typing WPM min | `wpmMin` | number | `38` | Lower bound of human typing speed — drives the typing pace above (v0.21.71). |
+| Typing WPM max | `wpmMax` | number | `78` | Upper bound of human typing speed — drives the typing pace above (v0.21.71). |
 | Respect business hours | `businessHoursEnabled` | bool | `true` | Only reply between the hours below. |
 | Open hour (0–23) | `businessHoursStart` | number | `9` | Start of business hours. |
 | Close hour (0–23) | `businessHoursEnd` | number | `22` | End of business hours. |

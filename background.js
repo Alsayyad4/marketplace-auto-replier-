@@ -27,6 +27,16 @@ const DEFAULTS = {
   model: "claude-haiku-4-5",
   responseDelaySec: 30,
   jitterSec: 60,
+  // (v0.21.71) A person needs time to TYPE a reply, and that time grows with its
+  // length: up to this many extra seconds are added to the delay above, at the
+  // Typing WPM speed configured below (wpmMin..wpmMax). 0 = off.
+  typingPaceMaxSec: 20,
+  // (v0.21.71) Chat memory across computers: before every reply and every video
+  // the Activity log (subsell_messages) is read back for that chat, so a message
+  // another computer already answered is never answered again, a demo video any
+  // computer already sent is never sent again, and the model is told what it has
+  // already said to this buyer. Off = exactly the pre-.71 behaviour.
+  threadMemory: true,
   hourlyCap: 30,
   dailyCap: 200,
   wpmMin: 38,
@@ -636,6 +646,17 @@ function getMachineLabel() {
     });
   });
 }
+// (v0.21.71) The stable per-install id behind the label (two computers can carry
+// the same typed label; the memory below must still tell them apart).
+function getMachineId() {
+  return new Promise((resolve) => {
+    chrome.storage.local.get(["machineId"], (r) => {
+      let id = r && r.machineId;
+      if (!id) { id = "PC-" + Math.random().toString(36).slice(2, 7); chrome.storage.local.set({ machineId: id }); }
+      resolve(id);
+    });
+  });
+}
 
 async function mirrorToCloud(entry) {
   try {
@@ -651,8 +672,13 @@ async function mirrorToCloud(entry) {
     // monitor — one glance shows which computers picked up the latest update.
     let ver = "";
     try { ver = chrome.runtime.getManifest().version; } catch (e) { /* keep plain label */ }
+    // (v0.21.71) …and the install id (`#PC-xxxxx`) when a label was typed, so the
+    // thread memory can tell this computer's rows from another's even when two
+    // machines share one label. Unlabelled machines already show the id itself.
+    const mid = await getMachineId();
+    const tagged = (ver ? machine + " · v" + ver : machine) + (machine === mid ? "" : " #" + mid);
     const ev = {
-      machine: ver ? machine + " · v" + ver : machine,
+      machine: tagged,
       kind: entry.action || "text",
       thread_name: entry.thread != null ? String(entry.thread) : null,
       thread_id: entry.threadId != null ? String(entry.threadId) : null,
@@ -673,6 +699,308 @@ async function mirrorToCloud(entry) {
     chrome.storage.local.set({ lastMirror: { at: Date.now(), ok: false, error: String(e && e.message) } });
     /* fire-and-forget — a logging hiccup must never disturb the bot */
   }
+}
+
+/* ---------------- (v0.21.71) THREAD MEMORY — the Activity log, read back ----------
+ * Every machine already writes each delivered reply / video / follow-up to
+ * subsell_messages (mirrorToCloud above). This reads those rows back, per chat,
+ * through the account's own cloud-sync login (RLS: the dashboard's user), so that
+ *   - a buyer message another computer already answered is never answered again,
+ *     and a message that is OURS but was read as the buyer's is never answered;
+ *   - a demo video any computer already sent (or this one sent before a storage
+ *     wipe / reinstall) is never sent again;
+ *   - two computers that open the same chat within seconds settle it with a CLAIM
+ *     row (kind "claim", hidden from the dashboard): the earlier claim replies,
+ *     the other stands down and finds the delivered reply on its next look. A
+ *     claim is withdrawn ("unclaim") when the model call behind it fails, dies
+ *     once its machine delivers, and a machine whose last Anthropic call failed
+ *     does not claim at all — a computer that cannot reply must never hold a chat;
+ *   - the model is told what it already said to this buyer (facts, openers, the
+ *     video), so it stops repeating itself across the whole conversation.
+ * Best effort by construction: one GET under a 5-s budget (token refresh
+ * included), and any failure means "no memory" = exactly the pre-.71 behaviour.
+ * The only writes are the claim rows, through mirrorToCloud like every row. */
+const MEM_THREAD_LIMIT = 60;
+const MEM_CACHE_MS = 20 * 1000;            // per-chat rows are reused this long (pre-send and video checks always read fresh)
+const MEM_RECENT_CACHE_MS = 60 * 1000;     // the account-wide "what did we just say to other buyers" list
+const MEM_ANSWERED_MS = 30 * 60 * 1000;    // a delivered reply to the SAME buyer text, this recent and not yet rendered = already answered
+const MEM_CLAIM_MS = 10 * 60 * 1000;       // a claim older than this belongs to a machine that never delivered
+const MEM_RECLAIM_MS = 5 * 60 * 1000;      // a claim of ours older than this is renewed at pre-send (delivery can outlive it)
+const MEM_ECHO_MS = 24 * 3600 * 1000;      // our own sent text, read back as "the buyer's message"
+const MEM_BUDGET_MS = 5000;                // the whole read, token refresh included — past it, "no memory"
+const MEM_VIDEO_SENT_RE = /^\s*[1-9]\d*\s*\/\s*\d+\s+demo video|^\s*[1-9]\d*\s+staged demo clip/i; // the Activity rows the engine writes when clips went out ("0/2 … failed" never matches)
+const memCache = {};                       // threadId -> { at, rows }
+let memRecent = { at: 0, rows: null };
+let memSkewMs = 0;                         // server clock minus this machine's (PostgREST Date header): windows are judged on server time
+const memClaimPending = {};                // threadId -> the claim insert in flight (the video decision waits for it)
+let claudeFailedAt = 0;                    // last failed Anthropic call on this machine; cleared by the next success
+const memNorm = (s) => String(s == null ? "" : s).toLowerCase().replace(/\s+/g, " ").trim();
+const memNormLines = (s) => String(s == null ? "" : s).toLowerCase().split("\n").map((l) => l.replace(/\s+/g, " ").trim()).filter(Boolean).join("\n");
+const memKey = (s) => memNorm(s).slice(0, 120); // buyer text is compared on its first 120 chars (the content script logs it truncated)
+const memWho = (r) => { const m = r && r.machine ? String(r.machine).replace(/\s*#PC-[a-z0-9]+\s*$/i, "").trim() : ""; return m || "another computer"; };
+const memNow = () => Date.now() + memSkewMs;
+function memNote(patch) {
+  try {
+    chrome.storage.local.get(["memStats"], (r) => {
+      if (chrome.runtime.lastError) return;
+      const s = (r && r.memStats) || {};
+      for (const k of Object.keys(patch)) {
+        if (k === "lastAt" || k === "lastErr") s[k] = patch[k];
+        else s[k] = (s[k] || 0) + patch[k];
+      }
+      chrome.storage.local.set({ memStats: s }, () => void chrome.runtime.lastError);
+    });
+  } catch (e) { /* telemetry only */ }
+}
+async function memFetch(query) {
+  const work = (async () => {
+    const auth = await cloudValidAuth();
+    if (!auth) { memNote({ fails: 1, lastErr: "no cloud login on this machine" }); return null; } // remote-link machines: no memory
+    const { url, key } = await getCloudCreds();
+    if (!url) return null;
+    const ctl = typeof AbortController === "function" ? new AbortController() : null;
+    const timer = ctl ? setTimeout(() => { try { ctl.abort(); } catch (e) { /* ignore */ } }, 4000) : null;
+    try {
+      const resp = await fetch(url + "/rest/v1/subsell_messages?" + query, {
+        headers: { apikey: key, authorization: "Bearer " + auth.access_token },
+        cache: "no-store",
+        signal: ctl ? ctl.signal : undefined,
+      });
+      try {
+        const dh = Date.parse((resp.headers && resp.headers.get && resp.headers.get("date")) || "");
+        if (dh) memSkewMs = dh - Date.now();
+      } catch (e) { /* keep the last skew */ }
+      if (!resp.ok) { memNote({ fails: 1, lastErr: "HTTP " + resp.status }); return null; }
+      const rows = await resp.json().catch(() => null);
+      if (!Array.isArray(rows)) { memNote({ fails: 1, lastErr: "bad body" }); return null; }
+      memNote({ reads: 1, lastAt: Date.now() });
+      return rows;
+    } catch (e) {
+      memNote({ fails: 1, lastErr: String((e && e.message) || e).slice(0, 80) });
+      return null;
+    } finally {
+      if (timer) clearTimeout(timer);
+    }
+  })();
+  const out = await Promise.race([work, new Promise((r) => setTimeout(() => r(undefined), MEM_BUDGET_MS))]);
+  if (out === undefined) { memNote({ fails: 1, lastErr: "timed out (" + MEM_BUDGET_MS + " ms)" }); return null; }
+  return out;
+}
+const memSelect = "&select=created_at,machine,kind,buyer_text,bot_text&order=created_at.desc";
+async function memThreadRows(threadId, fresh) {
+  if (!threadId) return null;
+  const c = memCache[threadId];
+  if (!fresh && c && Date.now() - c.at < MEM_CACHE_MS) return c.rows;
+  const rows = await memFetch("thread_id=eq." + encodeURIComponent(String(threadId)) + "&kind=in.(text,followup,video,claim)" + memSelect + "&limit=" + MEM_THREAD_LIMIT);
+  if (rows) {
+    memCache[threadId] = { at: Date.now(), rows };
+    const keys = Object.keys(memCache);
+    if (keys.length > 200) for (const k of keys.slice(0, keys.length - 200)) delete memCache[k];
+  }
+  return rows;
+}
+// Only when the window came back full without a video row: the video rows alone.
+async function memVideoRows(threadId) {
+  if (!threadId) return null;
+  return memFetch("thread_id=eq." + encodeURIComponent(String(threadId)) + "&kind=eq.video" + memSelect + "&limit=5");
+}
+async function memRecentRows() {
+  if (memRecent.rows && Date.now() - memRecent.at < MEM_RECENT_CACHE_MS) return memRecent.rows;
+  const rows = await memFetch("kind=in.(text,followup)&select=created_at,machine,kind,thread_id,bot_text&order=created_at.desc&limit=30");
+  if (rows) memRecent = { at: Date.now(), rows };
+  return rows;
+}
+// The claim row. AWAITED (bounded) by the reply path, so the other computer's
+// very next read can see it; the video decision on this machine waits for it too.
+function memClaim(threadId, threadName, buyerMessage, machineId) {
+  const p = (async () => {
+    try {
+      await Promise.race([
+        mirrorToCloud({ action: "claim", thread: threadName, threadId, buyer: buyerMessage, reply: "claim " + machineId }),
+        new Promise((r) => setTimeout(r, 3000)),
+      ]);
+    } catch (e) { /* never into the reply path */ }
+  })();
+  memClaimPending[threadId] = p;
+  p.then(() => { if (memClaimPending[threadId] === p) delete memClaimPending[threadId]; });
+  return p;
+}
+// Withdraws this machine's claim (the model call behind it failed — nobody must wait for a reply that is not coming).
+function memUnclaim(threadId, threadName, buyerMessage, machineId) {
+  try { mirrorToCloud({ action: "claim", thread: threadName, threadId, buyer: buyerMessage, reply: "unclaim " + machineId }); } catch (e) { /* ignore */ }
+}
+function memClaimOf(r) {
+  const m = String((r && r.bot_text) || "").match(/^\s*(un)?claim\s+(\S+)/i);
+  return m ? { un: !!m[1], id: m[2] } : null;
+}
+/* The claims still ALIVE on a buyer text (bm; null = on any text, each judged
+ * against its own): fresh (≤10 min on server time), not withdrawn by a later
+ * "unclaim" from the same machine, not fulfilled by a later delivered text row
+ * from that machine. Pure. → [{ id, at, ...row }] */
+function memLiveClaims(rows, bm, now) {
+  if (!Array.isArray(rows)) return [];
+  const t = (r) => Date.parse(r && r.created_at) || 0;
+  const out = [];
+  for (const r of rows) {
+    if (!r || r.kind !== "claim") continue;
+    const key = memKey(r.buyer_text);
+    if (bm != null && key !== bm) continue;
+    const c = memClaimOf(r);
+    if (!c || c.un) continue;
+    if (now - t(r) > MEM_CLAIM_MS) continue;
+    const dead = rows.some((x) => {
+      if (!x || x === r || memKey(x.buyer_text) !== key || t(x) < t(r)) return false;
+      if (x.kind === "claim") { const u = memClaimOf(x); return !!(u && u.un && u.id === c.id); }
+      return x.kind === "text" && String(x.machine || "").indexOf(c.id) >= 0;
+    });
+    if (!dead) out.push(Object.assign({ id: c.id, at: t(r) }, r));
+  }
+  return out;
+}
+const memEarliest = (arr) => arr.reduce((a, r) => (!a || r.at < a.at || (r.at === a.at && String(r.id) < String(a.id)) ? r : a), null);
+/* The verdict on ONE buyer message, from the chat's rows. Pure; store/smoke-memory.js.
+ *   o = { buyerMessage, transcript, machineId, now, phase: "gen" | "pre" }
+ *   → null (go ahead) | { skip:true, memory:"echo"|"answered"|"claimed", reason, by } */
+function memVerdict(rows, o) {
+  if (!Array.isArray(rows) || !rows.length) return null;
+  const now = o.now || Date.now();
+  const bm = memKey(o.buyerMessage);
+  if (!bm) return null;
+  const age = (r) => now - (Date.parse(r && r.created_at) || 0);
+  // (1) OUR OWN sent text, read back as the buyer's message (a bubble misread on
+  // this machine, or one sent from another machine that this machine's
+  // recentSent guard has never seen). Same length floor as isOwnEcho.
+  for (const r of rows) {
+    if (!r || (r.kind !== "text" && r.kind !== "followup") || age(r) > MEM_ECHO_MS) continue;
+    const bt = memNorm(r.bot_text);
+    if (bt.length >= 10 && memKey(bt) === bm) return { skip: true, memory: "echo", reason: "that message was ours (sent from " + memWho(r) + ")", by: memWho(r) };
+  }
+  // (2) ALREADY ANSWERED: a delivered reply to the same buyer text. Where that
+  // reply sits in the chat as we read it decides. The buyer's own line is found
+  // by its TEXT, whatever label the read gave it (a sidebar-rescued bubble reads
+  // "You:" in a hint-less transcript), and a reply of ours is matched as a whole
+  // "you: …" line so a three-letter reply cannot hit inside the buyer's words.
+  //   - AFTER the buyer's line → it is in the chat already (the videos-first path
+  //     skips the "we spoke last" recheck, so this is how it learns) → skip;
+  //   - only BEFORE it → an OLDER exchange with the same words ("ok" … "ok") → go on;
+  //   - nowhere, and recent → delivered moments ago, not rendered yet → skip;
+  //   - nowhere, and old → a re-asked question whose reply scrolled away → go on.
+  const tx = memNormLines(o.transcript);
+  // a text line is found whatever its label ("you: <text>" for a rescued bubble);
+  // a media message only by the buyer's label, since our own clips read
+  // "you: [attachment]" too and usually sit last.
+  const isMedia = /^\(the buyer sent a photo/.test(memNorm(o.buyerMessage));
+  const bmLine = isMedia ? "buyer: [attachment]" : ": " + bm.slice(0, 60);
+  const pos = tx ? tx.lastIndexOf(bmLine) : -1;
+  const before = pos >= 0 ? tx.slice(0, pos) : "";
+  const after = pos >= 0 ? tx.slice(pos + bmLine.length) + "\n" : "";
+  for (const r of rows) {
+    if (!r || r.kind !== "text") continue;
+    if (memKey(r.buyer_text) !== bm) continue;
+    const bt = memNorm(r.bot_text);
+    if (!bt) continue;
+    const needle = "you: " + bt.slice(0, 60) + (bt.length <= 60 ? "\n" : "");
+    const answered = { skip: true, memory: "answered", reason: "already answered on " + memWho(r), by: memWho(r) };
+    if (after.indexOf(needle) >= 0) return answered;
+    if (pos >= 0 && (before + "\n").indexOf(needle) >= 0) continue;
+    if (age(r) > MEM_ANSWERED_MS) continue;
+    return answered;
+  }
+  // (3) CLAIMS: the earlier live claim on this exact buyer text replies; the rest
+  // stand down. Server insert order decides (created_at), the id breaks a tie.
+  const live = memLiveClaims(rows, bm, now);
+  if (live.length) {
+    const mine = memEarliest(live.filter((r) => r.id === o.machineId));
+    const other = memEarliest(live.filter((r) => r.id !== o.machineId));
+    if (other && (!mine || other.at < mine.at || (other.at === mine.at && String(other.id) < String(mine.id)))) {
+      return { skip: true, memory: "claimed", reason: "another computer (" + memWho(other) + ") is answering this one", by: memWho(other) };
+    }
+  }
+  return null;
+}
+/* Has ANY computer logged a demo video as sent in this chat? And is another
+ * computer in the middle of this chat right now — a live claim of its own,
+ * EARLIER than any live claim of ours, with no video row (any wording) from that
+ * machine since? It sends its clips before its text, so its video row does not
+ * exist yet. Pure. */
+function memVideoSent(rows, machineId, now) {
+  if (!Array.isArray(rows)) return { sent: false, inflight: false };
+  now = now || Date.now();
+  for (const r of rows) {
+    if (!r || r.kind !== "video" || !MEM_VIDEO_SENT_RE.test(String(r.bot_text || ""))) continue;
+    const m = String(r.machine || "");
+    return { sent: true, mine: !!(machineId && m.indexOf(machineId) >= 0), by: memWho(r), at: r.created_at || null, inflight: false };
+  }
+  const t = (r) => Date.parse(r && r.created_at) || 0;
+  const live = memLiveClaims(rows, null, now).filter((c) => c.id === machineId || !rows.some((x) => x && (x.kind === "video" || x.kind === "video-status") && String(x.machine || "").indexOf(c.id) >= 0 && t(x) >= c.at));
+  const mine = memEarliest(live.filter((c) => c.id === machineId));
+  const other = memEarliest(live.filter((c) => c.id !== machineId));
+  if (other && (!mine || other.at < mine.at || (other.at === mine.at && String(other.id) < String(mine.id)))) {
+    return { sent: false, inflight: true, inflightBy: memWho(other) };
+  }
+  return { sent: false, inflight: false };
+}
+/* What the model is told about THIS chat, derived from our own earlier messages
+ * (the transcript it already sees + the rows beyond that window + what we just
+ * said to other buyers). Rides the USER turn: the cached system prompt stays
+ * byte-identical. Pure; returns "" when there is nothing worth saying. */
+function memoryLine(settings, transcript, rows, recentRows, threadId) {
+  const ours = [];
+  let attachment = false;
+  for (const l of String(transcript || "").split("\n")) {
+    if (l.indexOf("You: ") !== 0) continue;
+    const t = l.slice(5).trim();
+    if (t === "[attachment]") { attachment = true; continue; }
+    if (t) ours.push(t);
+  }
+  const textRows = Array.isArray(rows) ? rows.filter((r) => r && (r.kind === "text" || r.kind === "followup") && r.bot_text) : [];
+  const n = Math.max(ours.length, textRows.length);
+  const pool = ours.concat(textRows.map((r) => String(r.bot_text)));
+  const has = (re) => pool.some((t) => re.test(t));
+  const esc = (s) => String(s).replace(/[.*+?^${}()|[\]\\]/g, "\\$&");
+  const facts = [];
+  const addr = String((settings && settings.businessAddress) || "");
+  const num = (addr.match(/\d{2,}/) || [])[0];
+  const street = addr.replace(/[^\p{L}\s]/gu, " ").split(/\s+/).filter((w) => w.length >= 5).sort((a, b) => b.length - a.length)[0] || "";
+  // The address counts as given when the street NUMBER and the street name sit
+  // together ("757 Beaubien"); the street word alone ("coin Beaubien", "métro
+  // Beaubien") is not the address. An address configured without a number falls
+  // back to the street word.
+  if (num && street) {
+    if (has(new RegExp("\\b" + esc(num) + "\\b[^\\n]{0,40}" + esc(street) + "|" + esc(street) + "[^\\n]{0,40}\\b" + esc(num) + "\\b", "i"))) facts.push("the address");
+  } else if (num ? has(new RegExp("\\b" + esc(num) + "\\b")) : (street && has(new RegExp(esc(street), "i")))) facts.push("the address");
+  // Hours: a clock time only counts NEXT TO an opening/closing word ("ouvert
+  // jusqu'à 9pm", "open till 10 pm", "on ferme à 21h") — "dans 1h" and "2 h de
+  // batterie" are not the hours. "7 days / 7 jours / 7/7" always is.
+  if (has(/\b(ouvert|open|ferm[ée]?|clos[ée]?|jusqu|until|till|de\s+\d{1,2}\s?(am|pm|h)?\s+(à|a|to)|from\s+\d{1,2}\s?(am|pm|h)?\s+(to|till|until))\b[^.!?\n]{0,40}?\b\d{1,2}\s?(am|pm|h)\b/i) ||
+      has(/\b\d{1,2}\s?(am|pm|h)\b[^.!?\n]{0,30}?\b(ouvert|open|ferm|clos)/i) ||
+      has(/\b7\s?(jours|days|j\b|\/7)/i)) facts.push("the hours");
+  if (has(/trade[- ]?in|[ée]change|reprise|buyback|rachat|\b(ton|votre|your)\s+(vieux |ancien |old |current )?(cell|t[ée]l[ée]phone|phone)\b/i)) facts.push("the trade-in line");
+  if (has(/liquidation|clearance/i)) facts.push("the liquidation line");
+  if (has(/garantie|warranty/i)) facts.push("the warranty");
+  if (has(/\$\s?\d|\d\s?\$|à partir de|\bstarts? at\b|\bstarting at\b/i)) facts.push("a price");
+  if (has(/\bm[ée]tro\b/i)) facts.push("the metro");
+  if (has(/\b(cash|interac|e-?transfer|virement|comptant)\b/i)) facts.push("how to pay");
+  const opener = (t) => { const w = String(t || "").trim().split(/\s+/)[0] || ""; const c = w.replace(/^[^\p{L}\p{N}]+|[^\p{L}\p{N}]+$/gu, ""); return c.length >= 2 ? c : ""; };
+  const uniq = (arr) => { const seen = new Set(); const out = []; for (const x of arr) { const k = String(x).toLowerCase(); if (!x || seen.has(k)) continue; seen.add(k); out.push(x); } return out; };
+  const mineOpeners = uniq(ours.slice(-6).map(opener)).slice(-4);
+  const otherOpeners = uniq(
+    (Array.isArray(recentRows) ? recentRows : [])
+      .filter((r) => r && r.kind === "text" && r.bot_text && (!threadId || String(r.thread_id || "") !== String(threadId)))
+      .slice(0, 12)
+      .map((r) => opener(r.bot_text))
+  ).filter((w) => !mineOpeners.some((m) => m.toLowerCase() === w.toLowerCase())).slice(0, 5);
+  const video = attachment || memVideoSent(rows).sent;
+  const q = (arr) => arr.map((w) => '"' + w + '"').join(", ");
+  const ord = (k) => (k === 1 ? "1st" : k === 2 ? "2nd" : k === 3 ? "3rd" : k + "th");
+  const parts = [];
+  if (n > 0) parts.push("this will be your " + ord(n + 1) + " message to this buyer, so no greeting and no re-introduction");
+  if (facts.length) parts.push("you already told them " + facts.join(", ") + " (do not repeat any of it unless they ask again)");
+  if (mineOpeners.length) parts.push("openers you already used in this chat, do not reuse them: " + q(mineOpeners));
+  if (otherOpeners.length) parts.push("openers you just used with other buyers, vary from these too: " + q(otherOpeners));
+  if (video) parts.push("a demo video was already sent to them: never offer, promise or mention sending one");
+  if (!parts.length) return "";
+  return "MEMORY OF THIS CHAT (from your own earlier messages, follow it): " + parts.join(". ") + ".";
 }
 
 function getCloudAuth() {
@@ -1558,7 +1886,7 @@ function nowLine(d) {
   return `Current local time: ${days[d.getDay()]} ${hh}:${mm}.`;
 }
 
-async function callClaude(settings, buyerMessage, extraContext) {
+async function callClaude(settings, buyerMessage, extraContext, memory) {
   if (!settings.apiKey) return { error: "No API key set." };
   extraContext = trimContext(extraContext);
   const body = {
@@ -1574,6 +1902,7 @@ async function callClaude(settings, buyerMessage, extraContext) {
         role: "user",
         content:
           (extraContext ? extraContext + "\n\n" : "") +
+          (memory ? String(memory) + "\n" : "") + // (v0.21.71) memory of this chat — user turn only, the system prompt stays cached
           nowLine() + "\n" +
           "Buyer's latest message:\n" +
           buyerMessage,
@@ -1613,7 +1942,7 @@ async function callClaude(settings, buyerMessage, extraContext) {
  * for ONE short, non-pushy nudge — or [SKIP] if there's no genuine reason to
  * follow up. The content script gates this by a configurable quiet period and a
  * per-chat count cap, so it can never spam. */
-async function callClaudeFollowup(settings, context, threadName) {
+async function callClaudeFollowup(settings, context, threadName, memory) {
   if (!settings.apiKey) return { error: "No API key set." };
   const body = {
     model: settings.model || "claude-haiku-4-5",
@@ -1633,6 +1962,7 @@ async function callClaudeFollowup(settings, context, threadName) {
           "(3) end with ONE easy time-anchored question (\"Tu passes aujourd'hui ou demain?\" / \"Afternoon or evening work better?\"). " +
           "Two short sentences maximum, warm and casual — a busy seller texting, not a marketing blast. " +
           "If there is NO good reason (they declined, said no, it's resolved, they set a visit time already, or another nudge would be spammy): reply with exactly [SKIP].\n\n" +
+          (memory ? String(memory) + "\n" : "") + // (v0.21.71) what we already told this buyer
           nowLine() + "\n" +
           "Conversation so far (most recent last):\n" +
           trimContext(context),
@@ -3153,6 +3483,7 @@ async function buildDiagnostic() {
         "videoForeground", "videoPip", "videoTrustedChannels", "videoActivateTab",
         "videoDropRescue",
         "videoActivationPulse", "videoMediaPrime", "videoMediaGate", "attachPile", // (v0.21.67)
+        "memStats", "machineId", // (v0.21.71)
       ],
       (x) => r(x || {})
     )
@@ -3265,19 +3596,32 @@ async function buildDiagnostic() {
     " | tick: scan=" + (tickd.lastScanTime ? ageM(Date.parse(tickd.lastScanTime)) : "-") +
     " act=\"" + cut(tickd.lastAction, 60) + "\" vid=\"" + cut(tickd.videoLast, 60) + "\" err=\"" + cut(tickd.lastError, 60) + "\""
   );
+  // (v0.21.71) thread memory health: reads = Activity-log lookups, skips = sends
+  // the memory stopped (answered elsewhere / our own text / claim lost / video).
+  {
+    const ms = st.memStats || {};
+    const loginOk = !!(st.cloudAuth && st.cloudAuth.refresh_token);
+    L.push(
+      "memory: " + (settings.threadMemory === false ? "OFF(setting)" : !loginOk ? "NO cloud login → reads off" : ms.lastAt ? "on" : "on, NO successful read yet") +
+      " id=" + (st.machineId || "-") + " typingPace=" + (settings.typingPaceMaxSec != null ? settings.typingPaceMaxSec : "?") + "s" +
+      " | reads=" + (ms.reads || 0) + " fails=" + (ms.fails || 0) + " last=" + ageM(ms.lastAt) + " skew=" + Math.round(memSkewMs / 1000) + "s" +
+      " | skips: answered=" + (ms.answered || 0) + " echo=" + (ms.echo || 0) + " claim=" + (ms.claimed || 0) + " video=" + (ms.video || 0) + " videoWait=" + (ms.videoWait || 0) +
+      (ms.lastErr ? " err=\"" + cut(ms.lastErr, 40) + "\"" : "")
+    );
+  }
   const vt = st.videoSentThreads || {};
-  let vTot = 0, vSent = 0, vLock = 0, vDom = 0, vTail = 0, vRecon = 0, vDoneNoSent = 0, vResume = 0, vUnseen = 0, vStuck = 0;
+  let vTot = 0, vSent = 0, vLock = 0, vDom = 0, vTail = 0, vRecon = 0, vDoneNoSent = 0, vResume = 0, vUnseen = 0, vStuck = 0, vCloud = 0;
   for (const k of Object.keys(vt)) {
     const e = vt[k]; if (!e) continue; vTot++;
     if (e.sent) vSent++;
     if (e.unseen) vUnseen++;
     if (e.stuck) vStuck++;
-    if (e.via === "lock") vLock++; else if (e.via === "dom") vDom++; else if (e.via === "taildrop") vTail++;
+    if (e.via === "lock") vLock++; else if (e.via === "dom") vDom++; else if (e.via === "taildrop") vTail++; else if (e.via === "cloud") vCloud++;
     if (e.recon) vRecon++;
     if (typeof e.resumeFrom === "number") vResume++; // mid-set marker awaiting its tail
-    else if (e.done && !e.sent && e.via !== "taildrop") vDoneNoSent++;
+    else if (e.done && !e.sent && e.via !== "taildrop" && e.via !== "cloud") vDoneNoSent++; // (v0.21.71) a cloud mark is another computer's confirmed send, not "marked without one"
   }
-  L.push("video-marks: total=" + vTot + " sent=" + vSent + " unseen-in-chat=" + vUnseen + " last-clip-stuck=" + vStuck + " lock=" + vLock + " dom=" + vDom + " taildrop=" + vTail + " recon=" + vRecon + " resume-pending=" + vResume + " done-no-sent=" + vDoneNoSent);
+  L.push("video-marks: total=" + vTot + " sent=" + vSent + " unseen-in-chat=" + vUnseen + " last-clip-stuck=" + vStuck + " lock=" + vLock + " dom=" + vDom + " cloud=" + vCloud + " taildrop=" + vTail + " recon=" + vRecon + " resume-pending=" + vResume + " done-no-sent=" + vDoneNoSent);
   const oldest = (m) => { let o = null; for (const k of Object.keys(m || {})) { const v = m[k]; if (typeof v === "number" && (o == null || v < o)) o = v; } return o; };
   const cd = st.cooldowns || {}; let cdFut = 0; for (const k of Object.keys(cd)) if (cd[k] > now) cdFut++;
   const rc = st.replyCounts || {}; let capped = 0;
@@ -3513,28 +3857,61 @@ chrome.runtime.onMessage.addListener((msg, _sender, sendResponse) => {
             sendResponse({ ok: true, skip: true, reason: "daily cap reached" });
             break;
           }
+          // (v0.21.71) THREAD MEMORY, before anything is billed or typed: the chat's
+          // Activity rows (any computer) decide whether this message is already
+          // answered / is ours / is being answered elsewhere. Nothing new is sent
+          // when the read fails — the guards below are simply not there, as before.
+          const memOn = settings.threadMemory !== false && !!msg.threadId;
+          const memCtx = msg.memContext || msg.context; // the wider (40-line) read, for the verdict and the memory line
+          let memRows = null, memOthers = null, machineId = "";
+          if (memOn) {
+            machineId = await getMachineId();
+            memRows = await memThreadRows(msg.threadId, false);
+            if (memRows) {
+              const v = memVerdict(memRows, { buyerMessage: msg.buyerMessage, transcript: memCtx, machineId, now: memNow(), phase: "gen" });
+              if (v) {
+                memNote({ [v.memory]: 1 });
+                sendResponse({ ok: true, skip: true, memory: v.memory, reason: v.reason });
+                break;
+              }
+            }
+            memOthers = await memRecentRows();
+          }
+          const replay = typeof msg.cachedText === "string" && !!msg.cachedText.trim();
+          // Our claim on this buyer message goes out BEFORE the model is asked and is
+          // AWAITED (bounded), so a second computer opening the same chat finds it on
+          // its very next read. Never from a machine whose last Anthropic call failed
+          // and none succeeded since: a computer that cannot reply must not hold the
+          // chat (a replay needs no call, so it may claim). Withdrawn below if the
+          // call fails; it dies by itself once this machine's reply is delivered.
+          const claimed = memOn && (replay || !claudeFailedAt);
+          if (claimed) await memClaim(msg.threadId, msg.threadName, msg.buyerMessage, machineId);
           // Replay of an already-billed reply (send was aborted last cycle): all the
           // gates above ran again exactly like a retry, but no new API call is paid.
-          // Counters + log advance the same way a re-billed retry advances them today.
-          if (typeof msg.cachedText === "string" && msg.cachedText.trim()) {
+          // (The Activity row is written by the content script on delivery.)
+          if (replay) {
             await incrementCounters();
-            await appendLog({ thread: msg.threadName, buyer: msg.buyerMessage, action: "text", reply: msg.cachedText });
             sendResponse({ ok: true, text: msg.cachedText });
             break;
           }
+          const memory = memOn ? memoryLine(settings, memCtx, memRows, memOthers, msg.threadId) : "";
           const result = await callClaude(
             settings,
             msg.buyerMessage,
-            msg.context ? "Conversation so far (most recent last):\n" + msg.context : ""
+            msg.context ? "Conversation so far (most recent last):\n" + msg.context : "",
+            memory
           );
           if (result.error) {
+            claudeFailedAt = Date.now();
+            if (claimed) memUnclaim(msg.threadId, msg.threadName, msg.buyerMessage, machineId);
             sendResponse({ ok: false, error: result.error });
             break;
           }
+          claudeFailedAt = 0;
           const parsed = parseReply(result.text);
           if (parsed.kind === "human") {
             notifyHuman(parsed.reason, msg.threadName);
-            await appendLog({ thread: msg.threadName, buyer: msg.buyerMessage, action: "human", reply: "[HUMAN] " + parsed.reason });
+            await appendLog({ thread: msg.threadName, threadId: msg.threadId, buyer: msg.buyerMessage, action: "human", reply: "[HUMAN] " + parsed.reason });
             sendResponse({ ok: true, human: true, reason: parsed.reason });
             break;
           }
@@ -3545,8 +3922,55 @@ chrome.runtime.onMessage.addListener((msg, _sender, sendResponse) => {
             break;
           }
           await incrementCounters();
-          await appendLog({ thread: msg.threadName, buyer: msg.buyerMessage, action: "text", reply: text });
+          // (v0.21.71) No appendLog here any more: the content script logs the reply
+          // when it is actually DELIVERED (LOG_EVENT, like follow-ups). Logging at
+          // generation time put replies in the Activity feed that never went out
+          // (aborted sends) and showed a replayed reply twice — and that same row
+          // is now the cross-machine memory, so it must mean "delivered".
           sendResponse({ ok: true, text });
+          break;
+        }
+        case "MEMORY_PRESEND": {
+          // (v0.21.71) The content script asks this right before it types: a FRESH
+          // read of the chat's rows (no cache) — did another computer deliver a
+          // reply to this exact message during our delay, or claim it before us?
+          const settings = await getSettings();
+          if (settings.threadMemory === false || !msg.threadId) { sendResponse({ ok: true, skip: false, off: true }); break; }
+          const rows = await memThreadRows(msg.threadId, true);
+          if (!rows) { sendResponse({ ok: true, skip: false, unavailable: true }); break; }
+          const machineId = await getMachineId();
+          const now = memNow();
+          const v = memVerdict(rows, { buyerMessage: msg.buyerMessage, transcript: msg.transcript, machineId, now, phase: "pre" });
+          if (v) { memNote({ [v.memory]: 1 }); sendResponse({ ok: true, skip: true, memory: v.memory, reason: v.reason }); break; }
+          // Going ahead: renew our claim when it is missing (a replay long after its
+          // first claim, a machine that was unhealthy at generation) or older than
+          // 5 min (the videos-first path can attach for minutes before the text).
+          // Awaited, so the other computer's next read sees it before we type.
+          const mineNewest = memLiveClaims(rows, memKey(msg.buyerMessage), now).filter((c) => c.id === machineId).reduce((a, c) => Math.max(a, c.at), 0);
+          if (!mineNewest || now - mineNewest > MEM_RECLAIM_MS) await memClaim(msg.threadId, msg.threadName, msg.buyerMessage, machineId);
+          sendResponse({ ok: true, skip: false });
+          break;
+        }
+        case "MEMORY_VIDEO": {
+          // (v0.21.71) Has ANY computer already logged a demo video as sent in this
+          // chat, or claimed it before we did? Waits for this machine's own claim
+          // insert (if one is in flight) and then reads FRESH — the video decision
+          // must see the same ordering the text decision sees.
+          const settings = await getSettings();
+          if (settings.threadMemory === false || !msg.threadId) { sendResponse({ ok: true, sent: false, off: true }); break; }
+          if (memClaimPending[msg.threadId]) { try { await memClaimPending[msg.threadId]; } catch (e) { /* bounded inside */ } }
+          const rows = await memThreadRows(msg.threadId, true);
+          if (!rows) { sendResponse({ ok: true, sent: false, unavailable: true }); break; }
+          const machineId = await getMachineId();
+          let v = memVideoSent(rows, machineId, memNow());
+          if (!v.sent && rows.length >= MEM_THREAD_LIMIT) {
+            // a long chat can push the video row out of the window — ask for the video rows alone
+            const vr = await memVideoRows(msg.threadId);
+            if (vr && vr.length) { const v2 = memVideoSent(vr, machineId, memNow()); if (v2.sent) v = Object.assign({}, v, v2); }
+          }
+          if (v.sent) memNote({ video: 1 });
+          else if (v.inflight) memNote({ videoWait: 1 });
+          sendResponse(Object.assign({ ok: true }, v));
           break;
         }
         case "GET_FOLLOWUP": {
@@ -3574,7 +3998,13 @@ chrome.runtime.onMessage.addListener((msg, _sender, sendResponse) => {
           }
           // Replay of an already-billed follow-up whose send was aborted — same
           // gates above, no new API call; flows through the same token/empty checks.
-          const fr = msg.pendingText ? { text: msg.pendingText } : await callClaudeFollowup(settings, msg.context, msg.threadName);
+          // (v0.21.71) the follow-up gets the same memory of the chat as a reply.
+          let fmem = "";
+          if (settings.threadMemory !== false && msg.threadId && !msg.pendingText) {
+            const frows = await memThreadRows(msg.threadId, false);
+            fmem = memoryLine(settings, msg.memContext || msg.context, frows, await memRecentRows(), msg.threadId);
+          }
+          const fr = msg.pendingText ? { text: msg.pendingText } : await callClaudeFollowup(settings, msg.context, msg.threadName, fmem);
           if (fr.error) {
             sendResponse({ ok: false, error: fr.error });
             break;

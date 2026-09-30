@@ -58,6 +58,8 @@ per-machine on/off).
 | `dailyCap` | number | 200 | Max replies/day (safety). |
 | `responseDelaySec` | number | 30 | Wait before replying (human-like). |
 | `jitterSec` | number | 60 | Extra random 0–N s added to the delay. |
+| `typingPaceMaxSec` | number | 20 | (v0.21.71) Extra wait per reply proportional to its length (`wpmMin`–`wpmMax` typing speed), capped here; `0` = off. |
+| `threadMemory` | bool | true | (v0.21.71) Read the chat's Activity-log rows before every reply/video: never answer a message twice (across computers), never re-send the demo, tell the model what it already said. Off = pre-.71 behaviour. |
 | `listings` | array | [] | Inventory rows; included in the prompt. Each: `{title, model, storage, condition, price (number), videoUrl, available (bool)}`. |
 | `videoRetryMax` | number | 2 | (v0.21.47) Native attach retries per chat when nothing could be confirmed staged; `0` = none. |
 | `videoLinkFallback` / `videoLinkOptIn` / `videoLinkUrl` / `videoLinkText` | — | — | **REMOVED (v0.21.66).** The demo is a video FILE or nothing; no link is ever sent, no form shows these, nothing reads them. Ignored if present in a stored config. |
@@ -66,10 +68,10 @@ per-machine on/off).
 
 ### Advanced settings (stored but NOT active in the current "simple" build)
 Include them in the editor if you want forward-compat, but know they currently do
-nothing in the shipped extension: `wpmMin`, `wpmMax`, `maxRepliesPerConvo`,
-`convoCapBehavior`, `humanCadence`, `skipChance`, `breakChance`, `breakMinMin`,
-`breakMaxMin`, `warmupEnabled`, `warmupDays`, `warmupStartCap`, `visitConfirmEnabled`,
-`visitConfirmAfterMin`, `visitConfirmMessage`, `videos` (old URL list).
+nothing in the shipped extension: `humanCadence`, `skipChance`, `breakChance`, `breakMinMin`,
+`breakMaxMin`, `warmupEnabled`, `warmupDays`, `warmupStartCap`, `videos` (old URL list).
+(`wpmMin`/`wpmMax` are active since v0.21.71 — they set the typing pace; `maxRepliesPerConvo`,
+`convoCapBehavior` and the `visitConfirm*` keys have been active for a long time.)
 
 ### Per-machine settings (NOT web-managed — leave these to the extension)
 These live in each computer's local storage, not in the config JSON:

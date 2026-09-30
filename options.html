@@ -124,6 +124,10 @@
           <div><label>Jitter (s)</label><input type="number" id="jitterSec" min="0" /></div>
         </div>
         <div class="inline">
+          <div><label>Typing pace max (s) <span class="hint">extra wait per reply that grows with its length, at the Typing WPM speed below (a person needs time to type); 0 = off</span></label><input type="number" id="typingPaceMaxSec" min="0" /></div>
+        </div>
+        <label class="check"><input type="checkbox" id="threadMemory" /> Chat memory across computers <span class="hint">reads the Activity log before every reply and video: never answers the same message twice (even from two computers), never re-sends the demo video, and tells the AI what it already told this buyer</span></label>
+        <div class="inline">
           <div><label>Hourly cap</label><input type="number" id="hourlyCap" min="0" /></div>
           <div><label>Daily cap</label><input type="number" id="dailyCap" min="0" /></div>
         </div>
