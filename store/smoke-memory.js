@@ -228,7 +228,7 @@ const V = (rows, buyerMessage, transcript, phase) => memVerdict(rows, { buyerMes
   ok(/via === "cloud"/.test(ct.slice(ct.indexOf("async function armVideoCatchUp"))), "the catch-up arm keeps cloud-memory marks");
   ok(/dmk\.via === "cloud"/.test(ct), "a cloud-memory mark counts as confirmed in the engine");
   ok(/cm\.ok && cm\.inflight && resumeFrom == null && !manual/.test(ct), "the engine yields the video to a computer that claimed the chat first (never on a manual resend or a resume tail)");
-  ok((ct.match(/await servedCleanup\(\);/g) || []).length === 3, "every 'served elsewhere' stop clears this machine's leftover tile + retry state (3 sites)");
+  ok((ct.match(/await servedCleanup\(\);/g) || []).length === 4, "every 'served elsewhere' stop clears this machine's leftover tile + retry state (cloud, DOM, skip-after-delay, and the v0.21.72 first-clip credit)");
   ok(/am\[id\] = \{ manualResend: Date\.now\(\) \};/.test(ct) && /attC\.manualResend/.test(ct) && /delete sidebarVideoSeen\[id\];/.test(ct), "the popup's Resend button overrides the memories for 10 min");
   ok(/const hrefAtSend = location\.href;/.test(ct) && /if \(location\.href !== hrefAtSend\) return false;/.test(ct), "typeAndSend never clicks Send in a chat the operator switched to");
   const ship = slice(ct, "const shipReply = async (afterClip) =>", "const composerNow = findComposer()");

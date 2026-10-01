@@ -56,6 +56,7 @@
     demoVideoDelaySec: 10,
     demoVideoBetweenSec: 8,
     videoRetryMax: 2, // native attach retries per chat before the link fallback
+    videoCompleteSet: true, // (v0.21.72) MUST match background.js DEFAULTS — every clip, exactly once per chat
     videoLinkFallback: false, // (v0.21.69) legacy — but machines stuck on .47-.51 READ it from the row and send a link unless it is exactly false
     // (v0.21.66) demo-link keys: kept ONLY so stored configs parse — no form, no
     // reader, no link is ever sent. Mirrors background.js DEFAULTS.
@@ -90,7 +91,7 @@
     ["businessInfo", "value"], ["instructions", "value"], ["examples", "value"],
     ["closerGoals", "value"], ["priceList", "value"], ["visitConfirmMessage", "value"],
     ["demoVideoDelaySec", "number"], ["demoVideoBetweenSec", "number"],
-    ["videoRetryMax", "number"],
+    ["videoRetryMax", "number"], ["videoCompleteSet", "checked"], // (v0.21.72)
     // videoLinkOptIn / videoLinkUrl / videoLinkText: no field any more. The demo
     // is sent as a FILE or not at all — the link sender was deleted in v0.21.60
     // and the owner asked for the option itself to go ("sounds like a scam").
@@ -233,8 +234,59 @@
     renderVideos();
   });
 
-  /* ----- central demo videos (uploaded to Supabase Storage) ----- */
-  function renderDemoVideos() {
+  /* ----- central demo videos (uploaded to Supabase Storage) -----
+   * (v0.21.72) THE LIST SAVES ITSELF. An upload or a Remove used to change only
+   * this page: the status told the operator to press Save, and since v0.21.55 every
+   * other field on the dashboard saves by itself — so a list changed and never
+   * saved left the bots sending the OLD list (the owner uploaded a second video
+   * and the bots kept sending one). Now both write the row at once and say so.
+   * Each row also shows the clip's weight: the bots upload every clip into every
+   * chat, so a phone's 15 MB original costs each of them several times what a
+   * 3–5 MB export does. Sizes missing on older entries are read from the file. */
+  const HEAVY_CLIP_BYTES = 8 * 1024 * 1024;
+  const fmtMB = (n) => (n > 0 ? (n / 1048576).toFixed(1) + " MB" : "");
+  let clipSizeFill = false;
+  async function fillClipSizes() {
+    if (clipSizeFill || typeof fetch !== "function") return;
+    clipSizeFill = true;
+    let changed = false;
+    try {
+      for (const v of settings.demoVideoUrls || []) {
+        if (!v || !v.url || v.size > 0) continue;
+        try {
+          const r = await fetch(v.url, { method: "HEAD" });
+          const n = Number((r.headers && r.headers.get && r.headers.get("content-length")) || 0);
+          if (r.ok && n > 0) { v.size = n; changed = true; }
+        } catch (e) { /* the size stays unknown — nothing depends on it */ }
+      }
+    } finally { clipSizeFill = false; }
+    if (changed) renderDemoVideos(true);
+  }
+  // Two entries are the SAME FILE when the name and the byte size both match.
+  const sameClip = (a, b) => !!(a && b && a.name && a.name === b.name && a.size > 0 && a.size === b.size);
+  // `url` (uploads): after a failed save the page may have RELOADED another
+  // device's newer row — then the new entry is gone from the list and "press
+  // Save" would be a lie; say what actually has to be done.
+  async function saveVideoList(what, url) {
+    const status = $("demoVideoStatus");
+    // one save at a time: a debounced auto-save about to fire would send the same
+    // row stamp and one of the two would read as "someone else saved first"
+    if (autoTimer) { clearTimeout(autoTimer); autoTimer = null; }
+    autoPending = true; // the leave-page guard covers the save in flight
+    let ok = false;
+    try { ok = await saveConfig(true); } finally { autoPending = false; }
+    if (status) {
+      status.className = ok ? "saved" : "err";
+      const stillListed = !url || (settings.demoVideoUrls || []).some((o) => o && o.url === url);
+      status.textContent = ok
+        ? what + " ✓ — saved. Every bot has the new list within ~1 min."
+        : stillListed
+          ? what + " on this page, but NOT saved (the line at the bottom says why) — press Save to cloud."
+          : "NOT saved: another device changed the settings at the same moment and its version was loaded — upload the video again.";
+    }
+    return ok;
+  }
+  function renderDemoVideos(noFill) {
     const el = $("demoVideoList");
     if (!el) return;
     const vids = settings.demoVideoUrls || [];
@@ -250,24 +302,49 @@
       a.href = v.url;
       a.target = "_blank";
       a.textContent = `${i + 1}. ${v.name || "video"}`;
+      const meta = document.createElement("span");
+      meta.className = "hint";
+      const dupOf = vids.findIndex((o, k) => k < i && sameClip(o, v));
+      meta.textContent =
+        (v.size > 0 ? " " + fmtMB(v.size) : "") +
+        (v.size > HEAVY_CLIP_BYTES ? " — heavy: every bot uploads it into every chat; a 720p export (3–5 MB) sends much faster" : "") +
+        (dupOf >= 0 ? " — same file as #" + (dupOf + 1) + ": the bots send it once" : "");
       const del = document.createElement("button");
       del.type = "button";
       del.className = "danger";
       del.textContent = "Remove";
-      del.addEventListener("click", () => {
+      del.addEventListener("click", async () => {
         vids.splice(i, 1);
         renderDemoVideos();
+        await saveVideoList("Removed");
       });
       row.appendChild(a);
+      row.appendChild(meta);
       row.appendChild(del);
       el.appendChild(row);
     });
+    const note = document.createElement("div");
+    note.className = "hint";
+    note.textContent =
+      "The bots send " + (vids.length === 1 ? "this video" : "these " + vids.length + " videos") +
+      ", in this order, once per chat — never the same one twice. A chat that already has a video is not sent it again; " +
+      "a buyer who writes after you add a video receives only the new one.";
+    el.appendChild(note);
+    if (!noFill) fillClipSizes();
   }
   if ($("demoVideoFile")) {
     $("demoVideoFile").addEventListener("change", async () => {
       const f = $("demoVideoFile").files && $("demoVideoFile").files[0];
       if (!f) return;
       const status = $("demoVideoStatus");
+      // the same file already in the list (same name, same size) is not added twice
+      const dupI = (settings.demoVideoUrls || []).findIndex((o) => sameClip(o, { name: f.name, size: f.size }));
+      if (dupI >= 0) {
+        status.className = "hint";
+        status.textContent = `${f.name} is already in the list (#${dupI + 1}) — not added twice.`;
+        $("demoVideoFile").value = "";
+        return;
+      }
       status.className = "hint";
       status.textContent = `Uploading ${f.name}…`;
       const safe = f.name.replace(/[^a-zA-Z0-9.\-_]/g, "_");
@@ -280,11 +357,10 @@
       }
       const url = client.storage.from(VIDEO_BUCKET).getPublicUrl(path).data.publicUrl;
       settings.demoVideoUrls = settings.demoVideoUrls || [];
-      settings.demoVideoUrls.push({ name: f.name, url });
+      settings.demoVideoUrls.push({ name: f.name, url, size: f.size || 0 });
       renderDemoVideos();
-      status.className = "saved";
-      status.textContent = "Uploaded ✓ — now click Save to cloud.";
       $("demoVideoFile").value = "";
+      await saveVideoList("Uploaded", url); // (v0.21.72) the list saves itself — nothing left to press
     });
   }
 

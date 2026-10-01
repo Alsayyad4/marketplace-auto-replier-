@@ -92,10 +92,23 @@ list. There is no second place to teach the bot.
   “Teach a rule” box stores a standing rule tagged `note:"always applies"`. Rules are evicted last.
 ## Tab: Videos
 
-- `demoVideoUrls` — array of `{ name, url }`. **Central demo videos**: uploaded once in
+- `demoVideoUrls` — array of `{ name, url, size? }`. **Central demo videos**: uploaded once in
   the dashboard (stored in Supabase Storage), served via the config URL. Each extension
   downloads them and sends them as **native** attachments **once per chat** — including
   on quiet/older chats it revisits (not just right after a reply). The buyer never sees a link.
+  (v0.21.72) The list **saves itself** on upload and on Remove; each machine starts
+  downloading a new clip the minute the list arrives (before any buyer needs it); `size`
+  (bytes, written by the dashboard on upload) lets the bots recognise the same FILE listed
+  or uploaded twice. Lighter is better — every bot uploads each clip into every chat.
+- `videoCompleteSet` — bool (default `true`). (v0.21.72) **Every clip, exactly once per chat.**
+  Each chat keeps a ledger of the clips it was handed, by file (`videoClips` in the
+  machine's local storage: `s` = sent, `t` = handed over but never confirmed; both mean
+  "never again in this chat"). A chat that still owes a **never-attempted** clip — one
+  added to the list since, one whose download was struck out that day, the rest of a set
+  whose first clip was sent unconfirmed — receives exactly that clip (on the buyer's next
+  message; a parked tail still finishes through the pending queue). Chats served before
+  v0.21.72 have no ledger and are left as they are. `false` = the pre-.72 count-based
+  behaviour; the "never the same clip twice" skip stays on either way.
 - `demoVideoDelaySec` — number (default `10`). Seconds to wait after a fresh reply before
   sending the first video (on a revisit it's sent immediately).
 - `demoVideoBetweenSec` — number (default `8`). Seconds to pause **between** videos when

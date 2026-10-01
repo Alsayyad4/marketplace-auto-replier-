@@ -258,7 +258,7 @@
         <!-- VIDEOS -->
         <section id="videos" class="pane">
           <h3 style="margin:6px 0;">Demo video — sent once per chat (synced to every account)</h3>
-          <p class="hint">Upload an mp4 here once. Every connected extension downloads it and sends it as a <b>native video</b> a few seconds after its first reply — the buyer never sees a link. Keep each under ~25&nbsp;MB. (Needs the one-time Storage setup — see <code>supabase/storage.sql</code>.)</p>
+          <p class="hint">Upload an mp4 here once. Every connected extension downloads it and sends it as a <b>native video</b> — the buyer never sees a link. The list <b>saves itself</b> the moment you upload or remove a video. Lighter is better: every bot uploads each clip into every chat, so a 3&ndash;8&nbsp;MB export (720p) sends several times faster than a phone&rsquo;s original; 25&nbsp;MB is Messenger&rsquo;s limit. (Needs the one-time Storage setup — see <code>supabase/storage.sql</code>.)</p>
           <div class="row">
             <input type="file" id="demoVideoFile" accept="video/mp4,video/*" />
             <span id="demoVideoStatus" class="hint"></span>
@@ -271,6 +271,7 @@
           <hr />
           <p class="hint">The demo is sent as a <b>video file</b> in the chat, or not at all. The bot never posts a link to it — a link reads as a scam to buyers and Marketplace flags accounts for it.</p>
           <div class="row"><label>Native attach retries per chat <span class="hint">how many extra tries when nothing could be confirmed attached; 0 = one attempt only</span></label><input type="number" id="videoRetryMax" min="0" max="10" /></div>
+          <label class="check"><input type="checkbox" id="videoCompleteSet" /> Every video, exactly once per chat <span class="hint">each chat keeps a memory of the videos it was sent, by file. A chat that is missing one (a video you added since, or one that failed to load that day) receives just that one on the buyer&rsquo;s next message — never a video it already has, never a blast to old chats</span></label>
           <h3 style="margin:14px 0 4px;">⚙️ Power features <span class="hint">(all OFF by default — each one makes the computer visibly do something; turn on one at a time only if videos still do not upload on a minimized window)</span></h3>
           <p class="hint">The switches that make a computer <b>do something visible</b> (pull its window to the front, open a floating window, really click Messenger&rsquo;s attach button) are <b>no longer set here</b>. A stale value left in this shared row once armed every computer at the same time. They now live in each extension&rsquo;s own Settings &rarr; Videos, so one machine can be tried without touching the rest.</p>
 
@@ -328,6 +329,6 @@
     <script src="config.js?v=20260918"></script>
     <script src="seed.js?v=20260921"></script>
     <script src="https://cdn.jsdelivr.net/npm/@supabase/supabase-js@2"></script>
-    <script src="app.js?v=20260930"></script>
+    <script src="app.js?v=20261001"></script>
   </body>
 </html>

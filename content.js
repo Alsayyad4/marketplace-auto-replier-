@@ -2130,7 +2130,11 @@
       // (v0.21.67) a given-up chat counts too: a copy that surfaces late on it
       // (the tab finally shown) is ours — trimmed to one and sent, not left for
       // the next text reply's Enter.
-      const ours = !!((mk && recent(mk.at) && (mk.via === "lock" || mk.stuck || mk.unverifiedTail || mk.gaveUp || typeof mk.resumeFrom === "number"))
+      // (v0.21.72) …but NOT a chat whose marker says "the first clip is confirmed,
+      // the rest follows" (noAdopt): a tile surfacing there is a late COPY of the
+      // clip the buyer already has — the engine's next visit sweeps it, the watcher
+      // must never send it.
+      const ours = !!((mk && recent(mk.at) && !mk.noAdopt && (mk.via === "lock" || mk.stuck || mk.unverifiedTail || mk.gaveUp || typeof mk.resumeFrom === "number"))
         || (at && (recent(at.failAt) || recent(at.claimAt))));
       if (!ours) return;
       const lk = (st.threadLocks || {})[id];
@@ -2193,6 +2197,7 @@
         const vt2 = (await getLocal(["videoSentThreads"])).videoSentThreads || {};
         const cur = vt2[id];
         let partial = false;
+        let restQueued = false; // (v0.21.72) the watcher sent the first clip of a set that has more
         if (cur && cur.done) {
           cur.sent = (cur.sent || 0) + n;
           delete cur.stuck; delete cur.unverifiedTail;
@@ -2202,9 +2207,48 @@
           if (!partial && cur.gaveUp) delete cur.gaveUp;
         } else {
           vt2[id] = { done: true, at: now, sent: n, recon: 1, via: "watch" }; // a retry-state chat: served now
+          // (v0.21.72) …except that the tile just sent on a retry-state chat is the
+          // ONE clip the engine handed over blind (videoAttempts.blindKey) — not
+          // the whole set. This stamp used to close the chat after its first clip.
+          // Credit that clip in the ledger; when the dashboard set holds clips this
+          // chat was never handed, leave a resume marker for them (never adopting
+          // another tile) and keep the chat on the pending queue.
+          try {
+            if (at && at.blindKey && lastSettings && lastSettings.videoCompleteSet !== false) {
+              const cfgW = (Array.isArray(lastSettings.demoVideoUrls) ? lastSettings.demoVideoUrls.filter((v) => v && v.url) : []).map(clipIdsOf);
+              const bi = cfgW.findIndex((ci) => ci.indexOf(at.blindKey) >= 0);
+              if (bi >= 0) {
+                const ledW = await clipLedgerPut(id, (e) => clipMark(e, cfgW[bi], "s", now));
+                const owW = clipOwed(ledW, cfgW);
+                if (owW.owed.length > 0) {
+                  vt2[id] = { done: true, at: now, owner: TAB_UID, resumeFrom: owW.owed[0], resumeTotal: cfgW.length, sent: owW.sentN, recon: 1, noAdopt: 1 };
+                  restQueued = true;
+                }
+              }
+            }
+          } catch (e) { /* the plain "served" stamp above stands */ }
         }
         await setLocal({ videoSentThreads: vt2 });
-        if (!partial) {
+        // (v0.21.72) keep the clip ledger in step with the mark: the tile that just
+        // left was a clip the engine had handed over (tried) — it is sent now.
+        try {
+          const vcW = (await getLocal(["videoClips"])).videoClips || {};
+          const eW = vcW[id];
+          if (eW && eW.t && Object.keys(eW.t).length) {
+            eW.s = eW.s || {};
+            for (const k of Object.keys(eW.t)) { eW.s[k] = now; delete eW.t[k]; }
+            eW.at = now;
+            await setLocal({ videoClips: vcW });
+          }
+        } catch (e) { /* bookkeeping only — the send itself is done */ }
+        if (restQueued) {
+          // the retry state must not outlive the credit (its failAt would keep this
+          // watcher armed for a late copy); the rest of the set stays queued
+          const amR = (await getLocal(["videoAttempts"])).videoAttempts || {};
+          if (amR[id]) { delete amR[id]; await setLocal({ videoAttempts: amR }); }
+          if (videoPending[id] == null && (adoptedAlias[id] == null || videoPending[adoptedAlias[id]] == null)) { videoPending[id] = now; persistDedup(); }
+          videoLocked.delete(id);
+        } else if (!partial) {
           const am = (await getLocal(["videoAttempts"])).videoAttempts || {};
           if (am[id]) { delete am[id]; await setLocal({ videoAttempts: am }); }
           clearVideoPending(id);
@@ -3073,6 +3117,112 @@
       } catch (e) { /* diagnostics must never disturb the bot */ } finally { doctorRunning = false; }
     })();
   }
+  /* ---------------- (v0.21.72) THE CLIP LEDGER — every clip, exactly once ----------
+   * The engine has always tracked a chat's demo set by COUNT and INDEX ("sent 1 of
+   * 2, resume at 1"). A count cannot say WHICH clip a chat has — so a clip skipped
+   * because its download was struck out that hour, a tail dropped because the
+   * dashboard list changed, or a set closed on "a video of ours is in this chat"
+   * all ended the chat for good with a clip missing, and nothing could ever send
+   * just that one. The ledger records, per chat, the clips handed over BY IDENTITY:
+   *   s = sent,   t = handed over but never confirmed.
+   * Both mean "never dispatch this clip into this chat again"; a configured clip
+   * in neither is OWED. The index machinery below is untouched — the ledger only
+   * (1) makes the loop step over a clip the chat already holds, and (2) lets a
+   * chat that still owes a NEVER-ATTEMPTED clip receive exactly that clip later
+   * (on the buyer's next message — never a blast to dormant chats). A clip that
+   * was attempted and could not be confirmed is still never re-dispatched.
+   * Pure helpers (store/smoke-clips.js); storage key `videoClips`, 1500 chats. */
+  const CLIP_LEDGER_MAX = 1500;
+  // A clip's identities: the uploaded object's own name (unique per upload — the
+  // dashboard prefixes the upload time) and, when the dashboard recorded the
+  // file's size, "=name:size" — so the SAME file uploaded again later, or listed
+  // twice, is still one clip.
+  function clipIdsOf(v) {
+    if (!v) return [];
+    const ids = [];
+    if (v.url) {
+      const u = String(v.url).split(/[?#]/)[0];
+      const base = u.slice(u.lastIndexOf("/") + 1);
+      let dec = base;
+      try { dec = decodeURIComponent(base); } catch (e) { /* keep the raw segment */ }
+      ids.push(dec || u);
+    } else {
+      ids.push("local:" + String(v.name || "clip") + ":" + ((v.dataUrl && v.dataUrl.length) || 0));
+    }
+    const size = Number(v.size) || 0;
+    if (v.name && size > 0) ids.push("=" + String(v.name) + ":" + size);
+    return ids;
+  }
+  // What the Activity row calls the clip: the name the operator uploaded it under.
+  function clipLabelOf(v) {
+    if (v && v.name) return String(v.name);
+    const k = clipIdsOf(v)[0] || "clip";
+    return k.replace(/^local:/, "").replace(/^\d{10,}-/, "").replace(/:\d+$/, "");
+  }
+  function clipLedgerNorm(e) {
+    const o = e && typeof e === "object" ? e : {};
+    return { s: o.s && typeof o.s === "object" ? o.s : {}, t: o.t && typeof o.t === "object" ? o.t : {}, at: o.at || 0 };
+  }
+  const clipHeld = (led, ids) => !!(led && ids && ids.some((k) => k && ((led.s && led.s[k]) || (led.t && led.t[k]))));
+  const clipSent = (led, ids) => !!(led && ids && ids.some((k) => k && led.s && led.s[k]));
+  // How many CLIPS the ledger holds as sent (the "=name:size" aliases are a second
+  // name for the same clip, not another clip). A chat whose mark says more clips
+  // were sent than the ledger knows was partly served BEFORE v0.21.72 (or lost a
+  // ledger write): the ledger cannot say which clips those were, so it must never
+  // be used to decide what that chat still owes.
+  const clipSentCount = (led) => Object.keys((led && led.s) || {}).filter((k) => k.charAt(0) !== "=").length;
+  const clipLedgerTrusted = (led, mark) => clipSentCount(led) >= (Number(mark && mark.sent) || 0);
+  function clipMark(e, ids, bucket, now) {
+    for (const k of ids || []) {
+      if (!k) continue;
+      if (bucket === "s") { e.s[k] = now; delete e.t[k]; }
+      else if (bucket === "t") { if (!e.s[k]) e.t[k] = now; }
+      else { delete e.s[k]; delete e.t[k]; }
+    }
+  }
+  // idsList = the configured clips' identities, in sending order → what this chat
+  // still owes (indices), how many it holds, and whether the ledger knows the chat
+  // at all (known = 0 for every chat served before v0.21.72 — those are left alone).
+  function clipOwed(led, idsList) {
+    const L = clipLedgerNorm(led);
+    const owed = [];
+    let sentN = 0, triedN = 0;
+    const seen = {};
+    (idsList || []).forEach((ids, i) => {
+      if (!ids || !ids.length) return;
+      if (ids.some((k) => seen[k])) return; // the same clip listed twice is one clip
+      for (const k of ids) seen[k] = 1;
+      if (clipSent(L, ids)) sentN++;
+      else if (clipHeld(L, ids)) triedN++;
+      else owed.push(i);
+    });
+    return { owed, sentN, triedN, known: Object.keys(L.s).length + Object.keys(L.t).length };
+  }
+  // Always keyed by the chat's REAL id (the engine's `id`, the watcher's URL id) —
+  // every write goes there, so there is nothing to fall back to.
+  async function clipLedgerGet(id) {
+    const map = (await getLocal(["videoClips"])).videoClips || {};
+    return clipLedgerNorm(map[id]);
+  }
+  async function clipLedgerPut(id, mutate) {
+    const map = (await getLocal(["videoClips"])).videoClips || {};
+    const e = clipLedgerNorm(map[id]);
+    try { mutate(e); } catch (err) { /* keep the entry as it was */ }
+    e.at = Date.now();
+    map[id] = e;
+    const keys = Object.keys(map);
+    if (keys.length > CLIP_LEDGER_MAX) {
+      keys.sort((a, b) => ((map[a] && map[a].at) || 0) - ((map[b] && map[b].at) || 0));
+      for (const k of keys.slice(0, keys.length - CLIP_LEDGER_MAX)) delete map[k];
+    }
+    await setLocal({ videoClips: map });
+    return e;
+  }
+  // The configured clip list as one string: when it changes, every in-memory
+  // "already served this session" latch is re-evaluated against the ledger.
+  const clipListSig = (s) => (s && Array.isArray(s.demoVideoUrls) ? s.demoVideoUrls.filter((v) => v && v.url).map((v) => clipIdsOf(v)[0]).join("|") : "");
+  let videoLockedSig = null;
+
   async function maybeSendVideo(id, name, immediate, sidebarKey, deferSend, hooks) {
     videoSendDeferred = false;
     let fgOn = false; // (v0.21.48) this visit brought the window to the front — hand focus back at the end
@@ -3123,7 +3273,12 @@
       // the chat for a video FIRST (chatAlreadyHasOurVideo), so a clip that DID land
       // invisibly is re-marked, never re-sent. Past the cap: a terminal mark and
       // nothing else — no link is ever sent (v0.21.60), so a chat is never spammed.
-      const zeroEvidenceExit = async (why, total) => {
+      // (v0.21.72) `ids` = the identities of the ONE clip this visit handed over
+      // without confirmation (absent on an adopt visit). The retry re-dispatches it
+      // exactly as before, so it leaves the ledger; its key is kept on the attempt
+      // record (blindKey) — if the chat later shows a video of ours, that video is
+      // THIS clip, and the rest of the set stays deliverable (see the DOM stop).
+      const zeroEvidenceExit = async (why, total, ids) => {
         const maxTries = Math.max(0, Number(sCfg.videoRetryMax != null ? sCfg.videoRetryMax : VIDEO_BLIND_RETRIES_DEFAULT) || 0);
         const amZ = (await getLocal(["videoAttempts"])).videoAttempts || {};
         const prev = amZ[id] || {};
@@ -3133,8 +3288,9 @@
         if (dmZ[id] && dmZ[id].owner && dmZ[id].owner !== TAB_UID) return; // taken over — its stamps govern
         if (tries <= maxTries) {
           if (dmZ[id] && dmZ[id].done && !dmZ[id].sent) delete dmZ[id]; // drop our lock/marker: the chat is NOT served
-          amZ[id] = Object.assign({}, prev, { fails: (prev.fails || 0) + 1, failAt: Date.now(), why: "blind", blindTries: tries });
+          amZ[id] = Object.assign({}, prev, { fails: (prev.fails || 0) + 1, failAt: Date.now(), why: "blind", blindTries: tries }, ids && ids.length ? { blindKey: ids[0] } : {});
           await setLocal({ videoSentThreads: dmZ, videoAttempts: amZ });
+          if (ids && ids.length) { clipMark(led, ids, "clear"); await clipLedgerPut(id, (e) => clipMark(e, ids, "clear")); }
           videoLocked.delete(id);
           {
             const qkZ = sidebarKey || id;
@@ -3154,6 +3310,9 @@
         dmZ[id] = { done: true, at: Date.now(), owner: TAB_UID, sent: 0, resumeTotal: total, gaveUp: 1 };
         delete amZ[id];
         await setLocal({ videoSentThreads: dmZ, videoAttempts: amZ });
+        // (v0.21.72) given up on this chat: every clip it does not hold counts as
+        // tried, so no later top-up starts the same failing attach again.
+        await clipLedgerPut(id, (e) => { for (const ci of cfgIds) if (!clipSent(e, ci)) clipMark(e, ci, "t", Date.now()); });
         videoLocked.add(id);
         clearPend();
         vstat("⚠ gave up on the demo video for " + (name || id) + " after " + tries + " tries (a video is sent as a FILE or not at all)");
@@ -3161,6 +3320,14 @@
         ask({ type: "LOG_EVENT", entry: { thread: name, threadId: id, buyer: "(demo video)", action: "video", reply: "0/" + total + " demo videos — native attach failed " + tries + "× (no link is ever sent)" } });
         maybeRunVideoDoctor("gave-up");
       };
+      // (v0.21.72) The dashboard's clip list changed since these latches were set
+      // (a clip was added, replaced or removed): every chat is re-evaluated against
+      // the ledger — one may now owe a clip it was never handed. Still synchronous;
+      // the persisted marks below remain the authority for every chat.
+      {
+        const sigNow = clipListSig(lastSettings);
+        if (sigNow !== videoLockedSig) { videoLockedSig = sigNow; videoLocked.clear(); }
+      }
       // SYNCHRONOUS guard first (no awaits): if this instance already committed a video
       // to this chat, never touch it again — closes the rapid-re-entry "non-stop" loop.
       if (id && videoLocked.has(id)) {
@@ -3235,11 +3402,45 @@
       const now = Date.now();
       const done = cfg.videoSentThreads || {};
 
+      // (v0.21.72) THE CLIP LEDGER for this chat, and the configured clips'
+      // identities in sending order (per-machine local clips first — they are
+      // ignored whenever the dashboard has clips). `videoCompleteSet:false` in the
+      // dashboard turns the new SENDS off (top-up, changed list, evidence credit);
+      // the ledger's "never the same clip twice" skip is always on.
+      const completeSet = sCfg.videoCompleteSet !== false;
+      const cfgIds = local.concat(central).map(clipIdsOf);
+      let led = await clipLedgerGet(id);
+      const buyerVisit = !!(hooks && typeof hooks.onClipSent === "function");
+      let keyFlow = false; // this visit starts from the LEDGER (top-up / changed list), not from a resume index
+
       // RESUME-TAIL: a set interrupted by operator navigation records resumeFrom = the
       // first clip index NEVER ATTEMPTED (we break BEFORE attempting). Only that
       // strictly-untouched tail may be sent later — zero duplicate risk, and the chat
       // finally gets all 3 configured clips instead of 2.
-      const resumeFrom = done[id] && done[id].done && typeof done[id].resumeFrom === "number" ? done[id].resumeFrom : null;
+      let resumeFrom = done[id] && done[id].done && typeof done[id].resumeFrom === "number" ? done[id].resumeFrom : null;
+
+      // (v0.21.72) TOP-UP. A chat this machine already served whose ledger shows a
+      // configured clip it was NEVER handed — a clip added to the dashboard since,
+      // or one whose download was struck out the day the chat was served. Only when
+      // the BUYER just wrote (never a blast to dormant chats), only chats the
+      // ledger knows (served on v0.21.72+), only never-attempted clips, each once.
+      // It runs as a resume visit from the first owed clip; the loop below steps
+      // over every clip the ledger already holds.
+      if (completeSet && buyerVisit && resumeFrom == null && done[id] && done[id].done) {
+        const dmkT = done[id];
+        const confirmedT = !!(dmkT.sent || dmkT.recon || dmkT.via === "dom" || dmkT.via === "cloud" || dmkT.via === "taildrop" || dmkT.resumeTotal != null);
+        const owT = clipOwed(led, cfgIds);
+        // …and only when the ledger accounts for every clip the mark says was sent
+        // (a chat partly served before v0.21.72 would otherwise get its first clip again).
+        if (confirmedT && !dmkT.gaveUp && owT.known > 0 && owT.owed.length > 0 && clipLedgerTrusted(led, dmkT)) {
+          const copyT = Object.assign({}, dmkT, { resumeFrom: owT.owed[0], resumeTotal: cfgIds.length, sent: owT.sentN });
+          delete copyT.via;
+          done[id] = copyT;
+          resumeFrom = owT.owed[0];
+          keyFlow = true;
+          vstat("top-up — " + (name || id) + " is missing " + owT.owed.length + " of the " + cfgIds.length + " dashboard clip(s); sending only those");
+        }
+      }
 
       // IN-FLIGHT guard: a via:"lock" progress stamp younger than 10 min means a
       // set is probably being sent RIGHT NOW in another pass/tab (every loop
@@ -3318,13 +3519,46 @@
         // every visit so heal (i) can run without a page reload, and its pending
         // entry is kept.
         const confirmedMark = !!(dmk.sent || dmk.recon || dmk.via === "dom" || dmk.via === "cloud" || dmk.via === "taildrop" || dmk.resumeTotal != null);
-        if (confirmedMark) { videoLocked.add(id); clearPend(); }
+        // (v0.21.72) a served chat that still owes a never-attempted clip is not
+        // latched for the session: its buyer's next message tops it up (above).
+        const owL = completeSet && !dmk.gaveUp ? clipOwed(led, cfgIds) : null;
+        const owesMore = !!(owL && owL.known > 0 && owL.owed.length > 0);
+        if (confirmedMark) { if (!owesMore) videoLocked.add(id); clearPend(); }
         vstat("skip — chat already marked sent (" + (name || id) + ")");
         return;
       }
       // A video is visibly in the chat (real message row) → it's sent; mark + stop.
       // (Skipped in resume mode — of course there are already videos there.)
       if (resumeFrom == null && chatServedVideo(id, sidebarKey)) {
+        // (v0.21.72) …but when THIS machine handed this chat ONE clip it could not
+        // confirm (a bounded retry is pending: videoAttempts.blindKey), the video
+        // now in the chat is THAT clip — not the whole set. v0.21.71's sidebar
+        // memory made this stop reliable, and with it every such chat was closed
+        // after its first clip ("it keeps sending one video"). Credit that clip and
+        // keep the never-attempted rest deliverable: a resume marker at the first
+        // owed clip, delivered by the pending lane. Only with a verifiably EMPTY
+        // tray (a leftover copy of the credited clip must never be adopted and
+        // sent); otherwise the old terminal mark below stands.
+        const attD = (cfg.videoAttempts || {})[id];
+        const blindIdx = attD && attD.blindTries && attD.blindKey ? cfgIds.findIndex((ci) => ci.indexOf(attD.blindKey) >= 0) : -1;
+        if (completeSet && blindIdx >= 0) {
+          await servedCleanup(); // drops the retry state and sweeps our own leftover tile
+          const trayClean = stillOnThread(id) && trayRemoveBtns().length === 0 && !uploadingInBand();
+          led = await clipLedgerPut(id, (e) => clipMark(e, cfgIds[blindIdx], "s", Date.now()));
+          const owD = clipOwed(led, cfgIds);
+          if (trayClean && owD.owed.length > 0) {
+            const dmD = (await getLocal(["videoSentThreads"])).videoSentThreads || {};
+            if (!(dmD[id] && dmD[id].owner && dmD[id].owner !== TAB_UID)) {
+              dmD[id] = { done: true, at: now, owner: TAB_UID, resumeFrom: owD.owed[0], resumeTotal: cfgIds.length, sent: owD.sentN, recon: 1, noAdopt: 1 };
+              await setLocal({ videoSentThreads: dmD });
+              videoLocked.delete(id);
+              const qkD = sidebarKey || id;
+              if (qkD && videoPending[qkD] == null && videoPending[id] == null) { videoPending[qkD] = Date.now(); persistDedup(); }
+              vstat("the first clip is confirmed in " + (name || id) + " (Facebook shows it) — " + owD.owed.length + " more clip(s) follow on the next visit");
+              return;
+            }
+          }
+        }
         videoLocked.add(id);
         clearPend();
         done[id] = { done: true, at: now, via: "dom" }; // inert marker: DOM-detected, not a confirmed send
@@ -3473,9 +3707,13 @@
       // plus the parallel list of on-disk paths for the Chrome file API (null = none).
       const files = [];
       const paths = [];
+      const fileIds = []; // (v0.21.72) each slot's clip identities — always aligned with `files`
+      const fileNames = []; // …and the name the operator uploaded it under (Activity rows)
       for (const v of local) {
         try {
           files.push(dataUrlToFile(v.dataUrl, v.name, v.type));
+          fileIds.push(clipIdsOf(v));
+          fileNames.push(clipLabelOf(v));
           paths.push(await diskPathFor({ dataUrl: v.dataUrl, name: v.name }));
         } catch (e) {
           /* skip a bad local video */
@@ -3494,6 +3732,8 @@
         sleep(100000).then(() => ({ ok: false, error: "video fetch timed out" })),
       ]);
       for (const v of central) {
+        fileIds.push(clipIdsOf(v)); // exactly one slot is pushed per iteration below
+        fileNames.push(clipLabelOf(v));
         if (strikeN(urlFails[v.url]) >= 3) { files.push(EXCLUDED_SLOT); paths.push(null); continue; }
         let ok = false;
         try {
@@ -3557,8 +3797,36 @@
       const loadedN = files.filter((f) => f && !f.excluded).length;
       const firstMissing = files.findIndex((f) => !f);
       const startAt0 = resumeFrom != null ? Math.min(resumeFrom, files.length) : 0;
+      // (v0.21.72) a clip this chat already holds (sent, or handed over once) is
+      // stepped over exactly like a struck-out one — by identity, wherever it sits.
+      const heldAt = (k) => clipHeld(led, fileIds[k]);
+      const moreDueAfter = (k) => { for (let j = k + 1; j < files.length; j++) if (!(files[j] && files[j].excluded) && !heldAt(j)) return true; return false; };
+      // …and the names of the clips this chat holds as sent, for the Activity rows
+      const clipNamesSent = () => {
+        const names = [];
+        fileIds.forEach((ci, k) => { if (clipSent(led, ci) && fileNames[k] && names.indexOf(fileNames[k]) < 0) names.push(fileNames[k]); });
+        return names.length ? ": " + trunc(names.join(" + "), 160) : "";
+      };
+      // A FRESH visit to a chat whose ledger already holds EVERY configured clip
+      // (its mark was lost or cleared, the ledger was not): nothing is due. Restore
+      // a confirmed mark — without this the "next due clip" search below would run
+      // off the end and report "can't download", re-queueing the chat every 15 min
+      // for ever. (Resume visits are left alone: an adopt visit must still run.)
+      if (resumeFrom == null && files.length > 0 && files.every((f, k) => heldAt(k))) {
+        videoLocked.add(id);
+        clearPend();
+        const dmH = (await getLocal(["videoSentThreads"])).videoSentThreads || {};
+        if (!(dmH[id] && dmH[id].owner && dmH[id].owner !== TAB_UID)) {
+          dmH[id] = { done: true, at: Date.now(), owner: TAB_UID, sent: clipOwed(led, fileIds).sentN, resumeTotal: files.length };
+          const amH = (await getLocal(["videoAttempts"])).videoAttempts || {};
+          if (amH[id]) delete amH[id]; // the claim taken above must not keep the watcher armed for this chat
+          await setLocal({ videoSentThreads: dmH, videoAttempts: amH });
+        }
+        vstat("skip — this chat already holds every dashboard clip (" + (name || id) + ")");
+        return;
+      }
       let nextDue = startAt0;
-      while (nextDue < files.length && files[nextDue] && files[nextDue].excluded) nextDue++; // step over struck-out clips
+      while (nextDue < files.length && ((files[nextDue] && files[nextDue].excluded) || heldAt(nextDue))) nextDue++; // step over struck-out and already-held clips
       const nothingLoadable = startAt0 < files.length && nextDue >= files.length; // every remaining clip is struck out
       if (nothingLoadable && startAt0 > 0) {
         // (v0.21.42) a parked tail whose remaining clips are ALL struck out ends
@@ -3604,6 +3872,31 @@
       // GROW between visits (a revived URL slots in earlier), so replaying the index
       // could REPEAT an already-delivered clip. Resume only against the exact same
       // set size it was recorded with; otherwise drop the tail (never resend).
+      // (v0.21.72) …unless the LEDGER knows this chat: then the clips it holds are
+      // known by identity, the index is no longer needed, and the visit continues
+      // from the first clip of the NEW list this chat does not hold — nothing
+      // repeated, nothing dropped. (Tails parked before v0.21.72 have no ledger
+      // and are dropped as before.)
+      if (resumeFrom != null && !(done[id] && done[id].resumeTotal === files.length) && completeSet) {
+        const owS = clipOwed(led, fileIds);
+        // trusted = the ledger accounts for every clip this chat's marker says was sent
+        const ledOk = owS.known > 0 && clipLedgerTrusted(led, done[id]);
+        if (ledOk && owS.owed.length > 0) {
+          resumeFrom = owS.owed[0];
+          done[id] = Object.assign({}, done[id], { resumeFrom, resumeTotal: files.length, sent: owS.sentN });
+          keyFlow = true;
+          vstat("the clip list changed since this chat's last visit — sending only the clip(s) it does not have (" + (name || id) + ")");
+        } else if (ledOk) {
+          // the new list holds nothing this chat lacks → the set is complete
+          videoLocked.add(id);
+          clearPend();
+          const dmC2 = (await getLocal(["videoSentThreads"])).videoSentThreads || {};
+          dmC2[id] = { done: true, at: Date.now(), owner: TAB_UID, sent: owS.sentN, resumeTotal: files.length };
+          await setLocal({ videoSentThreads: dmC2 });
+          vstat("the clip list changed — this chat already has every current clip (" + (name || id) + ")");
+          return;
+        }
+      }
       if (resumeFrom != null && !(done[id] && done[id].resumeTotal === files.length)) {
         videoLocked.add(id);
         clearPend();
@@ -3682,7 +3975,10 @@
       // (v0.21.47) Clips CONFIRMED delivered before this visit come from the
       // marker's own count, never from the resume INDEX: an adopt visit that
       // resumed at N with nothing ever confirmed used to terminal-stamp sent:N.
-      const sentBase = resumeFrom != null && done[id] && typeof done[id].sent === "number" ? Math.min(done[id].sent, startAt) : startAt;
+      // (v0.21.72) on a ledger-started visit (top-up / changed list) the clips
+      // held are not a prefix of the list, so the count is the ledger's own.
+      const sentBase = keyFlow ? clipOwed(led, fileIds).sentN
+        : (resumeFrom != null && done[id] && typeof done[id].sent === "number" ? Math.min(done[id].sent, startAt) : startAt);
       console.debug("[SubSell] video: LOCKED chat + sending clips " + (startAt + 1) + "–" + files.length + " to", id);
       // (v0.21.48) OBLIGATORY VISIBILITY. Chrome defers media loading and pauses
       // rendering in a hidden/occluded tab, so Messenger's uploader never starts
@@ -3738,7 +4034,25 @@
         const tW = Date.now();
         while (Date.now() - tW < 2500 && trayRemoveBtns().length === 0) await sleep(500);
       }
-      if (startAt === 0 && trayRemoveBtns().length > 0) {
+      // (v0.21.72) A TOP-UP NEVER TOUCHES A COMPOSER IT DID NOT FILL. The chat was
+      // already served: an attachment staged here, or text being typed, is the
+      // operator's (or unknown) — never swept, never adopted, never sent. Restore
+      // the served mark and leave; the buyer's next message tries again.
+      if (keyFlow && (trayRemoveBtns().length > 0 || composerText(findComposer()))) {
+        const dmK2 = (await getLocal(["videoSentThreads"])).videoSentThreads || {};
+        if (!(dmK2[id] && dmK2[id].owner && dmK2[id].owner !== TAB_UID)) {
+          dmK2[id] = { done: true, at: Date.now(), owner: TAB_UID, sent: sentBase, resumeTotal: files.length };
+          await setLocal({ videoSentThreads: dmK2 });
+        }
+        videoLocked.delete(id);
+        vstat("top-up postponed — something is already staged or being typed in " + (name || id) + " (not ours to touch)");
+        return;
+      }
+      // (v0.21.72) a resume written after "the first clip is confirmed in the chat"
+      // (noAdopt) follows the fresh-run rule: a tile sitting here is a late COPY of
+      // the clip the chat already has — adopting it would send it twice.
+      const freshTray = startAt === 0 || !!(done[id] && done[id].noAdopt);
+      if (freshTray && trayRemoveBtns().length > 0) {
         await sweepTrayExtras(0); // fresh run: stale strays out before we stack clips
       }
       // Resume runs ADOPT a leftover unsent preview (a crashed run's attached
@@ -3746,7 +4060,7 @@
       // left) as known-good — it rides the first Enter, finally delivered. The
       // streaming engine keeps at most ONE clip in flight per chat, so more than
       // one leftover is a pile of copies: keep the newest (tail), trim the rest.
-      if (startAt > 0 && trayRemoveBtns().length > 1) {
+      if (startAt > 0 && !freshTray && trayRemoveBtns().length > 1) {
         for (let pass = 0; pass < 3 && trayRemoveBtns().length > 1; pass++) {
           safe(() => trayRemoveBtns()[0].click());
           await sleep(2000);
@@ -3885,6 +4199,12 @@
       let lastSres = null; // outcome of the last streamed send ("sent" / "stuck")
       for (let i = bulkDone ? runEnd : startAt; i < files.length; i++) {
         if (files[i] && files[i].excluded) continue; // struck-out clip URL: send the rest (re-probed hourly)
+        // (v0.21.72) NEVER THE SAME CLIP TWICE: a clip the ledger holds for this
+        // chat (sent, or handed over once without confirmation) is stepped over —
+        // by identity, so a re-ordered list, a clip listed twice or a top-up can
+        // never dispatch it again.
+        if (heldAt(i)) continue;
+        const idsI = fileIds[i] || [];
         if (!files[i]) {
           // Not loadable right now: everything before it is out (or going out);
           // resume exactly here on a later visit. No pre-attempt stamp — the
@@ -3982,6 +4302,9 @@
         }
         if (res === true || res === "blind") {
           okCount++;
+          // (v0.21.72) the ledger learns it the moment the engine counts it
+          clipMark(led, idsI, "s", Date.now());
+          await clipLedgerPut(id, (e) => clipMark(e, idsI, "s", Date.now()));
           // Count-based, +1 exactly: re-snapshotting the whole tray here would
           // absorb an undetected stray copy into the "known-good" set and let it
           // ride the Enter as a duplicate.
@@ -4010,6 +4333,9 @@
             // set stops here rather than posting a pile — the PC-mnbbd tray7 case).
             if (res === true && !(await trimTraySurplus(knownCount))) {
               okCount--;
+              // (v0.21.72) not sent after all — but it WAS handed over: tried, never again
+              clipMark(led, idsI, "clear"); clipMark(led, idsI, "t", Date.now());
+              await clipLedgerPut(id, (e) => { clipMark(e, idsI, "clear"); clipMark(e, idsI, "t", Date.now()); });
               dirtyStop = true;
               failedAt = i;
               // Empty the tray entirely before leaving: the text reply that
@@ -4063,13 +4389,15 @@
             // (v0.21.41) with the file API usable a clip costs seconds, so only an
             // OVERDUE buyer (lane-0 evidence) interrupts the set; on the synthetic
             // path (minutes per clip) any waiting buyer still does.
-            if (i + 1 < files.length && (cdpUsableNow() ? buyersWaitingCount(id, sidebarKey, true) > 0 : buyersWaitingNow(id, sidebarKey))) {
+            // (v0.21.72) …and only when a clip is actually still DUE after this one:
+            // a tail of struck-out or already-held clips is not worth a parked visit.
+            if (moreDueAfter(i) && (cdpUsableNow() ? buyersWaitingCount(id, sidebarKey, true) > 0 : buyersWaitingNow(id, sidebarKey))) {
               // YIELD: someone else is waiting for a reply. Their answer outranks
               // this chat's remaining clips — the tail is queued (pending lane,
               // guaranteed delivery), not dropped, and no failure is recorded.
               await parkTail(i + 1, `${okCount + sentBase}/${files.length} videos sent — pausing for a waiting buyer, finishing later`);
               vstat("sent " + (okCount + sentBase) + "/" + files.length + " — yielded to a waiting buyer, finishing later (" + (name || id) + ")");
-              ask({ type: "LOG_EVENT", entry: { thread: name, threadId: id, buyer: "(demo video)", action: "video", reply: (okCount + sentBase) + "/" + files.length + " demo videos sent — finishing the rest after a waiting buyer" } });
+              ask({ type: "LOG_EVENT", entry: { thread: name, threadId: id, buyer: "(demo video)", action: "video", reply: (okCount + sentBase) + "/" + files.length + " demo videos sent — finishing the rest after a waiting buyer" + clipNamesSent() } });
               return;
             }
           }
@@ -4081,6 +4409,9 @@
           // excludes it) and stop — never dispatch a second copy.
           dirtyStop = true;
           failedAt = i;
+          // (v0.21.72) handed over, never confirmed: the ledger keeps it as tried
+          clipMark(led, idsI, "t", Date.now());
+          await clipLedgerPut(id, (e) => clipMark(e, idsI, "t", Date.now()));
           if (res === "unverified") unverifiedStop = true;
           if (res === "unverified") {
             // FLUSH: if the clip IS staged invisibly, one Enter on the (text-empty)
@@ -4162,10 +4493,22 @@
       }
       if (wantSend) {
         setStatus({ lastAction: `sending ${Math.max(attachedNow, okCount)} video(s) in one message…`, currentThread: name });
+        // (v0.21.72) an adopted leftover may STILL be uploading (a heavy clip left
+        // staged by the previous visit): never press mid-upload — Messenger drops it.
+        {
+          const tU = Date.now();
+          while (Date.now() - tU < 150000 && uploadingInBand()) { if (!stillOnThread(id)) break; await sleep(1000); busySince = Date.now(); }
+        }
         await sendAttachedVideos();
         if (okCount === 0 && attachedNow > 0) adoptedN = attachedNow; // adopted leftovers went out with that Enter
+        if (adoptedN > 0) {
+          // (v0.21.72) what just went out is a clip handed over earlier: tried → sent
+          const nowA = Date.now();
+          for (const k of Object.keys(led.t)) { led.s[k] = nowA; delete led.t[k]; }
+          await clipLedgerPut(id, (e) => { for (const k of Object.keys(e.t)) { e.s[k] = nowA; delete e.t[k]; } });
+        }
       }
-      if (okCount === 0 && startAt === 0 && !dirtyStop) {
+      if (okCount === 0 && startAt === 0 && !dirtyStop && !keyFlow) {
         // NOTHING attached in this whole run, with the tray VERIFIED CLEAN (no
         // preview, and Messenger's own send control never left its empty state).
         // Nothing can possibly have been sent, so undoing the lock and retrying
@@ -4180,7 +4523,7 @@
           ask({ type: "LOG_EVENT", entry: { thread: name, threadId: id, buyer: "(video attach failure)", action: "video-status", reply: "0/" + files.length + " attached — no attach channel staged a clip (" + (lastAttachVia || "-") + "); FB upload UI may have changed on this machine" } });
         }
         // (v0.21.47) bounded retry + link fallback (was: unlock + unbounded retry)
-        await zeroEvidenceExit("attach", files.length);
+        await zeroEvidenceExit("attach", files.length, failedAt >= 0 ? fileIds[failedAt] : null);
         return;
       }
       if (failedAt >= 0) {
@@ -4203,8 +4546,8 @@
         // saw it read): it may surface in the tray once the tab is shown, so it
         // gets the ONE adopt visit below first (trimmed to one and sent), and only
         // an empty tray on that visit reaches the bounded retry.
-        if (unverifiedStop && !loadStop && startAt === 0 && okCount + adoptedN === 0 && !(lastAttachHeld && !(done[id] && done[id].unverifiedTail))) {
-          await zeroEvidenceExit("unconfirmed", files.length);
+        if (unverifiedStop && !loadStop && startAt === 0 && !keyFlow && okCount + adoptedN === 0 && !(lastAttachHeld && !(done[id] && done[id].unverifiedTail))) {
+          await zeroEvidenceExit("unconfirmed", files.length, fileIds[failedAt]);
           return;
         }
         // A LOAD stop never skips: the clip at failedAt was never touched.
@@ -4230,7 +4573,7 @@
         if (resumeAtF >= files.length && okCount + sentBase + adoptedN === 0) {
           // (v0.21.47) the whole chat ends with ZERO confirmed clips: not a
           // confirmed mark — bounded retry / link fallback instead.
-          await zeroEvidenceExit("unconfirmed", files.length);
+          await zeroEvidenceExit("unconfirmed", files.length, fileIds[failedAt]);
           return;
         }
         if (resumeAtF >= files.length) {
@@ -4259,7 +4602,7 @@
         const whyF = loadStop ? "couldn't load yet" : "didn't attach";
         vstat("sent " + (okCount + sentBase) + "/" + files.length + " — clip " + (failedAt + 1) + " " + whyF + "; finishing on a later visit (" + (name || id) + ")");
         setStatus({ lastError: "video: " + (okCount + sentBase) + "/" + files.length + " sent, clip " + (failedAt + 1) + " " + whyF + " — will finish later", currentThread: name });
-        if (okCount > 0) ask({ type: "LOG_EVENT", entry: { thread: name, threadId: id, buyer: "(demo video)", action: "video", reply: (okCount + sentBase) + "/" + files.length + " demo videos sent — finishing the rest on a later visit" } });
+        if (okCount > 0) ask({ type: "LOG_EVENT", entry: { thread: name, threadId: id, buyer: "(demo video)", action: "video", reply: (okCount + sentBase) + "/" + files.length + " demo videos sent — finishing the rest on a later visit" + clipNamesSent() } });
         return;
       }
       // (v0.21.47) A chat that reaches the terminal with ZERO confirmed clips (an
@@ -4276,8 +4619,30 @@
         // `owner` stays on the terminal stamp: without it, a >30-min-stalled pass
         // that wakes AFTER another pass finished would see no owner, pass every
         // takeover check, and re-send the tail on top of the finished set.
+        // (v0.21.72) THE LAST CLIP IS STILL STAGED ("stuck": its tile never left —
+        // typically a heavy clip whose upload had not finished). It used to be
+        // stamped "sent" and the bot walked on to the next chat: unless the watcher
+        // caught it on the very next scan, the clip stayed in this chat's draft and
+        // the buyer got one video fewer. Now the chat keeps ONE adopt visit (the
+        // same marker an unverified last clip gets): that visit waits the upload
+        // out and sends the leftover tile; an empty tray there closes the chat.
+        // Never a second dispatch — the clip is in the ledger as handed over.
+        const stuckTail = lastSres === "stuck" && okCount > 0 && stillOnThread(id) && trayRemoveBtns().length > 0;
+        if (stuckTail) {
+          dmS[id] = { done: true, at: Date.now(), owner: TAB_UID, sent: Math.max(0, okCount + sentBase + adoptedN - 1), resumeFrom: files.length, resumeTotal: files.length, unverifiedTail: 1, stuck: 1 };
+          await setLocal({ videoSentThreads: dmS });
+          videoLocked.delete(id);
+          const qkSt = sidebarKey || id;
+          if (qkSt && videoPending[qkSt] == null && videoPending[id] == null) { videoPending[qkSt] = Date.now(); persistDedup(); }
+          vstat("sent " + (okCount + sentBase + adoptedN - 1) + "/" + files.length + " — the last clip is still staged (upload not finished); one more visit sends it (" + (name || id) + ")");
+          if (okCount > 1 || sentBase + adoptedN > 0) ask({ type: "LOG_EVENT", entry: { thread: name, threadId: id, buyer: "(demo video)", action: "video", reply: (okCount + sentBase + adoptedN - 1) + "/" + files.length + " demo videos sent — last clip checked on a later visit" } });
+          return;
+        }
         dmS[id] = { done: true, at: Date.now(), owner: TAB_UID, sent: okCount + sentBase + adoptedN };
-        if (lastSres === "stuck") dmS[id].stuck = 1; // last clip left staged (Messenger would not take the send) — diagnostic only
+        // last clip left staged (Messenger would not take the send): the watcher keeps
+        // pressing while this chat is open. (v0.21.72) …also when the adopt visit's
+        // own send left the tile where it was.
+        if (lastSres === "stuck" || (adoptedN > 0 && stillOnThread(id) && trayRemoveBtns().length > 0)) dmS[id].stuck = 1;
         const amS = (await getLocal(["videoAttempts"])).videoAttempts || {};
         if (amS[id]) delete amS[id]; // full set delivered — clean fail/claim slate
         await setLocal({ videoSentThreads: dmS, videoAttempts: amS });
@@ -4285,7 +4650,13 @@
       vstat("sent ✓ " + (okCount + sentBase + adoptedN) + "/" + files.length + " to " + (name || id));
       setStatus({ lastAction: `demo video(s) sent ✓ (${okCount + sentBase + adoptedN}/${files.length})`, currentThread: name });
       // Mirror to the local + cloud activity log (fire-and-forget; no effect on sending).
-      ask({ type: "LOG_EVENT", entry: { thread: name, threadId: id, buyer: "(demo video)", action: "video", reply: (okCount + sentBase + adoptedN) + "/" + files.length + " demo video(s) sent" } });
+      // (v0.21.72) the row NAMES the clips this chat now holds, and is written only
+      // when this visit actually sent something (a closing visit with nothing new
+      // used to add a second identical row).
+      if (okCount + adoptedN > 0) ask({ type: "LOG_EVENT", entry: { thread: name, threadId: id, buyer: "(demo video)", action: "video", reply: (okCount + sentBase + adoptedN) + "/" + files.length + " demo video(s) sent" + clipNamesSent() } });
+      // A chat that still owes a NEVER-ATTEMPTED clip (its download was struck out
+      // today) is not latched for the session: its buyer's next message tops it up.
+      if (completeSet && clipOwed(led, fileIds).owed.length > 0) videoLocked.delete(id);
       // GROUND TRUTH (v0.21.43): the protocol said "sent" — does a video of ours
       // now show in this chat? This is the only signal that cannot lie about the
       // attach channel. Three unseen sets in a row switch the channel (file API ↔
@@ -5228,6 +5599,14 @@
       const anchors = conversationAnchors();
       const settings = (await ask({ type: "GET_SETTINGS" })).settings || {};
       lastSettings = settings;
+      // (v0.21.72) the dashboard's clip list changed → drop this session's "already
+      // served" latches before any chat is picked (handleThread consults them
+      // before it calls the video engine); the persisted marks + the clip ledger
+      // decide again for every chat.
+      {
+        const sigS = clipListSig(settings);
+        if (sigS !== videoLockedSig) { videoLockedSig = sigS; videoLocked.clear(); }
+      }
 
       // CONSTANT VERIFICATION — every scan, every rendered row: any chat whose
       // preview reads like a waiting buyer goes on the never-miss ledger (first-seen
@@ -5628,6 +6007,17 @@
         // this flag (the live DOM/sidebar checks still apply — see the refusal above).
         am[id] = { manualResend: Date.now() };
         await setLocal({ videoSentThreads: vt, videoAttempts: am });
+        // (v0.21.72) …and the clip ledger for this chat: the operator has looked and
+        // no video of ours is here, so every clip is due again. Without this the
+        // engine would step over every clip ("already held") and send nothing.
+        {
+          const vc = (await getLocal(["videoClips"])).videoClips || {};
+          let chg = false;
+          for (const k of [id, adoptedAlias[id]].concat(Object.keys(adoptedAlias).filter((x) => adoptedAlias[x] === id))) {
+            if (k && vc[k]) { delete vc[k]; chg = true; }
+          }
+          if (chg) await setLocal({ videoClips: vc });
+        }
         videoLocked.delete(id); // mandatory: the in-memory lock short-circuits before storage
         delete sidebarVideoSeen[id];
         if (adoptedAlias[id] != null) delete sidebarVideoSeen[adoptedAlias[id]];

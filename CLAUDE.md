@@ -9,7 +9,18 @@ all chrome.debugger/CDP work) + Supabase dashboard in docs/. Live branch:
   permissions ships OFF by default behind a cloud setting and goes to ONE machine first.
 - The operator wants zero manual steps in normal operation.
 
-## Known state (v0.21.71)
+## Known state (v0.21.72)
+- CLIPS (.72): each chat has a CLIP LEDGER (`videoClips[chatId] = {s, t}`: sent /
+  handed over unconfirmed, by clip identity `clipIdsOf` — helper block above
+  `maybeSendVideo`, `store/smoke-clips.js`). The loop steps over held clips
+  (`heldAt`); a served chat that owes a NEVER-ATTEMPTED clip is topped up on the
+  buyer's next message only (`keyFlow`, needs `clipLedgerTrusted`); an unconfirmed
+  first clip later seen in the chat (DOM stop or watcher) is credited and the REST of
+  the set resumes (`noAdopt` marker) instead of the chat closing at 1 of 2; a stuck
+  last clip gets an adopt visit. An attempted-unconfirmed clip is still NEVER
+  re-dispatched. The dashboard's video list SAVES ITSELF on upload/remove and shows
+  sizes; every machine pre-downloads new clips (`prewarmDemoClips`). Switch:
+  `videoCompleteSet`. 🩺 `clips:` line. The popup's Resend also clears the ledger.
 - MEMORY (.71): the Activity log (`subsell_messages`) is READ BACK per chat before every
   reply and video (`memThreadRows` → `memVerdict` / `memVideoSent` / `memoryLine`,
   background.js; `store/smoke-memory.js`): a message another computer answered is

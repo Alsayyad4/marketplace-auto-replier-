@@ -54,6 +54,7 @@
     demoVideoDelaySec: 10,
     demoVideoBetweenSec: 8,
     videoRetryMax: 2,
+    videoCompleteSet: true, // (v0.21.72) every clip, exactly once per chat (the clip ledger)
     videoLinkFallback: false, // (v0.21.69) legacy — machines stuck on .47-.51 read it from the row; must be exactly false
     videoLinkOptIn: false,
     videoLinkUrl: "",
@@ -123,6 +124,7 @@
     ["demoVideoDelaySec", "number"],
     ["demoVideoBetweenSec", "number"],
     ["videoRetryMax", "number"],
+    ["videoCompleteSet", "checked"],
     // videoLinkOptIn / videoLinkUrl / videoLinkText: removed from the form. The
     // demo is sent as a FILE or not at all (sender deleted in v0.21.60).
   ];

@@ -96,6 +96,13 @@ const DEFAULTS = {
   // link fallback, and the fallback itself (the demo sent as a LINK through the
   // proven text path when no attach channel can stage a clip on that machine).
   videoRetryMax: 2, // 0 = no native retry (link right away when nothing attaches)
+  // (v0.21.72) EVERY CLIP, EXACTLY ONCE. Each chat keeps a ledger of the clips it
+  // was handed, by file — so a chat that is missing a clip (one added to the
+  // dashboard since, one whose download failed that day, the rest of a set whose
+  // first clip was sent unconfirmed) receives exactly that clip on the buyer's
+  // next message, and never one it already has. false = the pre-.72 count-based
+  // behaviour (the ledger's "never the same clip twice" skip stays on).
+  videoCompleteSet: true,
   // (v0.21.66) THE DEMO LINK IS GONE. The sender was deleted in v0.21.60 (a raw
   // storage URL in a buyer's chat reads as a scam and Marketplace flags accounts
   // for it) and the owner asked for the option itself to be removed. These four
@@ -923,13 +930,18 @@ function memVerdict(rows, o) {
  * EARLIER than any live claim of ours, with no video row (any wording) from that
  * machine since? It sends its clips before its text, so its video row does not
  * exist yet. Pure. */
-function memVideoSent(rows, machineId, now) {
+function memVideoSent(rows, machineId, now, myLabel) {
   if (!Array.isArray(rows)) return { sent: false, inflight: false };
   now = now || Date.now();
+  // (v0.21.72) a row written by THIS machine before v0.21.71 carries no #PC- tag;
+  // with a typed label it reads "Label · v0.21.70" and used to count as another
+  // computer's — which cancelled this machine's own parked tails after the update.
+  const mineRow = (m) => !!((machineId && m.indexOf(machineId) >= 0) ||
+    (myLabel && !/#PC-[a-z0-9]+\s*$/i.test(m) && m.replace(/\s*·\s*v[\d.]+\s*$/, "").trim() === String(myLabel).trim()));
   for (const r of rows) {
     if (!r || r.kind !== "video" || !MEM_VIDEO_SENT_RE.test(String(r.bot_text || ""))) continue;
     const m = String(r.machine || "");
-    return { sent: true, mine: !!(machineId && m.indexOf(machineId) >= 0), by: memWho(r), at: r.created_at || null, inflight: false };
+    return { sent: true, mine: mineRow(m), by: memWho(r), at: r.created_at || null, inflight: false };
   }
   const t = (r) => Date.parse(r && r.created_at) || 0;
   const live = memLiveClaims(rows, null, now).filter((c) => c.id === machineId || !rows.some((x) => x && (x.kind === "video" || x.kind === "video-status") && String(x.machine || "").indexOf(c.id) >= 0 && t(x) >= c.at));
@@ -3484,6 +3496,7 @@ async function buildDiagnostic() {
         "videoDropRescue",
         "videoActivationPulse", "videoMediaPrime", "videoMediaGate", "attachPile", // (v0.21.67)
         "memStats", "machineId", // (v0.21.71)
+        "videoClips", // (v0.21.72) the per-chat clip ledger
       ],
       (x) => r(x || {})
     )
@@ -3622,6 +3635,21 @@ async function buildDiagnostic() {
     else if (e.done && !e.sent && e.via !== "taildrop" && e.via !== "cloud") vDoneNoSent++; // (v0.21.71) a cloud mark is another computer's confirmed send, not "marked without one"
   }
   L.push("video-marks: total=" + vTot + " sent=" + vSent + " unseen-in-chat=" + vUnseen + " last-clip-stuck=" + vStuck + " lock=" + vLock + " dom=" + vDom + " cloud=" + vCloud + " taildrop=" + vTail + " recon=" + vRecon + " resume-pending=" + vResume + " done-no-sent=" + vDoneNoSent);
+  // (v0.21.72) the clip ledger: chats it knows, how many hold EVERY configured
+  // clip, how many still miss one (missing= is what the top-up will deliver), and
+  // how many clips were handed over without confirmation (tried=).
+  {
+    const vc = st.videoClips || {};
+    const ids = central.map((v) => { const u = String(v.url).split(/[?#]/)[0]; let b = u.slice(u.lastIndexOf("/") + 1); try { b = decodeURIComponent(b); } catch (e) { /* raw */ } return b; });
+    let lc = 0, full = 0, miss = 0, tried = 0;
+    for (const k of Object.keys(vc)) {
+      const e = vc[k] || {}; const s = e.s || {}; const t = e.t || {};
+      lc++; tried += Object.keys(t).length;
+      const lacking = ids.filter((x) => !s[x] && !t[x]).length;
+      if (ids.length && lacking === 0) full++; else if (lacking > 0) miss++;
+    }
+    L.push("clips: completeSet=" + (settings.videoCompleteSet === false ? "OFF" : "on") + " configured=" + ids.length + (ids.length ? " [" + ids.map((x) => cut(x.replace(/^\d{10,}-/, ""), 22)).join(" + ") + "]" : "") + " | ledger: chats=" + lc + " complete=" + full + " missing-a-clip=" + miss + " tried-unconfirmed=" + tried);
+  }
   const oldest = (m) => { let o = null; for (const k of Object.keys(m || {})) { const v = m[k]; if (typeof v === "number" && (o == null || v < o)) o = v; } return o; };
   const cd = st.cooldowns || {}; let cdFut = 0; for (const k of Object.keys(cd)) if (cd[k] > now) cdFut++;
   const rc = st.replyCounts || {}; let capped = 0;
@@ -3962,11 +3990,12 @@ chrome.runtime.onMessage.addListener((msg, _sender, sendResponse) => {
           const rows = await memThreadRows(msg.threadId, true);
           if (!rows) { sendResponse({ ok: true, sent: false, unavailable: true }); break; }
           const machineId = await getMachineId();
-          let v = memVideoSent(rows, machineId, memNow());
+          const myLabel = await getMachineLabel();
+          let v = memVideoSent(rows, machineId, memNow(), myLabel);
           if (!v.sent && rows.length >= MEM_THREAD_LIMIT) {
             // a long chat can push the video row out of the window — ask for the video rows alone
             const vr = await memVideoRows(msg.threadId);
-            if (vr && vr.length) { const v2 = memVideoSent(vr, machineId, memNow()); if (v2.sent) v = Object.assign({}, v, v2); }
+            if (vr && vr.length) { const v2 = memVideoSent(vr, machineId, memNow(), myLabel); if (v2.sent) v = Object.assign({}, v, v2); }
           }
           if (v.sent) memNote({ video: 1 });
           else if (v.inflight) memNote({ videoWait: 1 });
@@ -4301,9 +4330,54 @@ function pingTab(tabId) {
     }
   });
 }
+/* (v0.21.72) PRE-DOWNLOAD THE DASHBOARD'S CLIPS. A clip used to be fetched the
+ * first time a BUYER needed it: the first chats after an upload waited on the
+ * download, and a heavy clip on a slow line struck its URL out for an hour —
+ * every chat in that hour was closed with one video missing. Now each machine
+ * starts the download the minute the new list arrives (the same single-flight,
+ * self-verifying disk cache the attach uses — nothing new is sent anywhere), so
+ * the clip is on disk before the first buyer writes. The on-disk copy is
+ * re-checked every 10 min; the in-extension copy (what the attach channels that
+ * need the file itself read) is warmed once a day per clip. Stamps are persisted:
+ * the worker is torn down every 30 s and must not repeat this every minute. */
+let prewarmBusy = false;
+async function prewarmDemoClips(settings) {
+  if (prewarmBusy) return;
+  prewarmBusy = true;
+  try {
+    const list = (Array.isArray(settings && settings.demoVideoUrls) ? settings.demoVideoUrls.filter((v) => v && v.url) : []).slice(0, 8);
+    if (!list.length) return;
+    const st = await new Promise((r) => chrome.storage.local.get(["clipPrewarm"], (x) => r((x && x.clipPrewarm) || {})));
+    const now = Date.now();
+    const next = {};
+    const warm = [];
+    let changed = false;
+    for (const v of list) {
+      const e = Object.assign({}, st[v.url]);
+      if (!e.diskAt || now - e.diskAt > 10 * 60 * 1000) {
+        e.diskAt = now; changed = true;
+        Promise.resolve(ensureVideoOnDisk({ url: v.url, name: v.name })).catch(() => { /* the visit-time path retries */ });
+      }
+      if (!e.b64At || now - e.b64At > 24 * 3600 * 1000) { e.b64At = now; changed = true; warm.push(v.url); }
+      next[v.url] = e;
+    }
+    if (changed || Object.keys(st).length !== list.length) await new Promise((r) => chrome.storage.local.set({ clipPrewarm: next }, () => { void chrome.runtime.lastError; r(); }));
+    // one clip at a time (each is tens of MB as base64); a failed warm is retried in about an hour
+    for (const u of warm) {
+      let okW = false;
+      try { const r = await fetchVideo(u); okW = !!(r && r.ok); } catch (e) { okW = false; }
+      if (!okW) {
+        const cur = await new Promise((r) => chrome.storage.local.get(["clipPrewarm"], (x) => r((x && x.clipPrewarm) || {})));
+        if (cur[u]) { cur[u].b64At = Date.now() - 23 * 3600 * 1000; await new Promise((r) => chrome.storage.local.set({ clipPrewarm: cur }, () => { void chrome.runtime.lastError; r(); })); }
+      }
+    }
+  } catch (e) { /* never into the heartbeat */ } finally { prewarmBusy = false; }
+}
+
 async function heartbeat() {
   const settings = await getSettings();
   if (!settings.enabled) return;
+  prewarmDemoClips(settings).catch(() => { /* best effort — the visit-time download still exists */ });
   // KEEP-FORCED-OPEN: if the Messenger tab was closed (employee closed it, Chrome
   // restarted without session restore), the bot had nowhere to run and silently did
   // nothing. Now, when the bot is ON and NO Messenger/Facebook tab exists at all,
