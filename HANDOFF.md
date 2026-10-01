@@ -224,6 +224,12 @@ computer/Facebook account.
 - **Always test reply quality in the extension's Settings → Test responses (no Facebook) before going live**, then supervise the first few real chats.
 - Commit + push to `claude/wizardly-noether-Oi6vP`.
 
+## Open after v0.21.72 (session closed Oct 1 2026)
+- **Field-unverified: v0.21.71 (thread memory, typing pace) and v0.21.72 (clip ledger).** First thing next session: ask for ONE popup 🩺 and read `clips:` (configured must list BOTH videos — `configured=1` means the dashboard list was never saved), `memory:` (`reads>0 fails=0`), `attach-trace` (look for `clip2 of 2` and its verdict) and the Activity rows' clip names. Do not theorise before that paste.
+- **Owner, optional:** open the dashboard Videos tab once (it now shows each video's size and how many the bots send); re-export the 15 MB `IMG_4008` clip at 720p (3–5 MB) and upload it in place of the original.
+- **Designed, deliberately NOT shipped** (each needs field data first): a safe re-dispatch of an attempted-unconfirmed clip using Facebook's sidebar snippet as a delivery receipt (law 1 still stands: such a clip is dropped); in-dashboard video compression (WebCodecs + an mp4 muxer) so heavy uploads are shrunk at the source; a `subsell-log` read endpoint keyed on `config_key` so config-link-only machines get the thread memory too.
+- Chats served before v0.21.72 have no clip ledger and stay as they are (including the ones left at 1 of 2).
+
 ## Likely next steps
 - Keep hardening the live DOM reliability (Facebook layout drift).
 - Optional: a "Test responses" tab + a cross-machine Activity log in the web app (not yet built).
