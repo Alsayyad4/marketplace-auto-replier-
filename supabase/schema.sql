@@ -60,3 +60,31 @@ drop trigger if exists subsell_configs_touch on public.subsell_configs;
 create trigger subsell_configs_touch
   before update on public.subsell_configs
   for each row execute function public.subsell_touch_updated_at();
+
+-- 6) ACTIVITY LOG: every message each extension sends (reply / video / follow-up)
+--    is mirrored here so the web dashboard shows one combined feed + totals across
+--    all your computers/accounts. Namespaced subsell_*; inserts come from the
+--    subsell-log Edge Function (service role + config_key); the dashboard reads its
+--    own rows via RLS.
+create table if not exists public.subsell_messages (
+  id          bigint generated always as identity primary key,
+  user_id     uuid not null references auth.users(id) on delete cascade,
+  created_at  timestamptz not null default now(),
+  sent_at     timestamptz,
+  machine     text,
+  thread_id   text,
+  thread_name text,
+  kind        text not null default 'text',   -- 'text' | 'video' | 'followup' | 'human'
+  buyer_text  text,
+  bot_text    text
+);
+create index if not exists subsell_messages_user_created
+  on public.subsell_messages (user_id, created_at desc);
+
+alter table public.subsell_messages enable row level security;
+drop policy if exists "owner reads own messages" on public.subsell_messages;
+create policy "owner reads own messages"
+  on public.subsell_messages for select
+  using (auth.uid() = user_id);
+-- No public INSERT policy: the subsell-log Edge Function inserts with the service
+-- role (bypasses RLS) after resolving the user from config_key.
