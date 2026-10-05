@@ -9,7 +9,25 @@ all chrome.debugger/CDP work) + Supabase dashboard in docs/. Live branch:
   permissions ships OFF by default behind a cloud setting and goes to ONE machine first.
 - The operator wants zero manual steps in normal operation.
 
-## Known state (v0.21.73)
+## Known state (v0.21.74)
+- LEARNING WITHOUT CODE (.74). Teaching never needs a code change: Business tab +
+  Activity tab reach every computer in ~1 min. What .74 added — (a) NOTHING DROPPED:
+  rules are never evicted (61st refused out loud), the 120 newest graded answers are
+  kept (docs/app.js `trimCoaching`); the sheet carries every rule + the newest 30
+  answers, and `lessonFor` recalls older ones by SUBJECT (`lessonKeys`, FR/EN table
+  `LESSON_SUBJECT`) beside the buyer's message; a 👎 left unchanged teaches nothing
+  (`coachUsable`). (b) `[GAP]` token: the bot marks a reply when the owner's text had
+  no answer; `parseReply` strips it (any spelling); hidden row kind `gap` → dashboard
+  "teach these" list. (c) TRY IT box (Business tab): the dashboard fetches
+  `../background.js` and runs the slice between the comments `/* ===== (v0.21.73) THE
+  OWNER IS THE ONLY TEACHER` and `/* ---- video fetch ---- */` — **those two comments
+  are a contract, and the code between them must stay free of `chrome.*`**.
+  (d) ECONOMY: `postClaude` sends the 1-hour cache marker (falls back to 5-min on a
+  400, remembered a week); it only works when the sheet reaches the model's minimum
+  (4096 tokens on Haiku 4.5, 1024 on Sonnet 4.6); `aiUsageNote` meters the API's own
+  usage numbers (🩺 `usage:`; hidden rows kind `usage`; dashboard bill + per-model
+  estimate under the model list). Hidden Activity kinds: claim, teach, gap, usage
+  (`HIDDEN_KINDS` / `messagesOnly`). `store/smoke-learn.js` + smoke-teach §7–10.
 - TEACHING (.73): THE OWNER IS THE ONLY TEACHER. `ownerTeachingOnly` (a NEW key, default
   on) → `buildOwnerPrompt` (background.js): the owner's sections first, in tags (info,
   instructions, rules, corrections, prices, listings, closing goal, examples), a contract

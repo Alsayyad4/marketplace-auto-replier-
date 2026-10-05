@@ -141,7 +141,7 @@ const ok = (cond, msg) => { console.log((cond ? "  PASS  " : "  FAIL  ") + msg);
   ok(/id="draftBanner"[^>]*class="hint hidden"/.test(html), "the draft offer has its own element, so the fix banner cannot replace it");
   ok(/if \(!sql\) \{[\s\S]{0,400}return;\s*\}/.test(src) && !/window\.open\(SQL_FIX_URLS/.test(src),
      "'Copy the fix' never opens or hands over a file that failed the security-definer check");
-  ok(/app\.js\?v=20261005/.test(html), "app.js cache-buster bumped for this release");
+  ok(/app\.js\?v=20261005b/.test(html), "app.js cache-buster bumped for this release");
   // (v0.21.72) the video list saves itself; the clip-ledger switch is bound; sizes are shown
   ok(/await saveVideoList\("Uploaded", url\);/.test(src) && /await saveVideoList\("Removed"\);/.test(src), "uploading or removing a video saves the list at once");
   ok(/id="videoCompleteSet"/.test(html) && /\["videoCompleteSet", "checked"\]/.test(src) && /videoCompleteSet: true,/.test(src), "the 'every video, exactly once' switch is in the markup, bound, and defaults ON");
@@ -149,7 +149,7 @@ const ok = (cond, msg) => { console.log((cond ? "  PASS  " : "  FAIL  ") + msg);
   // (v0.21.71) the two new General-tab fields exist in both the markup and the bindings, and claim rows never reach the feed
   ok(/id="typingPaceMaxSec"/.test(html) && /id="threadMemory"/.test(html), "typing pace + chat memory controls are in the dashboard markup");
   ok(/\["typingPaceMaxSec", "number"\], \["threadMemory", "checked"\]/.test(src) && /typingPaceMaxSec: 20,/.test(src) && /threadMemory: true,/.test(src), "…and bound in FIELDS with the extension's defaults");
-  ok((src.match(/\.neq\("kind", "claim"\)/g) || []).length >= 3, "Activity feed and both counts exclude kind=claim rows");
+  ok(/const HIDDEN_KINDS = \["claim", "teach", "gap", "usage"\];/.test(src) && (src.match(/messagesOnly\(client/g) || []).length >= 4, "Activity feed, both counts and the fleet line skip the computers' bookkeeping rows (claim, teach, gap, usage)");
   ok(/config-safety\.sql/.test(src) && /\/sql\/new/.test(src), "the banner points at config-safety.sql and the project's SQL editor");
   ok(/d\.user !== session\.user\.id\) return;/.test(src), "a draft from another account is never offered");
   ok(/id="fixBanner"[^>]*class="hint hidden"/.test(html), "the fix banner starts hidden in the markup");

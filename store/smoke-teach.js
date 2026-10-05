@@ -52,7 +52,8 @@ const B = new Function(
   between(bg, "function nowLine(", "\nasync function callClaude(") + "\n" +
   between(bg, "async function callClaude(", "\n/* ---------------- smart follow-up") + "\n" +
   between(bg, "async function callClaudeFollowup(", "\n/* ---------------- reply token parsing") + "\n" +
-  "return { buildSystemPrompt, buildOwnerPrompt, lessonFor, isChatTitle, dropTitleLines, teachingFingerprint, teachCanon, ownerWroteOf, coachIsRule, callClaude, callClaudeFollowup, OWNER_FALLBACK_TONE, OWNER_FALLBACK_CLOSE };"
+  between(bg, "function stripReasoning(", "/* ---------------- video fetch ---------------- */") + "\n" +
+  "return { buildSystemPrompt, buildOwnerPrompt, lessonFor, isChatTitle, dropTitleLines, teachingFingerprint, teachCanon, ownerWroteOf, coachIsRule, callClaude, callClaudeFollowup, parseReply, OWNER_FALLBACK_TONE, OWNER_FALLBACK_CLOSE };"
 )(bgDefaults, fakeFetch);
 
 const base = {
@@ -150,7 +151,7 @@ const withWrote = (cfg) => {
   ok(B.lessonFor(T, "vous livrez").includes("The owner's answer: \"non, en personne au shop seulement\". The lesson: we never ship."), "a 👎 gives the owner's answer and its lesson");
   ok(B.lessonFor(T, "Vous livrèz ?") !== "", "accents do not matter");
   ok(B.lessonFor(T, "Bonjour, est-ce que cet article est toujours disponible et est-ce que vous pouvez me le garder jusqu'à samedi prochain parce que je travaille toute la semaine et je finis tard").includes("LONG-LESSON"), "a long message matches the lesson's stored (cut) beginning");
-  ok(B.lessonFor(T, "Is it available in blue?") === "" && B.lessonFor(T, "combien?") === "", "a different question gets NO lesson pushed onto it");
+  ok(!B.lessonFor(T, "Is it available in blue?").includes("Give that answer now") && B.lessonFor(T, "combien?") === "", "a different question never gets a lesson pushed onto it as THE answer; a subject nobody taught gets nothing");
   ok(B.lessonFor(T, "ok").includes("parfait") && B.lessonFor(T, "ok merci") === "", "one- and two-word messages match exactly or not at all");
   ok(!B.lessonFor(T, "(general rule from the boss)").includes("RULE-TEXT"), "a standing rule is never offered as a per-message lesson");
   const T2 = { coaching: [{ kind: "good", buyer: "prix svp?", reply: "OLD", at: 1 }, { kind: "fix", buyer: "prix svp?", bad: "OLD", better: "NEW", note: "", at: 2 }] };
@@ -327,9 +328,17 @@ const withWrote = (cfg) => {
   ok(!("instructions" in m1) && m1.priceList === "x", "a box emptied here leaves the key out (never an empty string)");
   m1 = G.mergeOverTheirs(row0, row0, { apiKey: "sk-real", businessInfo: "INFO" }); // their row lacks keys this page's DEFAULTS know
   ok(!("instructions" in m1) && !("closerGoals" in m1) && m1.businessInfo === "INFO", "a key the row never had is not invented as an empty string");
-  const many = []; for (let i = 0; i < 29; i++) many.push(les(100 + i));
+  const many = []; for (let i = 0; i < 125; i++) many.push(les(100 + i));
   m1 = G.mergeOverTheirs(Object.assign({}, row0, { coaching: [] }), Object.assign({}, row0, { coaching: [rule(1), rule(2)] }), Object.assign({}, row0, { coaching: many }));
-  ok(m1.coaching.length === 30 && m1.coaching.filter((c) => c.note === "always applies").length === 2, "the 30-lesson cap still evicts graded examples before rules");
+  const gradedLeft = m1.coaching.filter((c) => c.note !== "always applies");
+  ok(gradedLeft.length === 120 && gradedLeft[0].buyer === "q105" && gradedLeft[119].buyer === "q224" && m1.coaching.filter((c) => c.note === "always applies").length === 2, "the 120 newest graded answers are kept (it was 30 lessons in all), the oldest go first, and rules stay");
+  const rulesOnly = []; for (let i = 0; i < 70; i++) rulesOnly.push(rule(i));
+  ok(G.trimCoaching(rulesOnly.concat([les(1)])).length === 71, "a rule is never evicted, however many there are (the list used to drop the oldest rule at 30 lessons)");
+  const front = [rule(1), rule(2)]; for (let i = 0; i < 125; i++) front.push(les(i));
+  G.trimCoaching(front);
+  ok(front.length === 122 && front[0].better === "rule 1" && front[1].better === "rule 2" && front[2].buyer === "q5", "with the rules FIRST in the list and the list over its limit, the oldest graded answers go — never the rules");
+  const fat = []; for (let i = 0; i < 100; i++) fat.push(les(i, { reply: "x".repeat(900) }));
+  ok(JSON.stringify(G.trimCoaching(fat)).length <= 60000 && fat.length < 100 && fat[fat.length - 1].buyer === "q99", "a size budget keeps the settings row small: very long lessons push the oldest out first");
 
   console.log("\n— 6. which computers answer with this teaching —");
   const F = new Function(between(app, "  const machineKey = (m) =>", "  function renderFleet(") + "\nreturn { machineKey, machineShow, fleetStatus };")();
@@ -362,7 +371,139 @@ const withWrote = (cfg) => {
   ok(st.ok.length === 2 && st.behind.length === 1 && st.behind[0].key === "pc-aaaaa", "the comparison is against the code of the row in the cloud, whoever saved it");
   ok(F.machineKey("Shop PC · v0.21.73 #PC-aaaaa") === "pc-aaaaa" && F.machineKey("PC-ddddd · v0.21.72") === "pc-ddddd" && F.machineKey("Back office · v0.21.52") === "back office" && F.machineKey("Office PC-main · v0.21.73 #PC-zzzzz") === "pc-zzzzz", "a computer is keyed by its install id when it has one");
   ok(/select\("config, updated_at"\)\.maybeSingle\(\)/.test(between(app, "  async function loadFleet() {", "  /* ---------------- activity log")), "the status line reads the row as it is in the cloud, not this page's copy (another device may have saved)");
-  ok(/\.neq\("kind", "teach"\)/.test(app) && count(app, '.neq("kind", "teach")') >= 4, "teaching reports never show up as messages in the Activity feed or its counts");
+  ok(count(app, '"teach"') >= 1 && /eq\("kind", "teach"\)/.test(app), "teaching reports are read by the status line only (the feed skips them: section 10)");
+
+  console.log("\n— 7. (v0.21.74) nothing taught is forgotten: older lessons are recalled by subject —");
+  const blue = B.lessonFor(T, "Is it available in blue?");
+  ok(!blue.includes("Give that answer now") && blue.includes("use one only if it fits") && blue.includes("ouais toujours dispo"), "a different question on the same subject gets the lesson only as a soft suggestion");
+  const SHIP = { coaching: [{ kind: "fix", buyer: "Do you ship?", bad: "Yes anywhere!", better: "non, en personne au shop seulement", note: "", at: 1 }] };
+  const fr = B.lessonFor(SHIP, "vous faites la livraison à Laval?");
+  ok(fr.startsWith("The owner taught these on messages about the same subject") && fr.includes('buyer "Do you ship?" → the owner\'s answer "non, en personne au shop seulement"'), "a lesson taught in English is found by the same question in French");
+  const LOC = { coaching: [{ kind: "good", buyer: "where are you located?", reply: "757 Beaubien Est, métro Beaubien", at: 1 }] };
+  ok(B.lessonFor(LOC, "vous êtes où exactement?").includes("757 Beaubien Est") && B.lessonFor(LOC, "c'est quoi l'adresse?").includes("757 Beaubien Est"), "“où” and “adresse” both find a lesson taught on “where are you located?”");
+  ok(B.lessonFor(SHIP, "ok merci") === "" && B.lessonFor(SHIP, "allo") === "" && B.lessonFor(SHIP, "c'est quoi la garantie?") === "", "a message on another subject, or with no subject, recalls nothing");
+  const PR = { coaching: [{ kind: "good", buyer: "combien pour le iphone 14?", reply: "le 14 c'est en personne", at: 1 }] };
+  ok(B.lessonFor(PR, "c'est combien le 13 pro?") === "", "a price lesson about ANOTHER model is not pushed onto this one");
+  const PG = { coaching: [{ kind: "good", buyer: "c'est combien?", reply: "le prix se donne en personne au shop", at: 1 }] };
+  ok(B.lessonFor(PG, "combien le 13 pro 128gb?").includes("le prix se donne en personne au shop") && B.lessonFor(PG, "how much is it?").includes("le prix se donne en personne au shop"), "a general price lesson is recalled for a specific price question, in either language");
+  const MANY = { coaching: [1, 2, 3, 4].map((n) => ({ kind: "good", buyer: "livraison possible " + n + "?", reply: "REPLY-" + n, at: n })) };
+  const recalled = B.lessonFor(MANY, "do you deliver?");
+  ok(recalled.includes("REPLY-4") && recalled.includes("REPLY-3") && !recalled.includes("REPLY-2") && !recalled.includes("REPLY-1"), "at most two are recalled, the newest first");
+  ok(!B.lessonFor(T2, "le prix svp").includes("OLD") && B.lessonFor(T2, "le prix svp").includes("NEW"), "an older lesson on the same buyer message is superseded by the newer one, in recall too");
+  const POISON = Object.assign({}, base, { coaching: [{ kind: "fix", buyer: "Vous livrez?", bad: "Oui on livre partout!", better: " oui on livre partout! ", note: "", at: 1 }] });
+  ok(B.lessonFor(POISON, "Vous livrez?") === "" && !B.buildSystemPrompt(POISON).includes("on livre partout"), "a 👎 saved with the bot's reply left unchanged teaches nothing (it used to teach the mistake)");
+  const BIG = Object.assign({}, base, { coaching: Array.from({ length: 120 }, (_, i) => ({ kind: "good", buyer: "question numero " + i, reply: "REPONSE-" + i + "-FIN", at: i })) });
+  const pBig = B.buildSystemPrompt(BIG);
+  ok(pBig.includes("REPONSE-119-FIN") && pBig.includes("REPONSE-90-FIN") && !pBig.includes("REPONSE-89-FIN"), "the instruction sheet carries the newest 30 lessons only — its size does not grow with the teaching");
+  ok(B.lessonFor(BIG, "question numero 5").includes("REPONSE-5-FIN"), "…and a lesson far older than those 30 still answers its own message");
+
+  console.log("\n— 8. (v0.21.74) the bot says what it could not answer —");
+  const P = B.parseReply;
+  ok(p.includes("Begin that reply with [GAP] (explained under Special replies)") && p.includes("Write in the language of the buyer's latest message"), "the marker is asked for right where the fallback is described, and the reply language follows the buyer's latest message");
+  ok(p.includes("- [GAP] at the very start of a normal reply") && !B.buildSystemPrompt(Object.assign({}, base, { ownerTeachingOnly: false })).includes("[GAP]"), "owner-only prompt asks for [GAP] when the owner's text has no answer; the playbook prompt is untouched");
+  let r = P("[GAP] je te confirme ça au shop, tu cherches quel modèle?");
+  ok(r.kind === "text" && r.gap === true && r.text === "je te confirme ça au shop, tu cherches quel modèle?", "[GAP] is recorded and removed — the buyer gets the reply, not silence");
+  r = P("[GAP] [VISIT:maybe] je te confirme ça au shop");
+  const r2 = P("[VISIT:yes] [gap] parfait, à demain");
+  ok(r.gap && r.visit === "maybe" && r.text === "je te confirme ça au shop" && r2.gap && r2.visit === "yes" && r2.text === "parfait, à demain", "[GAP] and [VISIT] work together, in either order, in any case");
+  r = P("le mieux c'est de confirmer [ GAP ] au shop");
+  ok(r.kind === "text" && r.gap && r.text === "le mieux c'est de confirmer au shop" && !/GAP/i.test(r.text), "a [GAP] the model put in the middle never reaches the buyer");
+  ok(P("[GAP]").kind === "empty" && P("[GAP]").gap === true, "[GAP] with nothing after it sends nothing");
+  r = P("[GAP: no line about cards] je te confirme ça au shop");
+  ok(r.kind === "text" && r.gap && r.text === "je te confirme ça au shop" && P("[GAPS] hmm").kind === "empty", "a spelled-out marker (\"[GAP: reason]\") is still recognised — an unknown bracketed opener would mean silence for the buyer");
+  r = P("oui c'est dispo");
+  ok(r.kind === "text" && r.gap === false && r.visit === null && r.text === "oui c'est dispo", "an ordinary reply is unchanged");
+  ok(P("[HUMAN] wants a phone number").kind === "human" && P("[GAP] [HUMAN] scam").kind === "human" && P("[No response needed — system message]").kind === "empty" && P("[VISIT:no] ok pas de trouble").visit === "no", "[HUMAN], other bracketed meta-text and [VISIT] behave as before");
+  ok(/if \(parsed\.gap\) mirrorToCloud\(\{ action: "gap", thread: msg\.threadName, threadId: null,/.test(bg), "a gap is reported to the dashboard as a hidden row with no thread id (the chat memory never sees it)");
+
+  console.log("\n— 9. (v0.21.74) economy: the one-hour cache, its fallback, the meter —");
+  {
+    const calls = [], hooks = { usage: [], refused: 0 };
+    let mode = "ok";
+    const f = async (url, opts) => {
+      const body = JSON.parse(opts.body);
+      calls.push(body);
+      const cc = body.system[0].cache_control;
+      if (mode === "refuse-ttl" && cc && cc.ttl) return { ok: false, status: 400, text: async () => '{"type":"error","error":{"type":"invalid_request_error","message":"system.0.cache_control.ttl: Extra inputs are not permitted"}}' };
+      if (mode === "bad-request") return { ok: false, status: 400, text: async () => '{"type":"error","error":{"message":"max_tokens: must be positive"}}' };
+      return { ok: true, status: 200, json: async () => ({ content: [{ type: "text", text: "ouais" }], usage: { input_tokens: 2400, cache_read_input_tokens: 0, cache_creation_input_tokens: 0, output_tokens: 9 } }) };
+    };
+    const C = new Function("DEFAULTS", "fetch", "aiUsageNote", "aiTtlRefused",
+      between(bg, "/* ===================== (v0.21.73) THE OWNER IS THE ONLY TEACHER", "/* ---------------- video fetch ---------------- */") + "\nreturn { callClaude, callClaudeFollowup, cacheMarker };"
+    )(bgDefaults, f, (s, u) => hooks.usage.push(u), () => { hooks.refused++; });
+    const S9 = Object.assign({}, base, { apiKey: "k" });
+    let out = await C.callClaude(S9, "allo", "", "");
+    ok(out.text === "ouais" && calls.length === 1 && calls[0].system[0].cache_control.type === "ephemeral" && calls[0].system[0].cache_control.ttl === "1h", "the instruction sheet is sent with the one-hour cache marker");
+    ok(hooks.usage.length === 1 && hooks.usage[0].input_tokens === 2400, "what the API billed is handed to the meter");
+    mode = "bad-request";
+    out = await C.callClaude(S9, "allo", "", "");
+    ok(/^Anthropic 400: /.test(out.error) && calls.length === 2 && hooks.refused === 0, "a 400 that is not about the cache is reported as before, with no second request");
+    mode = "refuse-ttl";
+    out = await C.callClaude(S9, "allo", "", "");
+    ok(out.text === "ouais" && calls.length === 4 && calls[3].system[0].cache_control.ttl === undefined && calls[3].system[0].cache_control.type === "ephemeral" && hooks.refused === 1, "if the API refuses the one-hour marker, the SAME reply goes out again with the 5-minute marker — the buyer still gets an answer");
+    out = await C.callClaudeFollowup(Object.assign({}, S9), "Buyer: hi\nYou: allo", "X · Y", "");
+    ok(calls.length === 5 && calls[4].system[0].cache_control.ttl === undefined && hooks.refused === 1 && C.cacheMarker().ttl === undefined, "…and it is remembered: later calls use the 5-minute marker straight away");
+  }
+  {
+    const U = new Function(between(bg, "function usageDayKey(", "function aiUsageNote(") + "\nreturn { usageDayKey, usageLine, usageFold };")();
+    const u = { input_tokens: 2400, cache_read_input_tokens: 100, cache_creation_input_tokens: 50, output_tokens: 10 };
+    let st = { all: {}, report: [] };
+    for (let i = 0; i < 19; i++) st = U.usageFold(st.all, "2026-10-05", "claude-haiku-4-5", u);
+    ok(st.all["2026-10-05"].calls === 19 && st.all["2026-10-05"].in === 19 * 2400 && st.all["2026-10-05"].cr === 1900 && st.report.length === 0, "the meter adds up fresh input, cache reads, cache writes and output per day");
+    st = U.usageFold(st.all, "2026-10-05", "claude-haiku-4-5", u);
+    ok(st.report.length === 1 && st.report[0][0] === "2026-10-05" && st.report[0][1].calls === 20, "every 20th call the day so far is reported to the dashboard");
+    st = U.usageFold(st.all, "2026-10-06", "claude-haiku-4-5", u);
+    ok(st.report.length === 1 && st.report[0][0] === "2026-10-05" && st.report[0][1].calls === 20 && st.all["2026-10-06"].calls === 1, "the first call of a new day reports the day before, final");
+    for (const d of ["2026-10-07", "2026-10-08"]) st = U.usageFold(st.all, d, "claude-haiku-4-5", u);
+    ok(Object.keys(st.all).sort().join() === "2026-10-06,2026-10-07,2026-10-08", "three days are kept on the computer");
+    ok(U.usageLine("2026-10-05", { model: "claude-haiku-4-5", calls: 20, in: 48000, cr: 2000, cw: 1000, out: 200 }) === "usage 2026-10-05 model=claude-haiku-4-5 calls=20 in=48000 cr=2000 cw=1000 out=200" && /^\d{4}-\d\d-\d\d$/.test(U.usageDayKey(new Date(2026, 9, 5))), "the report line is the format the dashboard reads");
+  }
+
+  console.log("\n— 10. (v0.21.74) the dashboard's learning tools —");
+  {
+    // "Try it" and the cost estimate run the bots' OWN code, sliced out of background.js by two markers.
+    const cb = (app.match(/const CORE_BEGIN = "([^"]+)";/) || [])[1], ce = (app.match(/const CORE_END = "([^"]+)";/) || [])[1];
+    ok(!!cb && !!ce && count(bg, cb) === 1 && count(bg, ce) === 1 && bg.indexOf(cb) < bg.indexOf(ce), "the two markers the dashboard slices background.js by exist there, once each, in order");
+    let sent = null;
+    const core = new Function("DEFAULTS", "fetch", between(bg, cb, ce) + "\nreturn { buildSystemPrompt: buildSystemPrompt, lessonFor: lessonFor, callClaude: callClaude, parseReply: parseReply };")(
+      appDefaults, async (u, o) => { sent = JSON.parse(o.body); return { ok: true, status: 200, json: async () => ({ content: [{ type: "text", text: "[GAP] je te confirme ça au shop" }], usage: {} }) }; });
+    const dash = Object.assign({}, appDefaults, { apiKey: "k", businessInfo: "WARRANTY: 6 months.", coaching: [{ kind: "good", buyer: "dispo?", reply: "ouais", at: 1 }] });
+    const res = await core.callClaude(dash, "vous livrez?", "Conversation so far (most recent last):\nBuyer: vous livrez?", "");
+    const parsed = core.parseReply(res.text);
+    ok(sent && sent.system[0].text.includes("<owner_business_info>\nWARRANTY: 6 months.") && parsed.gap === true && parsed.text === "je te confirme ça au shop", "that slice runs on its own with the dashboard's settings: same prompt, same call, same parser as the bots");
+    ok(sent.system[0].text.includes("Tone (a default, until the owner writes instructions)") && !sent.system[0].text.includes("Never discount more than 10%"), "…and an empty box in the dashboard is the neutral line there too");
+  }
+  {
+    const Q = new Function("session", "localStorage", between(app, "  const gapKey = (t) =>", "  let gapRows = [];") + "\nreturn { gapKey, gapList };")(null, null);
+    const rowsG = [
+      { created_at: "2026-10-05T15:00:00Z", buyer_text: "Vous prenez les cartes de crédit?", bot_text: "je te confirme ça au shop" },
+      { created_at: "2026-10-05T14:00:00Z", buyer_text: "vous prenez les cartes de credit", bot_text: "le mieux c'est de confirmer au shop" },
+      { created_at: "2026-10-05T13:00:00Z", buyer_text: "Vous livrez?", bot_text: "x" },
+      { created_at: "2026-10-05T12:00:00Z", buyer_text: "c'est quoi la batterie?", bot_text: "y" },
+      { created_at: "2026-10-05T11:00:00Z", buyer_text: "  ", bot_text: "z" },
+    ];
+    let items = Q.gapList(rowsG, [{ kind: "fix", buyer: "Vous livrez?", better: "non" }], []);
+    ok(items.length === 2 && items[0].n === 2 && items[0].question === "Vous prenez les cartes de crédit?" && items[0].said === "je te confirme ça au shop", "the same question asked twice is one line, most asked first, with what the bot said last");
+    ok(!items.some((it) => /livrez/.test(it.question)), "a question the owner has since taught leaves the list");
+    items = Q.gapList(rowsG, [], [Q.gapKey("c'est quoi la batterie?")]);
+    ok(items.length === 2 && !items.some((it) => /batterie/.test(it.question)), "a question the owner dismissed stays hidden");
+  }
+  {
+    const A = new Function("machineKey", between(app, "  const AI_PRICES = {", "  async function loadCost() {") + "\nreturn { AI_PRICES, usageTotals, per1000 };")((m) => String(m).toLowerCase());
+    const t = A.usageTotals([
+      { machine: "PC-a", bot_text: "usage 2026-10-05 model=claude-haiku-4-5 calls=20 in=50000 cr=0 cw=0 out=1000" },
+      { machine: "PC-a", bot_text: "usage 2026-10-05 model=claude-haiku-4-5 calls=40 in=100000 cr=0 cw=0 out=2000" },
+      { machine: "PC-b", bot_text: "usage 2026-10-05 model=claude-sonnet-4-6 calls=10 in=2000 cr=24000 cw=2500 out=500" },
+      { machine: "PC-b", bot_text: "teaching 11111111" },
+    ]);
+    const want = (100000 * 1 + 2000 * 5) / 1e6 + (2000 * 3 + 24000 * 0.3 + 2500 * 6 + 500 * 15) / 1e6;
+    ok(t.calls === 50 && Math.abs(t.cost - want) < 1e-9 && t.cr === 24000 && t.unpriced === 0, "the bill takes, per computer and day, the report with the most calls, and prices fresh / cached / written input and output per model");
+    const h = A.per1000("claude-haiku-4-5", 2500, 200, 60), hBig = A.per1000("claude-haiku-4-5", 4200, 200, 60), so = A.per1000("claude-sonnet-4-6", 2500, 200, 60);
+    ok(!h.cached && Math.abs(h.cost - 3.0) < 1e-9 && hBig.cached && Math.abs(hBig.cost - 0.92) < 1e-9 && so.cached && Math.abs(so.cost - 2.25) < 1e-9, "the estimate knows each model's cache minimum: a 2,500-token sheet is full price on Haiku 4.5 and cached on Sonnet 4.6 (" + h.cost.toFixed(2) + " / " + hBig.cost.toFixed(2) + " / " + so.cost.toFixed(2) + " $ per 1,000)");
+    ok(A.per1000("some-other-model", 2500, 200, 60) === null, "a model with no price on file gets no estimate");
+  }
+  ok(/const HIDDEN_KINDS = \["claim", "teach", "gap", "usage"\];/.test(app) && count(app, "messagesOnly(client") >= 4, "the feed, its two counts and the fleet line all skip the computers' bookkeeping rows");
+  ok(/if \(better === String\(r\.bot_text \|\| ""\)\.trim\(\)\)/.test(app), "a 👎 saved with the bot's own words unchanged is refused (or kept as a rule when only the rule box was filled)");
 
   console.log(failed ? "\n" + failed + " check(s) FAILED" : "\nall checks passed");
   process.exit(failed ? 1 : 0);

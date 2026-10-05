@@ -224,7 +224,7 @@ const V = (rows, buyerMessage, transcript, phase) => memVerdict(rows, { buyerMes
   ok(/MEM_RECLAIM_MS\) await memClaim\(/.test(pre), "pre-send renews a missing/old claim before typing");
   const mv = slice(bg, 'case "MEMORY_VIDEO"', 'case "GET_FOLLOWUP"');
   ok(/await memClaimPending\[msg\.threadId\]/.test(mv) && /memThreadRows\(msg\.threadId, true\)/.test(mv) && /memVideoRows\(msg\.threadId\)/.test(mv), "the video decision waits for our own claim, reads fresh, and falls back to the video rows when the window is full");
-  ok(/\.neq\("kind", "claim"\)/.test(fs.readFileSync(path.join(__dirname, "..", "docs", "app.js"), "utf8")), "the dashboard hides claim rows");
+  { const app = fs.readFileSync(path.join(__dirname, "..", "docs", "app.js"), "utf8"); ok(/const HIDDEN_KINDS = \["claim",/.test(app) && /await messagesOnly\(client/.test(app), "the dashboard hides claim rows"); }
   ok(/via === "cloud"/.test(ct.slice(ct.indexOf("async function armVideoCatchUp"))), "the catch-up arm keeps cloud-memory marks");
   ok(/dmk\.via === "cloud"/.test(ct), "a cloud-memory mark counts as confirmed in the engine");
   ok(/cm\.ok && cm\.inflight && resumeFrom == null && !manual/.test(ct), "the engine yields the video to a computer that claimed the chat first (never on a manual resend or a resume tail)");

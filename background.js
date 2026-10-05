@@ -750,6 +750,68 @@ async function noteTeaching(settings) {
   finally { teachNoting = false; }
 }
 
+/* (v0.21.74) THE METER. Every question about cost ("is this expensive?", "would
+ * another AI be cheaper?") was answered with estimates. The API states, on every
+ * reply, exactly what was billed: fresh input, input read from the cache, input
+ * written to the cache, output. These are added up per day on this computer
+ * (three days kept), printed in the popup diagnostic, and reported to the
+ * dashboard as a hidden Activity row (kind "usage") every 20 calls and once more
+ * when the day is over — the dashboard keeps, per computer and day, the row with
+ * the most calls, and turns the tokens into dollars. Never awaited, never able
+ * to break a reply. */
+function usageDayKey(d) {
+  d = d || new Date();
+  return d.getFullYear() + "-" + String(d.getMonth() + 1).padStart(2, "0") + "-" + String(d.getDate()).padStart(2, "0");
+}
+function usageLine(day, e) {
+  return "usage " + day + " model=" + (e.model || "?") + " calls=" + (e.calls || 0) + " in=" + (e.in || 0) + " cr=" + (e.cr || 0) + " cw=" + (e.cw || 0) + " out=" + (e.out || 0);
+}
+function usageReport(day, e) {
+  try { if (e && e.calls) mirrorToCloud({ action: "usage", thread: null, threadId: null, buyer: null, reply: usageLine(day, e) }); } catch (err) { /* a meter must never disturb a reply */ }
+}
+// Pure: fold one API `usage` object into the stored days. Returns what to report.
+function usageFold(all, day, model, u) {
+  all = all && typeof all === "object" ? all : {};
+  const first = !all[day];
+  const e = all[day] || { calls: 0, in: 0, cr: 0, cw: 0, out: 0, model: "" };
+  e.calls += 1;
+  e.in += Number(u && u.input_tokens) || 0;
+  e.cr += Number(u && u.cache_read_input_tokens) || 0;
+  e.cw += Number(u && u.cache_creation_input_tokens) || 0;
+  e.out += Number(u && u.output_tokens) || 0;
+  e.model = String(model || "");
+  all[day] = e;
+  const report = [];
+  const earlier = Object.keys(all).filter((k) => k < day).sort();
+  if (first && earlier.length) report.push([earlier[earlier.length - 1], all[earlier[earlier.length - 1]]]); // yesterday is final now
+  if (e.calls % 20 === 0) report.push([day, e]);
+  for (const k of Object.keys(all).sort().slice(0, -3)) delete all[k];
+  return { all, report };
+}
+function aiUsageNote(settings, u) {
+  try {
+    if (!u) return;
+    chrome.storage.local.get(["aiUsage"], (x) => {
+      if (chrome.runtime.lastError) return;
+      const out = usageFold(x && x.aiUsage, usageDayKey(), settings && settings.model ? settings.model : DEFAULTS.model, u);
+      chrome.storage.local.set({ aiUsage: out.all }, () => void chrome.runtime.lastError);
+      for (const r of out.report) usageReport(r[0], r[1]);
+    });
+  } catch (err) { /* never break a reply */ }
+}
+// The API refused the 1-hour cache marker (postClaude already retried with the
+// 5-minute one): remember it for a week, so a fresh worker does not ask again
+// on its first call — service workers restart many times a day.
+function aiTtlRefused() {
+  try { chrome.storage.local.set({ cacheTtlRefusedAt: Date.now() }, () => void chrome.runtime.lastError); } catch (err) { /* ignore */ }
+}
+try {
+  chrome.storage.local.get(["cacheTtlRefusedAt"], (x) => {
+    if (chrome.runtime.lastError) return;
+    if (x && x.cacheTtlRefusedAt && Date.now() - x.cacheTtlRefusedAt < 7 * 24 * 3600 * 1000) cacheTtl1h = false;
+  });
+} catch (err) { /* ignore */ }
+
 /* ---------------- (v0.21.71) THREAD MEMORY — the Activity log, read back ----------
  * Every machine already writes each delivered reply / video / follow-up to
  * subsell_messages (mirrorToCloud above). This reads those rows back, per chat,
@@ -1692,15 +1754,70 @@ function dropTitleLines(transcript, threadName) {
 // few messages over and over (Facebook's own "Is this still available?" above
 // all). When the owner has graded a reply to THIS message, that lesson is put
 // right beside the message, in the user turn — the cached system prompt lists
-// every lesson, but one line in thirty, far from the question, is easy to miss.
-// Deliberately narrow (same words, give or take): a loose match would push a
-// lesson onto a message it was never about. Pure.
+// the newest lessons, but one line in thirty, far from the question, is easy to
+// miss. The strong match is deliberately narrow (same words, give or take): a
+// loose match would push a lesson onto a message it was never about. Pure.
 const lessonNorm = (s) => String(s == null ? "" : s).toLowerCase().normalize("NFD").replace(/\p{M}+/gu, "").replace(/[^\p{L}\p{N}$]+/gu, " ").trim();
+// A lesson is usable when it says something: a 👎 saved with the bot's own reply
+// left unchanged ("correct answer" = the rejected one) would teach the mistake.
+const coachUsable = (c) => !!c && (c.kind === "good" ? !!c.reply : !!c.better && lessonNorm(c.better) !== lessonNorm(c.bad));
+// (v0.21.74) NOTHING THE OWNER TAUGHT IS FORGOTTEN, AND THE BILL STAYS FLAT. The
+// dashboard keeps 120 graded answers (it kept 30); the system prompt still
+// carries only the newest 30, so its size does not grow with the teaching. The
+// older ones are reached from here: lessons about the SAME SUBJECT as the
+// incoming message are offered beside it, softly ("only if it fits"). Subject =
+// shared content words, with a small French/English table so that "vous livrez?"
+// finds a lesson taught on "do you ship?". The table only decides which of the
+// OWNER'S lessons to show — it never puts a word of its own into a reply.
+const LESSON_STOP = new Set(("a an the is it its this that these those of to in on at for and or but with you your i me my we our do does did can could would will be are was am have has " +
+  "hi hello hey please thanks thank ok okay still any some there here how what " +
+  "le la les un une des du de d l et ou mais avec est c ce cet cette ces que qu qui quoi je j tu te t toi vous il elle on nous mon ma mes ton ta tes votre vos son sa ses au aux en dans sur pour par pas ne n y ai as avez avons sont suis es " +
+  "allo bonjour salut svp stp merci oui non si encore toujours tres bien hui").split(" "));
+const LESSON_SUBJECT = (() => {
+  const groups = {
+    availability: "available availability dispo disponible disponibles disponibilite stock",
+    price: "price prices prix combien cost costs cher cheap rabais discount deal negotiable negociable negocier lowest dernier $",
+    delivery: "ship ships shipping shipped deliver delivers delivery livraison livrer livrez livre livres poste envoyer envoi envoyez mail postal",
+    warranty: "warranty warranties garantie garanties guarantee garanti",
+    tradein: "trade tradein echange echanger echanges exchange swap reprise",
+    payment: "pay payment payments payer paiement paiements cash comptant interac virement etransfer transfer card carte credit debit financing financement",
+    location: "where address adresse located location situe emplacement metro",
+    hours: "hours heures open opened ouvert ouverts ouvrez close closed closing ferme fermez fermes fermeture horaire horaires",
+    hold: "hold reserve reserver reservation garder deposit depot",
+    battery: "battery batterie pile",
+    condition: "condition etat scratch scratches rayure rayures egratignure egratignures neuf used usage refurbished reconditionne",
+    unlocked: "unlocked unlock deverrouille deverrouiller debloque debloquer carrier operateur fido rogers bell telus videotron koodo",
+    storage: "storage stockage capacite",
+    color: "color colour couleur couleurs noir black blanc white bleu blue rouge red vert green rose pink gold purple mauve",
+    visit: "come coming venir viens passer passe visit today aujourd demain tomorrow tonight soir",
+    buyback: "sell selling vendre vends rachat buyback rachetez",
+  };
+  const map = new Map();
+  for (const g of Object.keys(groups)) for (const w of groups[g].split(" ")) map.set(w, "#" + g);
+  return map;
+})();
+function lessonKeys(text) {
+  const out = new Set();
+  const raw = String(text == null ? "" : text);
+  if (/(^|[^\p{L}])où([^\p{L}]|$)/iu.test(raw)) out.add("#location"); // "où" loses its accent below and becomes "ou" (= or)
+  const t = lessonNorm(raw).replace(/\bhow much\b/g, "combien").replace(/\bin stock\b/g, "stock").replace(/\btrade in\b/g, "tradein").replace(/\be transfer\b/g, "etransfer");
+  for (const w of t.split(" ")) {
+    if (!w || LESSON_STOP.has(w)) continue;
+    const size = w.match(/^(64|128|256|512|1024)(gb|go)?$/) || w.match(/^([12])(tb|to)$/);
+    if (size) { out.add("#storage"); out.add(size[1]); continue; }
+    const s = LESSON_SUBJECT.get(w) || (w.length > 3 && w.endsWith("s") ? LESSON_SUBJECT.get(w.slice(0, -1)) : undefined);
+    if (s) out.add(s);
+    else if (w.length >= 3 || /^\d+$/.test(w)) out.add(w);
+  }
+  return out;
+}
 function lessonFor(settings, buyerMessage) {
-  const list = (Array.isArray(settings && settings.coaching) ? settings.coaching : []).filter((c) => c && !coachIsRule(c) && c.buyer && (c.kind === "good" ? c.reply : c.better));
+  const list = (Array.isArray(settings && settings.coaching) ? settings.coaching : []).filter((c) => c && !coachIsRule(c) && c.buyer && coachUsable(c));
   const q = lessonNorm(buyerMessage);
   if (!q || !list.length) return "";
   const qt = q.split(" ");
+  const one = (s, n) => { s = String(s == null ? "" : s).replace(/\s+/g, " ").trim(); return s.length > n ? s.slice(0, n) + "…" : s; };
+  const answer = (c) => (c.kind === "good" ? c.reply : c.better);
   let best = null, bestScore = 0;
   for (const c of list) {
     const raw = String(c.buyer);
@@ -1719,12 +1836,41 @@ function lessonFor(settings, buyerMessage) {
     }
     if (score >= 0.7 && score >= bestScore) { best = c; bestScore = score; } // a tie goes to the later (newer) lesson
   }
-  if (!best) return "";
-  const one = (s, n) => { s = String(s == null ? "" : s).replace(/\s+/g, " ").trim(); return s.length > n ? s.slice(0, n) + "…" : s; };
-  const tail = " Give that answer now: keep the owner's wording as closely as it fits this buyer and their language, and do not repeat a sentence you already sent them.";
-  return best.kind === "good"
-    ? `The owner approved this answer to this same kind of message: "${one(best.reply, 300)}".` + tail
-    : `The owner corrected the bot on this same kind of message. The owner's answer: "${one(best.better, 300)}".` + (best.note ? ` The lesson: ${one(best.note, 120)}.` : "") + tail;
+  const lines = [];
+  if (best) {
+    const tail = " Give that answer now: keep the owner's wording as closely as it fits this buyer and their language, and do not repeat a sentence you already sent them.";
+    lines.push(best.kind === "good"
+      ? `The owner approved this answer to this same kind of message: "${one(best.reply, 300)}".` + tail
+      : `The owner corrected the bot on this same kind of message. The owner's answer: "${one(best.better, 300)}".` + (best.note ? ` The lesson: ${one(best.note, 120)}.` : "") + tail);
+  }
+  // Same subject, other words (or the other language): up to two more, the newest first on a tie.
+  const qk = lessonKeys(buyerMessage);
+  if (qk.size) {
+    const rel = [];
+    list.forEach((c, i) => {
+      // not the strong match itself, not an older lesson on that same message (it was superseded), not the same answer again
+      if (c === best || (best && (lessonNorm(c.buyer) === lessonNorm(best.buyer) || lessonNorm(answer(c)) === lessonNorm(answer(best))))) return;
+      const ck = lessonKeys(c.buyer);
+      if (!ck.size) return;
+      let shared = 0, subject = false;
+      for (const k of qk) if (ck.has(k)) { shared++; if (k.charAt(0) === "#") subject = true; }
+      const score = shared / Math.min(qk.size, ck.size);
+      if (score >= 0.5 && (subject || shared >= 2)) rel.push({ c, i, score });
+    });
+    rel.sort((a, b) => b.score - a.score || b.i - a.i);
+    const seen = new Set(), top = [];
+    for (const r of rel) { // one line per answer and per buyer message: the newest lesson on a message stands for the older ones
+      const ka = "a:" + lessonNorm(answer(r.c)), kb = "b:" + lessonNorm(r.c.buyer);
+      if (seen.has(ka) || seen.has(kb)) continue;
+      seen.add(ka); seen.add(kb); top.push(r.c);
+      if (top.length === 2) break;
+    }
+    if (top.length) {
+      lines.push((best ? "The owner also taught these" : "The owner taught these") + " on messages about the same subject (use one only if it fits what this buyer asked): " +
+        top.map((c) => `buyer "${one(c.buyer, 120)}" → the owner's answer "${one(answer(c), 200)}"`).join("; ") + ".");
+    }
+  }
+  return lines.join("\n");
 }
 function buildOwnerPrompt(settings) {
   const L = [];
@@ -1732,7 +1878,7 @@ function buildOwnerPrompt(settings) {
   const one = (s, n) => { s = txt(s).replace(/\s+/g, " "); return s.length > n ? s.slice(0, n) + "…" : s; };
   const wrote = settings.ownerWrote || null; // absent (tests, a hand-built object) = whatever is there was written
   const own = (k) => (wrote && !wrote[k] ? "" : txt(settings[k]));
-  const coachAll = (Array.isArray(settings.coaching) ? settings.coaching : []).filter((c) => c && (c.kind === "good" ? c.reply : c.better));
+  const coachAll = (Array.isArray(settings.coaching) ? settings.coaching : []).filter(coachUsable); // (v0.21.74) a 👎 left unchanged teaches nothing
   const rules = coachAll.filter(coachIsRule);
   const graded = coachAll.filter((c) => !coachIsRule(c)).slice(-30);
   const info = own("businessInfo"), instr = own("instructions"), close = own("closerGoals");
@@ -1744,7 +1890,7 @@ function buildOwnerPrompt(settings) {
   L.push("");
   L.push("Everything you know about this business is what its owner wrote for you in the tagged sections below, and nothing else. What the shop sells, what is in stock, prices, condition, warranty, payment, trade-ins, delivery, reservations, promotions, and the way buyers are to be answered all come from those sections. The owner reads these conversations and corrects them, so a detail the owner never wrote is a mistake even when it sounds likely, and so is a sales line the owner never asked for.");
   L.push("");
-  L.push("When the owner's text covers what the buyer is asking, answer with it: its facts, its numbers and its wording, put into the buyer's language. When it does not cover it, do not guess, do not fill the gap with what shops usually do, and do not stretch a line beyond what it says: what the owner wrote about buying phones from customers (which ones, how they are paid) says nothing about what the shop sells or how a buyer can pay. Say you would rather confirm it at the shop than tell them something wrong, or ask what they are looking for, and carry on with what the owner did write. Give no reason of your own for not knowing, such as stock moving fast. A fact that is true of a product everywhere (an iPhone 13 has Face ID) is fine in a few words. Where two of the owner's lines disagree, the rules and the corrections win, because they are the owner's latest word.");
+  L.push("When the owner's text covers what the buyer is asking, answer with it: its facts, its numbers and its wording, put into the buyer's language. When it does not cover it, do not guess, do not fill the gap with what shops usually do, and do not stretch a line beyond what it says: what the owner wrote about buying phones from customers (which ones, how they are paid) says nothing about what the shop sells or how a buyer can pay. Say you would rather confirm it at the shop than tell them something wrong, or ask what they are looking for, and carry on with what the owner did write. Begin that reply with [GAP] (explained under Special replies) so the owner learns what to teach you. Give no reason of your own for not knowing, such as stock moving fast. A fact that is true of a product everywhere (an iPhone 13 has Face ID) is fine in a few words. Where two of the owner's lines disagree, the rules and the corrections win, because they are the owner's latest word.");
   L.push("");
   L.push("<owner_business_info>");
   L.push(info || "(The owner has not written any business information yet.)");
@@ -1828,6 +1974,10 @@ function buildOwnerPrompt(settings) {
   L.push("Special replies:");
   L.push("- [HUMAN] <short reason>, as your whole reply, when you should not answer yourself: a scam, a way of paying or shipping that the owner's text does not allow, pressure to leave Messenger, or anything risky. The owner is notified and the buyer gets no automatic answer, so keep it for those cases.");
   L.push("- [VISIT:yes], [VISIT:no] or [VISIT:maybe] at the very start of a normal reply, only when the buyer's latest message shows whether they intend to come to the shop. It is recorded and removed before sending, so the reply after it still has to be a complete answer.");
+  // (v0.21.74) The bot tells the owner what it could not answer, so the owner knows
+  // exactly which line to add. parseReply strips the token; a row of kind "gap"
+  // feeds the dashboard's "teach these" list.
+  L.push("- [GAP] at the very start of a normal reply (before a [VISIT:...] token if there is one), when the buyer asked something about the shop that the owner's text does not answer and you had to say you would rather confirm it at the shop. It tells the owner what to teach you next and is removed before sending.");
   L.push("A short demo video is sent to each buyer automatically, once per chat. You never send a video or a link yourself. If they ask to see the phone, say a short video is on its way and still answer their question.");
   if (settings.offPlatformGuard) {
     L.push("");
@@ -1835,7 +1985,7 @@ function buildOwnerPrompt(settings) {
   }
   L.push("");
   L.push("How to write (the owner's instructions and corrections override anything in this part):");
-  L.push("Write the way a busy seller texts from the shop. Before writing, read your own earlier messages in the conversation: say each fact once per conversation (the address, the hours, a price, a policy), never open two messages the same way, and greet only in your first message. Match the buyer's length: a few words from them, a few words back, and two or three short sentences at the very most. Often the best reply is the answer alone, with no opener and no closing question. Ask a question only when it moves things forward, and never two in one message.");
+  L.push("Write in the language of the buyer's latest message, the way a busy seller texts from the shop. Before writing, read your own earlier messages in the conversation: say each fact once per conversation (the address, the hours, a price, a policy), never open two messages the same way, and greet only in your first message. Match the buyer's length: a few words from them, a few words back, and two or three short sentences at the very most. Often the best reply is the answer alone, with no opener and no closing question. Ask a question only when it moves things forward, and never two in one message.");
   L.push("- Texting style: contractions, a lowercase start and no final period are all fine, and \"ok\", \"ouais\" or \"yep\" can be the whole reply when that is the honest answer. No bullet points, headings or lists.");
   L.push("- French: tu, never vous, with light Québec texting (\"pis\", \"là\", \"ouais\", \"c'est correct\") that is never piled on. English: plain and casual. Keep the buyer's register.");
   L.push("- At most one emoji, in few messages, never in two messages in a row.");
@@ -2178,6 +2328,52 @@ function nowLine(d) {
   return `Current local time: ${days[d.getDay()]} ${hh}:${mm}.`;
 }
 
+// (v0.21.74) ECONOMY — THE ONE-HOUR CACHE. The instruction sheet is identical on
+// every call of every computer until the owner teaches something, and a cached
+// read costs a tenth of the price. The default cache lives 5 minutes, and buyer
+// messages arrive further apart than that: each reply then RE-WROTE the cache at
+// 1.25x instead of reading it. The 1-hour marker (2x to write, and every read
+// restarts the hour) stays warm through a working day. The marker is inert when
+// the sheet is shorter than the model's cacheable minimum (4096 tokens on Haiku
+// 4.5, 1024 on Sonnet 4.6): no error, no charge, no saving.
+let cacheTtl1h = true; // false once the API refused the 1-hour marker (the worker remembers it for a week)
+function cacheMarker() { return cacheTtl1h ? { type: "ephemeral", ttl: "1h" } : { type: "ephemeral" }; }
+// One POST for replies and follow-ups: the marker's fallback, the usage meter, the text.
+async function postClaude(settings, body, errLen) {
+  const send = () =>
+    fetch("https://api.anthropic.com/v1/messages", {
+      method: "POST",
+      headers: {
+        "content-type": "application/json",
+        "x-api-key": settings.apiKey,
+        "anthropic-version": "2023-06-01",
+        "anthropic-dangerous-direct-browser-access": "true",
+      },
+      body: JSON.stringify(body),
+    });
+  let resp = await send();
+  if (!resp.ok) {
+    let t = await resp.text();
+    // The 1-hour marker is plain API syntax, but a refusal must never cost a reply:
+    // send again with the 5-minute marker, and remember.
+    if (resp.status === 400 && cacheTtl1h && /ttl|cache_control/i.test(t)) {
+      cacheTtl1h = false;
+      if (typeof aiTtlRefused === "function") aiTtlRefused();
+      for (const b of body.system || []) if (b && b.cache_control) b.cache_control = { type: "ephemeral" };
+      resp = await send();
+      t = resp.ok ? null : await resp.text();
+    }
+    if (t !== null) return { error: `Anthropic ${resp.status}: ${t.slice(0, errLen)}` };
+  }
+  const data = await resp.json();
+  if (typeof aiUsageNote === "function") aiUsageNote(settings, data.usage); // the meter (background only; the dashboard's "Try it" has none)
+  const text = (data.content || [])
+    .filter((b) => b.type === "text")
+    .map((b) => b.text)
+    .join("")
+    .trim();
+  return { text };
+}
 async function callClaude(settings, buyerMessage, extraContext, memory) {
   if (!settings.apiKey) return { error: "No API key set." };
   extraContext = trimContext(extraContext);
@@ -2191,7 +2387,7 @@ async function callClaude(settings, buyerMessage, extraContext, memory) {
     // byte-identical on every call until settings change — cache_control bills
     // it at ~10% on repeat calls. Every machine shares one API key + the same
     // synced settings, so the whole fleet shares a single cache entry.
-    system: [{ type: "text", text: buildSystemPrompt(settings), cache_control: { type: "ephemeral" } }],
+    system: [{ type: "text", text: buildSystemPrompt(settings), cache_control: cacheMarker() }],
     messages: [
       {
         role: "user",
@@ -2207,27 +2403,7 @@ async function callClaude(settings, buyerMessage, extraContext, memory) {
   };
 
   try {
-    const resp = await fetch("https://api.anthropic.com/v1/messages", {
-      method: "POST",
-      headers: {
-        "content-type": "application/json",
-        "x-api-key": settings.apiKey,
-        "anthropic-version": "2023-06-01",
-        "anthropic-dangerous-direct-browser-access": "true",
-      },
-      body: JSON.stringify(body),
-    });
-    if (!resp.ok) {
-      const t = await resp.text();
-      return { error: `Anthropic ${resp.status}: ${t.slice(0, 300)}` };
-    }
-    const data = await resp.json();
-    const text = (data.content || [])
-      .filter((b) => b.type === "text")
-      .map((b) => b.text)
-      .join("")
-      .trim();
-    return { text };
+    return await postClaude(settings, body, 300);
   } catch (e) {
     return { error: "Fetch failed: " + e.message };
   }
@@ -2249,7 +2425,7 @@ async function callClaudeFollowup(settings, context, threadName, memory) {
     max_tokens: 512,
     // Same cached instruction sheet as callClaude — identical prefix, so both
     // call types read the one fleet-wide cache entry.
-    system: [{ type: "text", text: buildSystemPrompt(settings), cache_control: { type: "ephemeral" } }],
+    system: [{ type: "text", text: buildSystemPrompt(settings), cache_control: cacheMarker() }],
     messages: [
       {
         role: "user",
@@ -2279,23 +2455,7 @@ async function callClaudeFollowup(settings, context, threadName, memory) {
     ],
   };
   try {
-    const resp = await fetch("https://api.anthropic.com/v1/messages", {
-      method: "POST",
-      headers: {
-        "content-type": "application/json",
-        "x-api-key": settings.apiKey,
-        "anthropic-version": "2023-06-01",
-        "anthropic-dangerous-direct-browser-access": "true",
-      },
-      body: JSON.stringify(body),
-    });
-    if (!resp.ok) {
-      const t = await resp.text();
-      return { error: `Anthropic ${resp.status}: ${t.slice(0, 200)}` };
-    }
-    const data = await resp.json();
-    const text = (data.content || []).filter((b) => b.type === "text").map((b) => b.text).join("").trim();
-    return { text };
+    return await postClaude(settings, body, 200);
   } catch (e) {
     return { error: "Fetch failed: " + e.message };
   }
@@ -2323,13 +2483,21 @@ function parseReply(text) {
 
   // [VISIT:yes|no|maybe] is a silent prefix — capture it, strip it, then parse
   // whatever real reply follows (text or even a video).
-  let visit = null;
-  const visitMatch = text.match(/^\[VISIT:\s*(yes|no|maybe)\s*\]\s*([\s\S]*)$/i);
-  if (visitMatch) {
-    visit = visitMatch[1].toLowerCase();
-    text = visitMatch[2].trim();
-    if (!text) return { kind: "empty", visit }; // nothing left to send, but still record visit
+  // (v0.21.74) [GAP] is a second silent prefix (the owner's text had no answer to
+  // what the buyer asked). Either may come first. Without this, a reply that
+  // began with [GAP] fell into the "other bracketed token" rule below and the
+  // buyer got silence.
+  let visit = null, gap = false;
+  for (let i = 0; i < 3; i++) {
+    const g = text.match(/^\[\s*GAP\b[^\]]*\]\s*([\s\S]*)$/i); // "[GAP]", "[ gap ]", "[GAP: no line about cards]"
+    if (g) { gap = true; text = g[1].trim(); continue; }
+    const visitMatch = text.match(/^\[VISIT:\s*(yes|no|maybe)\s*\]\s*([\s\S]*)$/i);
+    if (visitMatch) { visit = visitMatch[1].toLowerCase(); text = visitMatch[2].trim(); continue; }
+    break;
   }
+  if ((visit || gap) && !text) return { kind: "empty", visit, gap }; // nothing left to send, but still record visit
+  // A [GAP] the model put further into the text must never reach a buyer.
+  if (/\[\s*GAP\b[^\]]*\]/i.test(text)) { gap = true; text = text.replace(/\s*\[\s*GAP\b[^\]]*\]\s*/gi, " ").trim(); if (!text) return { kind: "empty", visit, gap }; }
 
   const human = text.match(/\[HUMAN\]\s*([\s\S]*)/i);
   if (human && text.toUpperCase().startsWith("[HUMAN]")) {
@@ -2344,7 +2512,7 @@ function parseReply(text) {
   // message for the buyer. Never send meta-commentary into a chat — treat as
   // deliberate silence. (Operator screenshot: exactly that text reached a buyer.)
   if (text.startsWith("[")) return { kind: "empty", visit };
-  return { kind: "text", text: text.trim(), visit };
+  return { kind: "text", text: text.trim(), visit, gap };
 }
 
 /* ---------------- video fetch ---------------- */
@@ -3795,6 +3963,7 @@ async function buildDiagnostic() {
         "memStats", "machineId", // (v0.21.71)
         "videoClips", // (v0.21.72) the per-chat clip ledger
         "teachSeen", // (v0.21.73) the teaching fingerprint this computer last reported
+        "aiUsage", "cacheTtlRefusedAt", // (v0.21.74) the meter, and whether the API refused the 1-hour cache marker
       ],
       (x) => r(x || {})
     )
@@ -3843,6 +4012,14 @@ async function buildDiagnostic() {
       " listings=" + (Array.isArray(settings.listings) ? settings.listings.length : 0) + " rules=" + nRules + " lessons=" + (co.length - nRules) +
       " | prompt~" + Math.ceil(buildSystemPrompt(settings).length / 3.5) + "tok"
     );
+    // (v0.21.74) what the API actually billed: in = fresh input, cacheRead = input
+    // served from the cache (a tenth of the price), cacheWrite = input stored
+    // (double), out = output. cacheRead=0 on a busy day = the cache is not working
+    // (the instruction sheet is under the model's minimum, or the marker was refused).
+    const au = st.aiUsage || {};
+    const days = Object.keys(au).sort();
+    const fmt = (k) => { const e = au[k] || {}; return k.slice(5) + " calls=" + (e.calls || 0) + " in=" + (e.in || 0) + " cacheRead=" + (e.cr || 0) + " cacheWrite=" + (e.cw || 0) + " out=" + (e.out || 0); };
+    L.push("usage: " + (days.length ? days.slice(-2).reverse().map(fmt).join(" | ") : "no call yet") + " | cache-marker=" + (st.cacheTtlRefusedAt && now - st.cacheTtlRefusedAt < 7 * 24 * 3600 * 1000 ? "5min(1h refused " + ageM(st.cacheTtlRefusedAt) + ")" : "1h"));
   }
   const cache = st.videoCache || {};
   const central = Array.isArray(settings.demoVideoUrls) ? settings.demoVideoUrls.filter((v) => v && v.url) : [];
@@ -4273,6 +4450,9 @@ chrome.runtime.onMessage.addListener((msg, _sender, sendResponse) => {
             break;
           }
           await incrementCounters();
+          // (v0.21.74) The owner's text had no answer to this one: tell the dashboard
+          // (hidden row, kind "gap", no thread id so the chat memory never sees it).
+          if (parsed.gap) mirrorToCloud({ action: "gap", thread: msg.threadName, threadId: null, buyer: msg.buyerMessage, reply: text });
           // (v0.21.71) No appendLog here any more: the content script logs the reply
           // when it is actually DELIVERED (LOG_EVENT, like follow-ups). Logging at
           // generation time put replies in the Activity feed that never went out

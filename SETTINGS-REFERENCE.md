@@ -102,7 +102,15 @@ list. There is no second place to teach the bot.
 - **(v0.21.73) A save that loses the race merges.** A stale-stamp save re-reads the row and
   re-applies only what was changed on this page (lists merge item by item) instead of being
   dropped into a browser draft; 👍 / Save lesson / Teach it now report whether the save landed.
-- **Coaching** (max 30): 👍 stores the reply as a model answer, 👎 stores your correction, and the
+- **(v0.21.74) Learning without code.** Nothing typed here needs a code change. Rules are never
+  evicted (a 61st is refused out loud) and the 120 newest graded answers are kept; the bots carry
+  every rule and the newest 30 answers in their instructions and recall older ones when a buyer
+  writes about the same subject. **Try it** (Business tab) runs the bots' own prompt code on a
+  message you type, with your API key, and lets you 👍 or correct the answer on the spot.
+  **Teach these** (Activity tab) lists the questions the bots could not answer from your text,
+  one box each. Under the model list the page shows what the AI cost (measured by the computers)
+  and an estimate per model for the teaching saved now.
+- **Coaching** (120 graded answers + rules): 👍 stores the reply as a model answer, 👎 stores your correction, and the
   “Teach a rule” box stores a standing rule tagged `note:"always applies"`. Rules are evicted last.
 ## Tab: Videos
 

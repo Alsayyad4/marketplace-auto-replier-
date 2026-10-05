@@ -128,6 +128,7 @@
             <option value="claude-sonnet-4-6">claude-sonnet-4-6</option>
             <option value="claude-opus-4-8">claude-opus-4-8</option>
           </select>
+          <div id="costLine" class="hint" style="margin-top:4px;"></div>
 
           <div class="inline">
             <div><label>Response delay (s)</label><input type="number" id="responseDelaySec" min="0" /></div>
@@ -208,6 +209,24 @@
             </div>
             <label class="check" style="margin-top:8px;"><input type="checkbox" id="ownerTeachingOnly" /> <b>Answer only from what I teach</b> <span class="hint">the bot knows this page and your Activity rules and corrections, and nothing else: no built-in sales script, no fact you did not write. Untick to add the built-in sales playbook back.</span></label>
             <div id="teachFleetBiz" class="hint" style="margin-top:6px;"></div>
+            <div id="tryBox" style="margin-top:10px;padding-top:10px;border-top:1px solid #444;">
+              <b>💬 Try it</b> <span class="hint">type what a buyer would write and see the answer the bot gives right now, with what is on this page. Nothing is sent to Facebook; each try costs a fraction of a cent on your API key.</span>
+              <pre id="tryLog" style="white-space:pre-wrap;font-size:13px;margin:6px 0;"></pre>
+              <div class="row">
+                <input type="text" id="tryText" placeholder="e.g. est-ce que vous faites la livraison?" style="flex:1;min-width:240px;" />
+                <button id="tryAsk" type="button" class="primary">Ask the bot</button>
+                <button id="tryReset" type="button">New chat</button>
+              </div>
+              <div id="tryNote" class="hint" style="margin-top:4px;"></div>
+              <div id="tryTeach" class="hidden" style="margin-top:6px;">
+                <button id="tryGood" type="button">👍 Good, answer like this</button>
+                <button id="tryBad" type="button">👎 Wrong, here is the right answer</button>
+                <div id="tryFixRow" class="row hidden" style="margin-top:6px;">
+                  <input type="text" id="tryFix" placeholder="What the bot should have answered" style="flex:1;min-width:240px;" />
+                  <button id="tryFixSave" type="button" class="primary">Teach it</button>
+                </div>
+              </div>
+            </div>
           </div>
           <label>Business name</label>
           <input type="text" id="businessName" />
@@ -298,9 +317,10 @@
           <div id="activityTotals" class="hint">Open this tab to load.</div>
           <div id="activityByMachine" class="hint" style="margin:6px 0;"></div>
           <div id="teachFleet" class="hint" style="margin:6px 0;"></div>
+          <div id="gapBox" class="hidden" style="margin:10px 0;padding:10px;border:1px solid #d98c00;border-radius:8px;"></div>
           <div id="coachingBox" style="margin:10px 0;padding:10px;border:1px solid #444;border-radius:8px;">
             <b>🎓 Coaching — teach the bot from real replies</b>
-            <div class="hint" style="margin:4px 0;">Grade any text reply below: 👍 = "answer like this" &nbsp;·&nbsp; 👎 = "wrong — here's what to say". Every machine learns it within ~1 minute. Kept: last 30 lessons.</div>
+            <div class="hint" style="margin:4px 0;">Grade any text reply below: 👍 = "answer like this" &nbsp;·&nbsp; 👎 = "wrong — here's what to say". Every machine learns it within ~1 minute. Rules are kept until you remove them; the 120 newest graded answers are kept, and an older one still answers a buyer who writes about the same subject.</div>
             <div id="coachingList" class="hint">No lessons yet.</div>
             <div style="margin-top:10px;padding-top:10px;border-top:1px solid #444;">
               <b>✍️ Teach a rule in your own words</b>
@@ -332,6 +352,6 @@
     <script src="config.js?v=20260918"></script>
     <script src="seed.js?v=20260921"></script>
     <script src="https://cdn.jsdelivr.net/npm/@supabase/supabase-js@2"></script>
-    <script src="app.js?v=20261005"></script>
+    <script src="app.js?v=20261005b"></script>
   </body>
 </html>

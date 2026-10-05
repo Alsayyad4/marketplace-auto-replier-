@@ -433,6 +433,7 @@
     buildUrl();
     snapshotBase(); // (v0.21.73) the row as read — what a merge compares this page's edits against
     loadFleet(); // which computers answer with this teaching (never blocks the load)
+    loadCost(); // (v0.21.74) what the AI cost, measured and estimated (never blocks the load)
     try { // (v0.21.70) the draft offer is in the finally: nothing on this load may clear it first
     // (v0.21.66) A DEAD account — no API key AND nothing it has been taught — is
     // what a blank-form save leaves behind, and what the operator was looking at:
@@ -672,13 +673,22 @@
     formToFields(b); // exactly what a save with no edits would send
     baseConfig = JSON.parse(JSON.stringify(normalizeForSave(b)));
   }
+  // (v0.21.74) NOTHING TAUGHT IS DROPPED SILENTLY. A rule is never evicted (the list
+  // used to drop the oldest RULE once it held 30 lessons of any kind); past
+  // COACH_RULES_MAX a new rule is refused out loud. Graded answers: the 120
+  // newest are kept (it was 30 lessons in all). The bots carry every rule and the
+  // 30 newest answers in their instructions and recall the older ones when a
+  // buyer writes about the same subject, so more lessons do not make a reply
+  // cost more. A size budget keeps the settings row small enough for every path
+  // that stores it.
+  const COACH_RULES_MAX = 60;
+  const COACH_GRADED_MAX = 120;
+  const COACH_CHARS_MAX = 60000;
   function trimCoaching(list) {
-    // (v0.21.55) A standing RULE the boss typed must not be evicted by a run of
-    // thumbs-ups: drop the oldest graded EXAMPLE first, rules only when nothing else is left.
     const isRule = (c) => c && c.note === "always applies";
-    while (list.length > COACH_MAX) {
-      const i = list.findIndex((c) => !isRule(c));
-      list.splice(i >= 0 ? i : 0, 1);
+    const graded = () => list.reduce((n, c) => n + (isRule(c) ? 0 : 1), 0);
+    while (graded() > COACH_GRADED_MAX || (graded() > 0 && JSON.stringify(list).length > COACH_CHARS_MAX)) {
+      list.splice(list.findIndex((c) => !isRule(c)), 1); // the oldest graded answer
     }
     return list;
   }
@@ -940,6 +950,10 @@
     const submitRule = async () => {
       const t = ($("ruleText").value || "").trim();
       if (!t) return;
+      if ((settings.coaching || []).filter((c) => c && c.note === "always applies").length >= COACH_RULES_MAX) {
+        flash("You have " + COACH_RULES_MAX + " rules, the most the bots carry. Remove one (✕ in the list) to add another.", true);
+        return;
+      }
       $("addRule").disabled = true;
       const saved = await addCoaching({ kind: "bad", buyer: "(general rule from the boss)", bad: "", better: t, note: "always applies" });
       $("addRule").disabled = false;
@@ -1048,10 +1062,246 @@
         .eq("kind", "teach").order("created_at", { ascending: false }).limit(200);
       if (t.error) return; // no Activity table yet: nothing to say
       const since = new Date(Date.now() - 48 * 3600 * 1000).toISOString();
-      const s = await client.from("subsell_messages").select("created_at, machine")
-        .neq("kind", "claim").neq("kind", "teach").gte("created_at", since).order("created_at", { ascending: false }).limit(300);
+      const s = await messagesOnly(client.from("subsell_messages").select("created_at, machine"))
+        .gte("created_at", since).order("created_at", { ascending: false }).limit(300);
       renderFleet(fleetStatus(t.data || [], s.error ? [] : s.data || [], cur, Date.now(), Date.parse(row.data.updated_at || "") || 0), cur);
     } catch (e) { /* a status line must never break the page */ }
+  }
+
+  /* ---- (v0.21.74) LEARNING WITHOUT CODE: three things the owner can do here ----
+   * 1. TEACH THESE. When the owner's text has no answer to a buyer's question the
+   *    bot says so to the buyer ("I'd rather confirm it at the shop") and marks its
+   *    reply; the computer logs a hidden row (kind "gap"). This lists those
+   *    questions with one box each: type the answer once, it becomes a lesson.
+   * 2. TRY IT. Type what a buyer would write and see the reply the bot gives right
+   *    now — the real prompt code (fetched from this same site's background.js, so
+   *    it can never drift from what the computers run), the real model, the
+   *    owner's own API key, nothing sent to Facebook. 👍 or correct it on the spot.
+   * 3. THE BILL. What the computers actually spent (hidden rows, kind "usage"),
+   *    and what 1,000 replies cost on each model for the teaching saved now. */
+  // Rows the computers write for bookkeeping — never messages, never in the feed or its counts.
+  const HIDDEN_KINDS = ["claim", "teach", "gap", "usage"];
+  const messagesOnly = (q) => HIDDEN_KINDS.reduce((x, k) => x.neq("kind", k), q);
+  // Same normalisation as the bots' lessonNorm: a question counts as taught when a lesson was saved on these words.
+  const gapKey = (t) => String(t == null ? "" : t).toLowerCase().normalize("NFD").replace(/\p{M}+/gu, "").replace(/[^\p{L}\p{N}$]+/gu, " ").trim();
+  const GAP_DISMISS = "subsell_gap_dismissed";
+  function gapDismissed() { try { return JSON.parse(localStorage.getItem(GAP_DISMISS + ":" + (session && session.user ? session.user.id : "")) || "[]"); } catch (e) { return []; } }
+  function gapDismiss(key) { try { const d = gapDismissed(); d.push(key); localStorage.setItem(GAP_DISMISS + ":" + (session && session.user ? session.user.id : ""), JSON.stringify(d.slice(-200))); } catch (e) { /* storage blocked: it comes back on reload */ } }
+  // Pure: rows (newest first) → the questions still worth teaching, most asked first.
+  function gapList(rows, coaching, dismissed) {
+    const taught = new Set((coaching || []).filter((c) => c && c.buyer).map((c) => gapKey(String(c.buyer).replace(/(…|\.\.\.)\s*$/, ""))));
+    const gone = new Set(dismissed || []);
+    const by = new Map();
+    for (const r of rows || []) {
+      const q = String((r && r.buyer_text) || "").trim();
+      const k = gapKey(q);
+      if (!k || taught.has(k) || gone.has(k)) continue;
+      const e = by.get(k) || { key: k, question: q, said: String(r.bot_text || ""), n: 0, at: Date.parse(r.created_at) || 0 };
+      e.n++;
+      by.set(k, e);
+    }
+    return Array.from(by.values()).sort((a, b) => b.n - a.n || b.at - a.at).slice(0, 8);
+  }
+  let gapRows = [];
+  function renderGaps() {
+    const box = $("gapBox");
+    if (!box) return;
+    const items = gapList(gapRows, settings.coaching, gapDismissed());
+    box.innerHTML = "";
+    box.classList.toggle("hidden", !items.length);
+    if (!items.length) return;
+    const head = document.createElement("div");
+    head.innerHTML = "<b>❓ Buyers asked these and your teaching had no answer</b>";
+    const hint = document.createElement("div");
+    hint.className = "hint";
+    hint.textContent = "Type the answer once. Every bot has it within about a minute, for this question and for others like it.";
+    box.appendChild(head);
+    box.appendChild(hint);
+    for (const it of items) {
+      const row = document.createElement("div");
+      row.style.cssText = "margin-top:8px;";
+      const q = document.createElement("div");
+      q.textContent = "“" + truncTxt(it.question, 160) + "”" + (it.n > 1 ? "  · asked " + it.n + " times" : "") + (it.said ? "  · the bot said: “" + truncTxt(it.said, 110) + "”" : "");
+      const line = document.createElement("div");
+      line.className = "row";
+      line.style.cssText = "margin-top:4px;";
+      const inp = document.createElement("input");
+      inp.type = "text";
+      inp.placeholder = "What should the bot answer?";
+      inp.style.cssText = "flex:1;min-width:240px;";
+      const teach = document.createElement("button");
+      teach.type = "button"; teach.className = "primary"; teach.textContent = "Teach it";
+      const skip = document.createElement("button");
+      skip.type = "button"; skip.textContent = "✕"; skip.title = "Not a real question — hide it";
+      teach.addEventListener("click", async () => {
+        const a = (inp.value || "").trim();
+        if (!a) { inp.focus(); return; }
+        teach.disabled = true;
+        const saved = await addCoaching({ kind: "fix", buyer: truncTxt(it.question, 200), bad: truncTxt(it.said, 200), better: truncTxt(a, 300), note: "" });
+        if (saved) renderGaps(); // taught → it leaves the list
+        else { teach.disabled = false; teach.textContent = "NOT saved — try again"; }
+      });
+      skip.addEventListener("click", () => { gapDismiss(it.key); renderGaps(); });
+      line.appendChild(inp); line.appendChild(teach); line.appendChild(skip);
+      row.appendChild(q); row.appendChild(line);
+      box.appendChild(row);
+    }
+  }
+  async function loadGaps() {
+    if (!client || !session || !rowLoaded) return;
+    try {
+      const since = new Date(Date.now() - 14 * 24 * 3600 * 1000).toISOString();
+      const g = await client.from("subsell_messages").select("created_at, buyer_text, bot_text")
+        .eq("kind", "gap").gte("created_at", since).order("created_at", { ascending: false }).limit(300);
+      if (g.error) return;
+      gapRows = g.data || [];
+      renderGaps();
+    } catch (e) { /* a list must never break the page */ }
+  }
+
+  // The bots' own prompt, call and parse code, sliced out of background.js (served by this
+  // same site). The two markers are comments in that file; store/smoke-teach.js fails if they move.
+  const CORE_BEGIN = "/* ===================== (v0.21.73) THE OWNER IS THE ONLY TEACHER";
+  const CORE_END = "/* ---------------- video fetch ---------------- */";
+  const CORE_VER = "20261005b";
+  let teachCore = null, teachCoreErr = "";
+  async function loadTeachCore() {
+    if (teachCore) return teachCore;
+    try {
+      const res = await fetch("../background.js?v=" + CORE_VER);
+      if (!res || !res.ok) throw new Error("HTTP " + (res && res.status));
+      const src = await res.text();
+      const a = src.indexOf(CORE_BEGIN), b = a < 0 ? -1 : src.indexOf(CORE_END, a);
+      if (a < 0 || b < 0) throw new Error("the bots' prompt code was not found");
+      teachCore = new Function("DEFAULTS", "fetch", src.slice(a, b) + "\nreturn { buildSystemPrompt: buildSystemPrompt, lessonFor: lessonFor, callClaude: callClaude, parseReply: parseReply };")(DEFAULTS, (u, o) => fetch(u, o));
+      return teachCore;
+    } catch (e) { teachCoreErr = String((e && e.message) || e); return null; }
+  }
+  const tryState = { turns: [], last: null, busy: false };
+  function tryNote(msg, isErr) { const el = $("tryNote"); if (el) { el.className = isErr ? "err" : "hint"; el.textContent = msg; } }
+  function tryRender() {
+    const el = $("tryLog");
+    if (el) el.textContent = tryState.turns.map((t) => (t.role === "buyer" ? "Buyer: " : "Bot: ") + t.text).join("\n");
+  }
+  async function tryAsk() {
+    const msg = ($("tryText").value || "").trim();
+    if (!msg || tryState.busy) return; // (Enter pressed twice must not ask twice)
+    formToFields();
+    if (!String(settings.apiKey || "").trim()) { tryNote("Paste your API key on the General tab first.", true); return; }
+    tryState.busy = true;
+    $("tryAsk").disabled = true;
+    tryNote("Asking the bot…");
+    const core = await loadTeachCore();
+    if (!core) { tryState.busy = false; $("tryAsk").disabled = false; tryNote("Try it is not available here (" + teachCoreErr + ").", true); return; }
+    // What the bot would see: the chat so far (its own real replies only), then this message.
+    const lines = tryState.turns.filter((t) => t.ctx).concat([{ role: "buyer", text: msg }]).slice(-12).map((t) => (t.role === "buyer" ? "Buyer: " : "You: ") + t.text);
+    const s = Object.assign({}, settings);
+    const out = await core.callClaude(s, msg, "Conversation so far (most recent last):\n" + lines.join("\n"), "");
+    tryState.busy = false;
+    $("tryAsk").disabled = false;
+    if (!out || out.error) { tryNote("The AI call failed: " + ((out && out.error) || "no answer"), true); return; }
+    const p = core.parseReply(out.text);
+    const isText = p.kind === "text";
+    const shown = isText ? p.text : p.kind === "human" ? "(the bot would hand this chat to you: " + (p.reason || "it needs you") + ")" : "(the bot would stay silent)";
+    tryState.turns.push({ role: "buyer", text: msg, ctx: true }, { role: "me", text: shown, ctx: isText });
+    tryState.last = { buyer: msg, reply: isText ? p.text : "" };
+    $("tryText").value = "";
+    tryRender();
+    tryNote((core.lessonFor(s, msg) ? "✓ It had a lesson of yours beside this message. " : "") + (p.gap ? "❓ It says your teaching does not answer this. " : "") + "Is the answer right?");
+    $("tryTeach").classList.remove("hidden");
+    $("tryFixRow").classList.add("hidden");
+    $("tryGood").disabled = !isText;
+  }
+  function tryReset() {
+    tryState.turns = []; tryState.last = null;
+    tryRender();
+    tryNote("");
+    $("tryTeach").classList.add("hidden");
+  }
+  if ($("tryAsk")) {
+    $("tryAsk").addEventListener("click", tryAsk);
+    $("tryText").addEventListener("keydown", (e) => { if (e.key === "Enter") tryAsk(); });
+    $("tryReset").addEventListener("click", tryReset);
+    $("tryGood").addEventListener("click", async () => {
+      const l = tryState.last;
+      if (!l || !l.reply) return;
+      $("tryGood").disabled = true;
+      const saved = await addCoaching({ kind: "good", buyer: truncTxt(l.buyer, 200), reply: truncTxt(l.reply, 300) });
+      tryNote(saved ? "Taught ✓ — the bots answer this message like that from now on." : "NOT saved — the line at the bottom of the page says why.", !saved);
+      if (!saved) $("tryGood").disabled = false;
+    });
+    $("tryBad").addEventListener("click", () => { $("tryFixRow").classList.remove("hidden"); $("tryFix").focus(); });
+    const fix = async () => {
+      const l = tryState.last, a = ($("tryFix").value || "").trim();
+      if (!l || !a) { $("tryFix").focus(); return; }
+      $("tryFixSave").disabled = true;
+      const saved = await addCoaching({ kind: "fix", buyer: truncTxt(l.buyer, 200), bad: truncTxt(l.reply, 200), better: truncTxt(a, 300), note: "" });
+      $("tryFixSave").disabled = false;
+      if (saved) { $("tryFix").value = ""; $("tryFixRow").classList.add("hidden"); tryNote("Taught ✓ — ask the same thing again and you will see your answer."); }
+      else tryNote("NOT saved — the line at the bottom of the page says why. Your text is still in the box.", true);
+    };
+    $("tryFixSave").addEventListener("click", fix);
+    $("tryFix").addEventListener("keydown", (e) => { if (e.key === "Enter") fix(); });
+  }
+
+  // $ per million tokens (input, output) and the shortest instruction sheet each model will cache.
+  // A cached sheet is read at a tenth of the input price and written at double (1-hour cache).
+  const AI_PRICES = {
+    "claude-haiku-4-5": { in: 1, out: 5, floor: 4096 }, "claude-haiku-4-5-20251001": { in: 1, out: 5, floor: 4096 },
+    "claude-sonnet-4-6": { in: 3, out: 15, floor: 1024 }, "claude-opus-4-8": { in: 5, out: 25, floor: 1024 },
+  };
+  const usd = (n) => "$" + (n >= 10 ? n.toFixed(0) : n >= 1 ? n.toFixed(2) : n.toFixed(2));
+  // Pure: usage rows → per computer and day the row with the most calls → what was billed.
+  function usageTotals(rows) {
+    const best = new Map();
+    for (const r of rows || []) {
+      const m = String((r && r.bot_text) || "").match(/^usage (\d{4}-\d\d-\d\d) model=(\S+) calls=(\d+) in=(\d+) cr=(\d+) cw=(\d+) out=(\d+)/);
+      if (!m) continue;
+      const k = machineKey(r.machine) + "|" + m[1];
+      const e = { day: m[1], model: m[2], calls: +m[3], in: +m[4], cr: +m[5], cw: +m[6], out: +m[7] };
+      if (!best.has(k) || best.get(k).calls < e.calls) best.set(k, e);
+    }
+    const t = { calls: 0, in: 0, cr: 0, cw: 0, out: 0, cost: 0, unpriced: 0, days: new Set() };
+    for (const e of best.values()) {
+      t.calls += e.calls; t.in += e.in; t.cr += e.cr; t.cw += e.cw; t.out += e.out; t.days.add(e.day);
+      const p = AI_PRICES[e.model];
+      if (p) t.cost += (e.in * p.in + e.cr * p.in * 0.1 + e.cw * p.in * 2 + e.out * p.out) / 1e6; else t.unpriced += e.calls;
+    }
+    return t;
+  }
+  // Pure: what 1,000 replies cost on a model, for an instruction sheet of `sheet` tokens (cached when it
+  // reaches the model's minimum), a conversation of `turn` tokens and a reply of `out` tokens.
+  function per1000(model, sheet, turn, out) {
+    const p = AI_PRICES[model];
+    if (!p) return null;
+    const cached = sheet >= p.floor;
+    return { cached, cost: ((cached ? sheet * p.in * 0.1 : sheet * p.in) + turn * p.in + out * p.out) / 1000 };
+  }
+  async function loadCost() {
+    const el = $("costLine");
+    if (!el || !client || !session || !rowLoaded) return;
+    const lines = [];
+    try {
+      const since = new Date(Date.now() - 30 * 24 * 3600 * 1000).toISOString();
+      const u = await client.from("subsell_messages").select("created_at, machine, bot_text")
+        .eq("kind", "usage").gte("created_at", since).order("created_at", { ascending: false }).limit(1000);
+      const t = usageTotals(u.error ? [] : u.data || []);
+      if (t.calls) {
+        const input = t.in + t.cr + t.cw;
+        lines.push("Measured on your computers, last 30 days: " + t.calls + " AI replies" + (t.unpriced ? "" : " ≈ " + usd(t.cost) + " (≈ " + usd((t.cost / t.calls) * 1000) + " per 1,000)") +
+          ". Input read from the cache: " + (input ? Math.round((t.cr / input) * 100) : 0) + "%.");
+      } else lines.push("No measured AI cost yet: each computer starts reporting once it runs v0.21.74.");
+    } catch (e) { /* the estimate below still shows */ }
+    try {
+      const core = await loadTeachCore();
+      if (core) {
+        const sheet = Math.ceil(core.buildSystemPrompt(Object.assign({}, DEFAULTS, baseConfig || {})).length / 3.5);
+        const est = ["claude-haiku-4-5", "claude-sonnet-4-6", "claude-opus-4-8"].map((m) => { const r = per1000(m, sheet, 200, 60); return m + " ≈ " + usd(r.cost) + (r.cached ? " (sheet cached)" : " (sheet too short to cache: under " + AI_PRICES[m].floor + " tokens)"); });
+        lines.push("Estimate for the teaching saved now (an instruction sheet of about " + sheet + " tokens), per 1,000 replies: " + est.join(" · ") + ".");
+      }
+    } catch (e) { /* no estimate */ }
+    el.style.whiteSpace = "pre-line";
+    el.textContent = lines.join("\n");
   }
 
   /* ---------------- activity log (combined feed across all machines) ---------------- */
@@ -1060,13 +1310,19 @@
   /* ----- 🎓 Coaching: grade real replies (👍 imitate / 👎 + correction) -----
    * Lessons live in settings.coaching (capped 30, FIFO) and ride the normal
    * config save — every machine's next system prompt includes them (~1 min). */
-  const COACH_MAX = 30;
   function renderCoaching() {
     const el = $("coachingList");
     if (!el) return;
     const list = settings.coaching || [];
     if (!list.length) { el.textContent = "No lessons yet — grade a reply below."; return; }
     el.innerHTML = "";
+    {
+      const nRules = list.filter((c) => c && c.note === "always applies").length;
+      const sum = document.createElement("div");
+      sum.style.cssText = "margin-bottom:6px;";
+      sum.textContent = nRules + " rule" + (nRules === 1 ? "" : "s") + " (kept until you remove them) · " + (list.length - nRules) + " graded answer" + (list.length - nRules === 1 ? "" : "s") + " (the " + COACH_GRADED_MAX + " newest are kept).";
+      el.appendChild(sum);
+    }
     list.slice().reverse().forEach((c) => {
       const idx = settings.coaching.indexOf(c);
       const row = document.createElement("div");
@@ -1110,11 +1366,10 @@
     totalsEl.textContent = "Loading…";
     // (v0.21.71) kind "claim" rows are the machines' own bookkeeping (which computer
     // is answering a message) — never a message, so never in the feed or the counts.
-    const { data, error } = await client
+    // (v0.21.74) claim / teach / gap / usage rows are the computers' bookkeeping, never messages
+    const { data, error } = await messagesOnly(client
       .from("subsell_messages")
-      .select("created_at, sent_at, machine, thread_name, kind, buyer_text, bot_text")
-      .neq("kind", "claim")
-      .neq("kind", "teach") // (v0.21.73) a computer's teaching receipt — shown in the line above the feed, never as a message
+      .select("created_at, sent_at, machine, thread_name, kind, buyer_text, bot_text"))
       .order("created_at", { ascending: false })
       .limit(300);
     if (error) {
@@ -1129,15 +1384,16 @@
     // All-time + today totals (cheap head counts).
     let total = rows.length, today = 0;
     try {
-      const all = await client.from("subsell_messages").select("id", { count: "exact", head: true }).neq("kind", "claim").neq("kind", "teach");
+      const all = await messagesOnly(client.from("subsell_messages").select("id", { count: "exact", head: true }));
       if (all.count != null) total = all.count;
       const start = new Date(); start.setHours(0, 0, 0, 0);
-      const td = await client.from("subsell_messages").select("id", { count: "exact", head: true }).neq("kind", "claim").neq("kind", "teach").gte("created_at", start.toISOString());
+      const td = await messagesOnly(client.from("subsell_messages").select("id", { count: "exact", head: true })).gte("created_at", start.toISOString());
       if (td.count != null) today = td.count;
     } catch (e) { /* counts are best-effort */ }
 
     totalsEl.innerHTML = `<b>${total}</b> messages all-time &nbsp;·&nbsp; <b>${today}</b> today &nbsp;·&nbsp; showing latest ${rows.length}`;
     loadFleet(); // (v0.21.73) which computers answer with the teaching saved here
+    loadGaps(); // (v0.21.74) what the bots could not answer — one box each to teach it
 
     const byMachine = {};
     for (const r of rows) { const m = r.machine || "—"; byMachine[m] = (byMachine[m] || 0) + 1; }
@@ -1201,6 +1457,17 @@
           ok.addEventListener("click", async () => {
             const better = ta.value.trim();
             if (!better) { ta.focus(); return; }
+            // (v0.21.74) The text was left exactly as the bot wrote it. Saving that as the
+            // "right answer" would teach the mistake: ask for the correction — or, when
+            // only the rule box was filled, keep the rule as a standing rule.
+            if (better === String(r.bot_text || "").trim()) {
+              const rule = note.value.trim();
+              if (!rule) { ok.textContent = "Change the text to what it should have said, or write the rule"; ta.focus(); return; }
+              ok.disabled = true;
+              const kept = await addCoaching({ kind: "bad", buyer: "(general rule from the boss)", bad: "", better: truncTxt(rule, 600), note: "always applies" });
+              if (kept) ftr.remove(); else { ok.disabled = false; ok.textContent = "NOT saved — try again"; }
+              return;
+            }
             ok.disabled = true;
             const saved = await addCoaching({
               kind: "fix",
