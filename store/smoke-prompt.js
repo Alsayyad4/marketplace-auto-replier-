@@ -26,7 +26,11 @@ function slice(startMarker, endMarker) {
   if (e < 0) { console.error("end not found after: " + startMarker); process.exit(1); }
   return src.slice(s, e);
 }
-const fnPrompt = slice("function buildSystemPrompt(", "\n/* Static FR/EN Quebec sales phrasebook");
+// (v0.21.73) the slice now starts at the owner-only block: buildSystemPrompt hands
+// over to buildOwnerPrompt unless `ownerTeachingOnly` is false, and callClaude
+// calls lessonFor. THIS file locks the built-in-playbook prompt (the switch OFF);
+// store/smoke-teach.js locks the owner-only prompt (the default).
+const fnPrompt = slice("/* ===================== (v0.21.73) THE OWNER IS THE ONLY TEACHER", "\n/* Static FR/EN Quebec sales phrasebook");
 const phrasebook = slice("const SALES_PHRASEBOOK = [", '].join("\\n");') + '].join("\\n");';
 const fnTrim = slice("function trimContext(", "\n// (v0.21.68) The model has no clock");
 const fnNow = slice("function nowLine(", "\nasync function callClaude(");
@@ -51,6 +55,7 @@ const base = {
   closerMode: true, closerIntensity: "medium", noExactPrices: true, offPlatformGuard: true,
   closerGoals: "Get them into the shop.", priceList: "", examples: "", listings: [], coaching: [],
   model: "claude-haiku-4-5",
+  ownerTeachingOnly: false, // the built-in-playbook prompt, exactly as v0.21.72 assembled it
 };
 
 (async () => {

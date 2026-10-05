@@ -684,6 +684,53 @@
     return null; // never found a bubble → unknown
   }
 
+  // (v0.21.73) THE CHAT'S OWN TITLE IS NOT A MESSAGE. A Marketplace chat is named
+  // "Buyer · listing headline", and Messenger prints that title (and the buyer's
+  // name, and the headline alone) as plain unpainted text INSIDE the thread: the
+  // intro block above the first message, the sender label above a bubble in
+  // group-style threads. The reader took those for lines of the conversation, so
+  // the model answered the ADVERT (operator, Oct 5 2026: "answering very random ai
+  // answers based on headlines of marketplace posts") — and once echoed the title
+  // back to a buyer as a follow-up (the TITLE-ECHO GUARD in maybeFollowUp).
+  // Judged by TEXT against the chat's known label, and only for a block that is
+  // NOT a painted bubble: a buyer who really types the headline does it in a gray
+  // bubble, and the sidebar's own attribution still wins (namedBySidebar).
+  // Pure — store/smoke-teach.js runs it.
+  function labelLike(text, name) {
+    const t = normMsg(text), full = normMsg(name);
+    if (!t || full.length < 3) return false;
+    if (t === full) return true;
+    const cut = full.indexOf("·");
+    const who = cut > 0 ? full.slice(0, cut).trim() : "";
+    const item = cut > 0 ? full.slice(cut + 1).trim() : "";
+    // the label cut short by the header, or carrying a suffix
+    if (t.length >= 8 && (full.startsWith(t) || t.startsWith(full))) return true;
+    if (who && t === who) return true; // the sender label above a bubble (group-style threads)
+    if (item.length >= 4 && t === item) return true; // the listing headline alone (the intro card)
+    if (item.length >= 8) {
+      if (t.length >= 8 && item.startsWith(t)) return true; // the headline cut short
+      if (t.startsWith(item)) { // the headline plus what a card adds: "· CA$650", "- sold"
+        const rest = t.slice(item.length).trim();
+        if (!rest || /^[·•|(\-–—]/.test(rest) || /^(ca)?\$/.test(rest)) return true;
+      }
+    }
+    return false;
+  }
+  let openLabel = { id: "", sid: "", name: "" }; // the chat handleThread opened last
+  function noteOpenThread(id, sid, name) { openLabel = { id: id || "", sid: sid || "", name: name || "" }; }
+  // The label of the chat that is open RIGHT NOW ("" = unknown: nothing is judged).
+  function openThreadName() {
+    const href = location.href;
+    if (openLabel.name && ((openLabel.id && href.includes(openLabel.id)) || (openLabel.sid && href.includes(openLabel.sid)))) return openLabel.name;
+    // Opened by hand, or by a path that never went through handleThread: the
+    // sidebar row whose link is the open chat carries the same label.
+    for (const a of conversationAnchors()) {
+      const tid = threadId(a);
+      if (tid && href.includes(tid)) return anchorName(a) || "";
+    }
+    return "";
+  }
+
   // Returns the conversation as [{ role:"buyer"|"me", text }] oldest→newest, or [].
   function readConversation(hint) {
     const main = getMain();
@@ -791,6 +838,7 @@
     // Never drop the very text the sidebar attributes to the buyer (confirmed path).
     const hb = hint && !hint.media ? normMsg(hint.body || "") : "";
     const namedBySidebar = (t) => hb.length >= 2 && (normMsg(t) === hb || normMsg(t).startsWith(hb));
+    const label = openThreadName(); // (v0.21.73) this chat's own title — never a message
     const out = [];
     for (const { el, text, r } of cands) {
       const ours = looksLikeOurBubble(el); // true | false | null
@@ -806,7 +854,11 @@
         // color inconclusive → only call it the buyer when it CLEARLY hugs the left
         role = (colRight - r.right) - (r.left - colLeft) > 30 ? "buyer" : "me";
       }
-      out.push({ role, text, top: r.top, paint: ours === true || isOwnEcho(text) ? true : ours, hug });
+      // (v0.21.73) An UNPAINTED block whose text is the chat's own title (or the
+      // buyer's name, or the listing headline) is Messenger's furniture. It is
+      // marked, not skipped, so the read an older build made can be rebuilt below.
+      const title = ours === null && !!label && !namedBySidebar(text) && labelLike(text, label);
+      out.push({ role, text, top: r.top, paint: ours === true || isOwnEcho(text) ? true : ours, hug, title });
     }
     // Media bubbles carry no paint to read, so the SAME rule applies: buyer only
     // with positive evidence (clearly hugging the left); centered = system card
@@ -822,6 +874,15 @@
       out.push({ role, text: "[attachment]", top: r.top, paint: ours, hug });
     }
     out.sort((a, b) => a.top - b.top);
+    // (v0.21.73) The title blocks leave the conversation. The unfiltered read rides
+    // along for ONE purpose: turnFromConvo rebuilds the dedupe key an older build
+    // wrote for this same message (it counted the title as a line), so the update
+    // can never make a chat that was already answered look new.
+    if (out.some((e) => e.title)) {
+      const clean = out.filter((e) => !e.title);
+      clean.legacy = out;
+      return clean;
+    }
     return out;
   }
   // The buyer message to answer: the last bubble, and only if it's the buyer's.
@@ -895,14 +956,35 @@
         ? "(the buyer sent a photo/video attachment with no text)"
         : last.text;
     const transcript = convo.slice(-12).map(convoLine).join("\n");
+    const dedupeKey = lastMine + "\u0001" + trailing + "\u0001" + last.text;
+    // (v0.21.73) The key an older build wrote for this same message: it read the
+    // chat's title block as a line (ours, or one more of the buyer's), so its
+    // "what we last said" / "how many buyer bubbles since" differ from the key
+    // above. handleThread accepts either — the update never re-answers a chat.
+    let legacyKey = null;
+    if (convo.legacy) {
+      const all = convo.legacy;
+      const end = all.indexOf(last);
+      if (end >= 0) {
+        let lm = "", tr = 0;
+        for (let i = end; i >= 0; i--) {
+          if (all[i].text === "[attachment]") continue;
+          if (all[i].role === "me") { lm = all[i].text; break; }
+          tr++;
+        }
+        const k = lm + "\u0001" + tr + "\u0001" + last.text;
+        if (k !== dedupeKey) legacyKey = k;
+      }
+    }
     return {
       buyerMessage,
       transcript,
+      legacyKey,
       // (v0.21.71) a wider read for the thread memory only (the model still gets the
       // 12 lines above): the memory must see an older reply that scrolled out of
       // those 12, or it could take a repeated "ok" for one already answered.
       memTranscript: convo.slice(-40).map(convoLine).join("\n"),
-      dedupeKey: lastMine + "\u0001" + trailing + "\u0001" + last.text,
+      dedupeKey,
     };
   }
   // One bubble = one line. A bubble's innerText can hold newlines; unflattened, a
@@ -4843,6 +4925,7 @@
     let id = threadId(anchor); // may be ADOPTED below if FB redirects to a canonical id
     const sidebarId = id;
     const name = anchorName(anchor);
+    noteOpenThread(id, sidebarId, name); // (v0.21.73) the reader must know this chat's own title — it is not a message
     // Snapshot the sidebar's opinion BEFORE opening: opening marks the chat READ on
     // Facebook (the blue dot dies), so if this visit fails to reply for any reason
     // we must not lose the fact that a buyer was probably waiting.
@@ -4895,6 +4978,7 @@
         console.debug("[SubSell] thread id redirected", id, "->", urlIdNow, "— adopting");
         delete openFails[sidebarId];
         id = urlIdNow; // all state (dedup, caps, videos) now keys on the REAL id
+        noteOpenThread(id, sidebarId, name); // (v0.21.73) the title follows the chat to its real id
         adoptedAlias[sidebarId] = id; // bridge sidebar-keyed lookups to the real id
         cooldowns[id] = Date.now() + COOLDOWN_MS; // mirror the entry cooldown
       } else {
@@ -5019,7 +5103,10 @@
     // by older builds as the plain buyer text. The composite key lets a buyer who
     // REPEATS the same words later ("ok", "?") get answered again — the plain-text
     // key skipped them forever.
-    if (lastHandled[id] === turn.dedupeKey || lastHandled[id] === turn.buyerMessage) {
+    if (lastHandled[id] === turn.dedupeKey || lastHandled[id] === turn.buyerMessage || (turn.legacyKey && lastHandled[id] === turn.legacyKey)) {
+      // (v0.21.73) a key written before the title block left the read: same message,
+      // already answered. Re-stamp it in today's form so the match is direct from now on.
+      if (lastHandled[id] !== turn.dedupeKey && lastHandled[id] !== turn.buyerMessage) { lastHandled[id] = turn.dedupeKey; persistDedup(); }
       clearWaiting(id, sidebarId); // already answered this exact message
       // Audit fix: chats that keep landing here (our reply mis-read as not-last)
       // previously NEVER reached a video pass — give them one (idempotent).
@@ -5129,7 +5216,7 @@
         return;
       }
       if (reply.skip) {
-        if (reply.reason === "empty reply" || reply.memory === "answered" || reply.memory === "echo") {
+        if (reply.reason === "empty reply" || reply.memory === "answered" || reply.memory === "echo" || reply.title) {
           // Claude DELIBERATELY chose silence (system/meta message, nothing to answer).
           // Mark handled so the same unanswerable message isn't re-billed every
           // cooldown; a NEW buyer message (different text) still gets handled fresh.
@@ -5972,6 +6059,8 @@
               "open chat: id=…" + m[1].slice(-6) +
               " composer=" + (findComposer() ? "Y" : "NO") +
               " msgs=" + convo.length + " last=" + (last ? last.role : "-") +
+              // (v0.21.73) title= the chat's label is known to the reader; dropped= blocks it removed as the chat's own title
+              " title=" + (openThreadName() ? "known" : "UNKNOWN") + " dropped=" + (convo.legacy ? convo.legacy.length - convo.length : 0) +
               " | detectors: hardened=" + det(chatAlreadyHasOurVideo) +
               " legacyVideo=" + det(legacyChatVideoDetect) +
               " legacyBadge=" + det(legacyBadgeDetect) +

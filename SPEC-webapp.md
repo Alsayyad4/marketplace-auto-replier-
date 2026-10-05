@@ -60,6 +60,7 @@ per-machine on/off).
 | `jitterSec` | number | 60 | Extra random 0–N s added to the delay. |
 | `typingPaceMaxSec` | number | 20 | (v0.21.71) Extra wait per reply proportional to its length (`wpmMin`–`wpmMax` typing speed), capped here; `0` = off. |
 | `threadMemory` | bool | true | (v0.21.71) Read the chat's Activity-log rows before every reply/video: never answer a message twice (across computers), never re-send the demo, tell the model what it already said. Off = pre-.71 behaviour. |
+| `ownerTeachingOnly` | bool | true | (v0.21.73) The prompt is built ONLY from the owner's text (business info, instructions, rules/corrections, prices, listings, closing goal, examples) plus mechanics: no built-in sales playbook or phrasebook, and an unwritten `instructions` / `closerGoals` contributes one neutral line instead of the extension's DEFAULTS text. `false` = the v0.21.72 playbook prompt. |
 | `listings` | array | [] | Inventory rows; included in the prompt. Each: `{title, model, storage, condition, price (number), videoUrl, available (bool)}`. |
 | `videoRetryMax` | number | 2 | (v0.21.47) Native attach retries per chat when nothing could be confirmed staged; `0` = none. |
 | `videoCompleteSet` | bool | true | (v0.21.72) Every dashboard clip reaches a chat exactly once: a per-chat clip ledger (by file) lets a chat that is missing a never-attempted clip receive just that one on the buyer's next message. `false` = pre-.72 count-based behaviour. |

@@ -182,12 +182,12 @@
 
           <hr />
           <label class="check"><input type="checkbox" id="offPlatformGuard" /> Off-platform guardrails <span class="hint">forbid phone/email/links; escalate instead</span></label>
-          <label class="check"><input type="checkbox" id="closerMode" /> Closer mode <span class="hint">drive buyers to call/visit; trade-ins, buyback, liquidation</span></label>
+          <label class="check"><input type="checkbox" id="closerMode" /> Closer mode <span class="hint">steer buyers toward the shop visit, using your own “Closer goals” text on the Business tab</span></label>
           <label>Closing style <span class="hint">how hard the bot closes for the shop visit (needs Closer mode ON)</span></label>
           <select id="closerIntensity">
             <option value="soft">Soft — helpful, one gentle invite</option>
-            <option value="medium">Balanced — guide toward the visit</option>
-            <option value="master">Master closer — full sales playbook (reserve, assumptive close, objection handling)</option>
+            <option value="medium">Balanced — invite when it fits</option>
+            <option value="master">Master closer — every reply moves toward the visit</option>
           </select>
           <label class="check"><input type="checkbox" id="noExactPrices" /> Never quote exact prices <span class="hint">(ignored when a price list is set on the Business tab)</span></label>
 
@@ -206,6 +206,8 @@
               <button id="teachPreviewBtn" type="button">👁 Show me exactly what the bot is being taught</button>
               <pre id="teachPreview" class="hidden" style="white-space:pre-wrap;font-size:12px;max-height:340px;overflow:auto;background:rgba(127,127,127,.10);padding:10px;border-radius:6px;margin-top:8px;"></pre>
             </div>
+            <label class="check" style="margin-top:8px;"><input type="checkbox" id="ownerTeachingOnly" /> <b>Answer only from what I teach</b> <span class="hint">the bot knows this page and your Activity rules and corrections, and nothing else: no built-in sales script, no fact you did not write. Untick to add the built-in sales playbook back.</span></label>
+            <div id="teachFleetBiz" class="hint" style="margin-top:6px;"></div>
           </div>
           <label>Business name</label>
           <input type="text" id="businessName" />
@@ -215,11 +217,11 @@
           <input type="text" id="businessHoursText" />
           <label>Business info <span class="hint">facts the bot may state — what you carry, warranty, payment, trade-in, delivery, the questions buyers keep asking. One fact or one Q→A per line works best: the bot is told to find the line that answers the buyer and use it</span></label>
           <textarea id="businessInfo"></textarea>
-          <label>Instructions / tone</label>
+          <label>Instructions / tone <span class="hint">how to talk to buyers and what to do in each situation. Left empty, the bot only gets: reply in the buyer's language, short and friendly</span></label>
           <textarea id="instructions"></textarea>
           <label>Example conversations <span class="hint">few-shot buyer→ideal-reply pairs; strongly shapes the voice</span></label>
           <textarea id="examples" style="min-height:200px;"></textarea>
-          <label>Closer goals <span class="hint">how the bot sells the in-person visit (used when Closer mode is on)</span></label>
+          <label>Closer goals <span class="hint">how the bot sells the in-person visit (used when Closer mode is on). Left empty, the bot only gets: invite them to the shop when it fits</span></label>
           <textarea id="closerGoals"></textarea>
           <label>Price list <span class="hint">starting prices the bot WILL share; one per line (overrides "never quote prices")</span></label>
           <textarea id="priceList" style="min-height:160px;"></textarea>
@@ -295,6 +297,7 @@
           </div>
           <div id="activityTotals" class="hint">Open this tab to load.</div>
           <div id="activityByMachine" class="hint" style="margin:6px 0;"></div>
+          <div id="teachFleet" class="hint" style="margin:6px 0;"></div>
           <div id="coachingBox" style="margin:10px 0;padding:10px;border:1px solid #444;border-radius:8px;">
             <b>🎓 Coaching — teach the bot from real replies</b>
             <div class="hint" style="margin:4px 0;">Grade any text reply below: 👍 = "answer like this" &nbsp;·&nbsp; 👎 = "wrong — here's what to say". Every machine learns it within ~1 minute. Kept: last 30 lessons.</div>
@@ -329,6 +332,6 @@
     <script src="config.js?v=20260918"></script>
     <script src="seed.js?v=20260921"></script>
     <script src="https://cdn.jsdelivr.net/npm/@supabase/supabase-js@2"></script>
-    <script src="app.js?v=20261001"></script>
+    <script src="app.js?v=20261005"></script>
   </body>
 </html>

@@ -71,6 +71,7 @@
     smartFollowupQuietHours: 6,
     smartFollowupGapHours: 24,
     coaching: [], // graded real replies from the Activity tab (👍/👎+correction) — fed into every bot's prompt
+    ownerTeachingOnly: true, // (v0.21.73) MUST match background.js DEFAULTS — the bot answers only from the owner's text
   };
 
   const VIDEO_BUCKET = "subsell-videos"; // Supabase Storage bucket for central demo videos
@@ -88,6 +89,7 @@
     ["offPlatformGuard", "checked"], ["closerMode", "checked"], ["closerIntensity", "value"], ["noExactPrices", "checked"],
     ["visitConfirmEnabled", "checked"], ["visitConfirmAfterMin", "number"],
     ["businessName", "value"], ["businessAddress", "value"], ["businessHoursText", "value"],
+    ["ownerTeachingOnly", "checked"], // (v0.21.73)
     ["businessInfo", "value"], ["instructions", "value"], ["examples", "value"],
     ["closerGoals", "value"], ["priceList", "value"], ["visitConfirmMessage", "value"],
     ["demoVideoDelaySec", "number"], ["demoVideoBetweenSec", "number"],
@@ -112,6 +114,7 @@
   // edit here can ever re-arm them. Mirrors LEGACY_LINK_OFF in background.js.
   const LEGACY_LINK_OFF = { videoLinkFallback: false, videoLinkOptIn: false, videoLinkUrl: "", videoLinkText: "" };
   let settings = Object.assign({}, DEFAULTS); // working copy (preserves loaded advanced fields)
+  const liveSettings = () => settings; // formToFields shadows the name when it reads into a copy
   // (v0.21.56) Nothing may be written to the shared row until THIS page has read
   // it. `settings` starts as pristine DEFAULTS and the Save handler is bound at
   // module evaluation, so a click (or, since auto-save, a keystroke) before the
@@ -142,7 +145,10 @@
       else el.value = settings[id] != null ? settings[id] : "";
     }
   }
-  function formToFields() {
+  // `into` (v0.21.73): read the form into a COPY instead of the working settings —
+  // how the page learns what a save with no edits would write (see snapshotBase).
+  function formToFields(into) {
+    const settings = into || liveSettings();
     for (const [id, kind] of FIELDS) {
       const el = $(id);
       if (!el) continue;
@@ -425,6 +431,8 @@
     if ($("save")) $("save").disabled = false;
     renderAll();
     buildUrl();
+    snapshotBase(); // (v0.21.73) the row as read — what a merge compares this page's edits against
+    loadFleet(); // which computers answer with this teaching (never blocks the load)
     try { // (v0.21.70) the draft offer is in the finally: nothing on this load may clear it first
     // (v0.21.66) A DEAD account — no API key AND nothing it has been taught — is
     // what a blank-form save leaves behind, and what the operator was looking at:
@@ -609,6 +617,133 @@
     el.appendChild(msg); el.appendChild(put); el.appendChild(drop);
   }
 
+  /* ==== TEACHING-MIRROR-BEGIN (v0.21.73) — the same code as background.js; store/smoke-teach.js fails on drift ==== */
+  // What an empty Instructions / Closer-goals box means to the bot when "Answer
+  // only from what I teach" is on: one neutral line each, never a fact about the shop.
+  const OWNER_FALLBACK_TONE = "Reply in the buyer's language (French or English). In French, write casual Québec French and say tu. Keep it short and friendly.";
+  const OWNER_FALLBACK_CLOSE = "The owner wants buyers to come to the shop in person. Invite them when it fits the conversation.";
+  const coachIsRule = (c) => !!c && c.kind !== "good" && (c.note === "always applies" || c.buyer === "(general rule from the boss)");
+  function teachCanon(v) {
+    if (Array.isArray(v)) return v.map(teachCanon);
+    if (v && typeof v === "object") { const o = {}; for (const k of Object.keys(v).sort()) o[k] = teachCanon(v[k]); return o; }
+    return v;
+  }
+  function teachingFingerprint(cfg, wrote) {
+    const c = cfg || {};
+    const t = (k, own) => { const s = c[k] == null ? "" : String(c[k]); return (own && wrote && !wrote[k]) || !s.trim() ? "" : s; };
+    const parts = {
+      only: c.ownerTeachingOnly !== false,
+      name: t("businessName"), address: t("businessAddress"), hours: t("businessHoursText"),
+      info: t("businessInfo", true), instructions: t("instructions", true), close: t("closerGoals", true),
+      examples: t("examples"), prices: t("priceList"),
+      closer: !!c.closerMode, intensity: String(c.closerIntensity || "medium"), noPrices: !!c.noExactPrices, guard: !!c.offPlatformGuard,
+      listings: Array.isArray(c.listings) ? c.listings : [], coaching: Array.isArray(c.coaching) ? c.coaching : [],
+    };
+    const s = JSON.stringify(teachCanon(parts));
+    let h = 0x811c9dc5; // FNV-1a, 32 bit
+    for (let i = 0; i < s.length; i++) { h ^= s.charCodeAt(i); h = Math.imul(h, 0x01000193); }
+    return ("0000000" + (h >>> 0).toString(16)).slice(-8);
+  }
+  /* ==== TEACHING-MIRROR-END ==== */
+
+  /* ---- (v0.21.73) A SAVE THAT LOSES THE RACE MERGES — IT IS NOT DROPPED ----
+   * Every save carries the row stamp this page read, and a save whose stamp is stale
+   * used to be thrown away: the page reloaded the other writer's version and parked
+   * what was typed in a browser draft behind a banner. On the Activity tab that
+   * meant a lesson: 👍 turned into ✓, "Rule taught ✓" flashed, and the lesson was
+   * not in the cloud — any other tab, the phone, or a computer's own save in
+   * between was enough. Now the page re-reads the row, re-applies ONLY what was
+   * changed here on top of the other writer's version, and writes that:
+   *   - a field edited here wins; a field not touched here keeps their value;
+   *   - lists (lessons, listings, follow-ups, videos) merge item by item: what was
+   *     added here is added, what was removed here stays removed, theirs is kept.
+   * `baseConfig` is the row as this page last knew it, in the form a save writes. */
+  let baseConfig = null;
+  const cj = (v) => JSON.stringify(teachCanon(v === undefined ? null : v));
+  const LIST_KEYS = ["listings", "followUps", "videos", "demoVideoUrls", "coaching"];
+  function normalizeForSave(o) {
+    const c = Object.assign({}, o);
+    delete c.enabled; // per-machine
+    for (const k of Object.keys(EXT_DEFAULT_TEXT)) if (!String(c[k] == null ? "" : c[k]).trim()) delete c[k]; // blank = the extension's own line, never ""
+    return Object.assign(c, LEGACY_LINK_OFF);
+  }
+  function snapshotBase() {
+    const b = Object.assign({}, settings);
+    formToFields(b); // exactly what a save with no edits would send
+    baseConfig = JSON.parse(JSON.stringify(normalizeForSave(b)));
+  }
+  function trimCoaching(list) {
+    // (v0.21.55) A standing RULE the boss typed must not be evicted by a run of
+    // thumbs-ups: drop the oldest graded EXAMPLE first, rules only when nothing else is left.
+    const isRule = (c) => c && c.note === "always applies";
+    while (list.length > COACH_MAX) {
+      const i = list.findIndex((c) => !isRule(c));
+      list.splice(i >= 0 ? i : 0, 1);
+    }
+    return list;
+  }
+  function mergeList(base, mine, theirs) {
+    const B = new Set((base || []).map(cj)), M = new Set((mine || []).map(cj));
+    const out = (theirs || []).filter((x) => !(B.has(cj(x)) && !M.has(cj(x)))); // removed here → stays removed
+    const T = new Set(out.map(cj));
+    for (const x of mine || []) if (!B.has(cj(x)) && !T.has(cj(x))) out.push(x); // added here → added
+    return out;
+  }
+  function mergeOverTheirs(base, mine, theirsRaw) {
+    const fresh = Object.assign({}, DEFAULTS, theirsRaw || {});
+    const b = base || {}, m = mine || {};
+    for (const k of new Set(Object.keys(b).concat(Object.keys(m)))) {
+      if (cj(b[k]) === cj(m[k])) continue; // not touched here: their value stands
+      if (LIST_KEYS.includes(k)) fresh[k] = mergeList(b[k], m[k], Array.isArray(fresh[k]) ? fresh[k] : []);
+      else if (k in m) fresh[k] = m[k];
+      else delete fresh[k];
+    }
+    if (Array.isArray(fresh.coaching)) trimCoaching(fresh.coaching);
+    return normalizeForSave(fresh);
+  }
+  async function saveMerged(mine) {
+    if (!baseConfig) return null;
+    for (let attempt = 0; attempt < 3; attempt++) {
+      const got = await client.from("subsell_configs").select("config, config_key, updated_at").maybeSingle();
+      if (got.error || !got.data) return null;
+      const config = mergeOverTheirs(baseConfig, mine, got.data.config || {});
+      let q = client.from("subsell_configs")
+        .update({ config, updated_at: new Date().toISOString() })
+        .eq("user_id", session.user.id);
+      if (got.data.updated_at) q = q.eq("updated_at", got.data.updated_at);
+      const res = await q.select("updated_at");
+      if (res.error) return { error: res.error };
+      if (res.data && res.data.length) return { config, stamp: res.data[0].updated_at || got.data.updated_at };
+    }
+    return null; // lost the race three times running — fall back to reload + draft
+  }
+  // Put the merged row on screen. A box the operator kept typing in while the save
+  // was in flight is left alone (the next save carries it); every other box shows
+  // the merged value, so the other device's edits appear without a reload.
+  function adoptMerged(config, sent) {
+    const now = Object.assign({}, settings);
+    formToFields(now);
+    settings = Object.assign({}, DEFAULTS, config);
+    for (const [id, kind] of FIELDS) {
+      const el = $(id);
+      if (!el) continue;
+      if (cj(now[id]) !== cj(sent[id])) continue; // typed since the save left
+      if (cj(config[id]) === cj(sent[id])) continue; // nothing of theirs in this box
+      if (kind === "checked") el.checked = !!settings[id];
+      else el.value = settings[id] != null ? settings[id] : "";
+    }
+    settings.listings = settings.listings || [];
+    settings.followUps = settings.followUps || [];
+    settings.videos = settings.videos || [];
+    settings.demoVideoUrls = settings.demoVideoUrls || [];
+    settings.coaching = settings.coaching || [];
+    renderListings();
+    renderFollowUps();
+    renderVideos();
+    renderDemoVideos(true);
+    renderCoaching();
+  }
+
   const SYSTEM_SAVE = true; // (v0.21.70) a save this page makes on its own (seed, legacy-link disarm): carries no typed text
   async function saveConfig(quiet, system) {
     // (v0.21.56) never write a config this page has not read (see rowLoaded above)
@@ -618,7 +753,7 @@
       return false;
     }
     formToFields();
-    const clean = Object.assign({}, settings);
+    let clean = Object.assign({}, settings);
     delete clean.enabled; // per-machine
     Object.assign(clean, LEGACY_LINK_OFF); // (v0.21.69) the stale builds' link sender stays off
     // (v0.21.56) OPTIMISTIC CONCURRENCY. Both this page and every extension write
@@ -630,14 +765,27 @@
       .update({ config: clean, updated_at: new Date().toISOString() })
       .eq("user_id", session.user.id);
     if (loadedStamp) q = q.eq("updated_at", loadedStamp);
-    const { data: wrote, error } = await q.select("updated_at");
+    let { data: wrote, error } = await q.select("updated_at");
+    let merged = false;
     if (!error && (!wrote || !wrote.length)) {
-      // Someone (another tab, or a machine's own save) wrote first.
-      if (autoMsg) { autoMsg.textContent = "Someone else saved first — reloading their version"; autoMsg.className = "err"; }
-      flash("Another device saved these settings while you were editing — reloaded theirs. Your text is kept — the banner offers it back.", true);
-      if (!system) keepTypedDraft(); // (v0.21.70) the text on screen is about to be replaced by theirs
-      await loadConfig();
-      return false;
+      // Someone (another tab, the phone, or a machine's own save) wrote first.
+      // (v0.21.73) Merge this page's changes over theirs and write that — a lesson
+      // or a typed line is no longer dropped into a draft the operator must notice.
+      const m = await saveMerged(clean);
+      if (m && m.error) error = m.error;
+      else if (m) {
+        adoptMerged(m.config, clean);
+        clean = m.config;
+        wrote = [{ updated_at: m.stamp }];
+        merged = true;
+      } else {
+        // The row could not be re-read, or three merges in a row lost the race.
+        if (autoMsg) { autoMsg.textContent = "Someone else saved first — reloading their version"; autoMsg.className = "err"; }
+        flash("Another device saved these settings while you were editing — reloaded theirs. Your text is kept — the banner offers it back.", true);
+        if (!system) keepTypedDraft(); // (v0.21.70) the text on screen is about to be replaced by theirs
+        await loadConfig();
+        return false;
+      }
     }
     if (!error && wrote && wrote[0]) loadedStamp = wrote[0].updated_at || loadedStamp;
     if (error) {
@@ -652,11 +800,13 @@
     }
     if (!system && !draftOffered) clearDraft(); // a landed save clears the draft — unless an older offer is still on screen
     hideFixBanner();
+    baseConfig = JSON.parse(JSON.stringify(normalizeForSave(clean))); // (v0.21.73) the row as this page now knows it
+    scheduleFleet(); // …and in a bit over a minute, which computers picked it up
     // Machines on cloud sync re-pull once a minute; the old copy said ~10 min,
     // which is the REMOTE-URL cadence, and made the operator think their edits
     // had not landed. Say the true number and show the clock.
-    if (autoMsg) { autoMsg.textContent = "Saved " + new Date().toLocaleTimeString() + " \u2014 live on every bot within ~1 min (computers on the config link: ~10 min)"; autoMsg.className = "saved"; autoMsg.title = ""; }
-    if (!quiet) flash("Saved \u2713 \u2014 every bot picks this up within ~1 min.");
+    if (autoMsg) { autoMsg.textContent = "Saved " + new Date().toLocaleTimeString() + (merged ? " \u2014 together with a change made on another device" : "") + " \u2014 live on every bot within ~1 min (computers on the config link: ~10 min)"; autoMsg.className = "saved"; autoMsg.title = ""; }
+    if (!quiet) flash(merged ? "Saved \u2713 \u2014 merged with a change made on another device. Every bot picks this up within ~1 min." : "Saved \u2713 \u2014 every bot picks this up within ~1 min.");
     renderTeachPreview();
     return true;
   }
@@ -703,44 +853,76 @@
     const el = $("teachPreview");
     if (!el || el.classList.contains("hidden")) return;
     formToFields();
+    // (v0.21.73) "Answer only from what I teach": the bot gets this page and the
+    // Activity rules/corrections, in this order, plus mechanics — nothing else.
+    const only = settings.ownerTeachingOnly !== false;
+    const has = (v) => !!String(v == null ? "" : v).trim();
     const L = [];
-    L.push("\u2500\u2500 WHO YOU ARE \u2500\u2500");
-    L.push(`You are the auto-reply assistant for "${settings.businessName || "(no name)"}".`);
+    L.push("── WHO YOU ARE ──");
+    L.push(only
+      ? `You answer buyers on Facebook Marketplace for "${settings.businessName || "(no name)"}", writing as the seller.`
+      : `You are the auto-reply assistant for "${settings.businessName || "(no name)"}".`);
     L.push(`Address: ${settings.businessAddress || "(none)"}. Hours: ${settings.businessHoursText || "(none)"}.`);
-    const sec = (title, body) => { if (body && String(body).trim()) { L.push(""); L.push("\u2500\u2500 " + title + " \u2500\u2500"); L.push(String(body).trim()); } };
+    if (only) {
+      L.push("");
+      L.push("The bot is told: everything you know about this business is what the owner wrote below, and nothing else. When a buyer asks something that is not written here, it says it is best confirmed at the shop. It never guesses.");
+    }
+    const sec = (title, body) => { if (body && String(body).trim()) { L.push(""); L.push("── " + title + " ──"); L.push(String(body).trim()); } };
     sec("OWNER — BUSINESS INFO (the bot is told to find the line here that answers the buyer, and use it)", settings.businessInfo);
-    sec("OWNER — INSTRUCTIONS / TONE", settings.instructions);
+    if (has(settings.instructions)) sec("OWNER — INSTRUCTIONS / TONE", settings.instructions);
+    else if (only) sec("INSTRUCTIONS / TONE — the box is empty, so the bot only gets this default", OWNER_FALLBACK_TONE);
     const co = settings.coaching || [];
-    const isRule = (c) => c && c.kind !== "good" && (c.note === "always applies" || c.buyer === "(general rule from the boss)");
-    const rules = co.filter(isRule);
+    const rules = co.filter(coachIsRule);
     if (rules.length) {
       L.push("");
-      L.push("\u2500\u2500 OWNER \u2014 STANDING RULES (orders, at the top of every bot's instructions) \u2500\u2500");
-      for (const c of rules) L.push(`\u2022 ${truncTxt(c.better, 160)}`);
+      L.push("── OWNER — STANDING RULES (orders, at the top of every bot's instructions) ──");
+      for (const c of rules) L.push(`• ${truncTxt(c.better, 160)}`);
     }
-    sec("STARTING PRICES the bot may share", settings.priceList);
-    sec("HOW TO CLOSE", settings.closerMode ? settings.closerGoals : "");
-    sec("EXAMPLE CONVERSATIONS / RULES", settings.examples);
-    const av = (settings.listings || []).filter((l) => l && l.available !== false);
-    if (av.length) {
-      L.push("");
-      L.push("\u2500\u2500 LISTINGS it can quote \u2500\u2500");
-      for (const l of av.slice(0, 20)) L.push(`\u2022 ${l.title || l.model || "item"} ${l.storage || ""} ${l.condition || ""}`.replace(/\s+/g, " ").trim());
-      if (av.length > 20) L.push(`\u2026 and ${av.length - 20} more`);
-    }
-    const graded = co.filter((c) => !isRule(c));
-    if (graded.length) {
-      L.push("");
-      L.push("\u2500\u2500 OWNER \u2014 COACHING FROM REAL CHATS (outranks every style rule) \u2500\u2500");
+    const graded = co.filter((c) => c && !coachIsRule(c));
+    const gradedLines = () => {
       for (const c of graded.slice(-12)) {
         L.push(c.kind === "good"
-          ? `\u2714 answer like this \u2014 "${truncTxt(c.buyer, 70)}" \u2192 "${truncTxt(c.reply, 120)}"`
-          : `\u2718 NOT "${truncTxt(c.bad || "", 60)}" \u2014 say instead: "${truncTxt(c.better, 120)}"${c.note ? "  (" + truncTxt(c.note, 60) + ")" : ""}`);
+          ? `✔ answer like this — "${truncTxt(c.buyer, 70)}" → "${truncTxt(c.reply, 120)}"`
+          : `✘ NOT "${truncTxt(c.bad || "", 60)}" — say instead: "${truncTxt(c.better, 120)}"${c.note ? "  (" + truncTxt(c.note, 60) + ")" : ""}`);
+      }
+      if (graded.length > 12) L.push(`… and ${graded.length - 12} older ones`);
+    };
+    if (only && graded.length) {
+      L.push("");
+      L.push("── OWNER — CORRECTIONS FROM REAL CHATS (when a buyer writes the same thing again, the matching one is also put right beside their message) ──");
+      gradedLines();
+    }
+    sec("STARTING PRICES the bot may share", settings.priceList);
+    const av = (settings.listings || []).filter((l) => l && l.available !== false);
+    const listingLines = () => {
+      if (!av.length) return;
+      L.push("");
+      L.push("── LISTINGS it can quote ──");
+      for (const l of av.slice(0, 20)) L.push(`• ${l.title || l.model || "item"} ${l.storage || ""} ${l.condition || ""}`.replace(/\s+/g, " ").trim());
+      if (av.length > 20) L.push(`… and ${av.length - 20} more`);
+    };
+    if (only) listingLines();
+    if (settings.closerMode) {
+      if (has(settings.closerGoals)) sec(only ? "OWNER — HOW TO CLOSE" : "HOW TO CLOSE", settings.closerGoals);
+      else if (only) sec("HOW TO CLOSE — the box is empty, so the bot only gets this default", OWNER_FALLBACK_CLOSE);
+    }
+    sec("EXAMPLE CONVERSATIONS / RULES", settings.examples);
+    if (!only) {
+      listingLines();
+      if (graded.length) {
+        L.push("");
+        L.push("── OWNER — COACHING FROM REAL CHATS (outranks every style rule) ──");
+        gradedLines();
       }
     }
     L.push("");
-    L.push("\u2500\u2500 plus, built into every bot \u2500\u2500");
-    L.push("An authority order (your text wins over the built-in playbook), a before-you-write lookup step (find the line in YOUR business info that answers the buyer before writing), the current time with every message, the closing playbook, the platform-safety rules (never share a phone number or move off Messenger), the sound-like-a-person rules, and the reply-format rules. Those ship with the extension \u2014 they are not editable here.");
+    L.push("── plus, built into every bot ──");
+    L.push(only
+      ? "Mechanics only: the rule above (your text is all it knows; anything else is “best confirmed at the shop”), the current time with every message, the reply tokens (hand a risky chat to you, note a planned visit), the platform-safety rule when that switch is on (never share a phone number or a link), your price setting, and a short how-to-write part (short, casual, no AI tells) that your own instructions override. There is NO built-in sales playbook and no canned sentence in this mode."
+      : "An authority order (your text wins over the built-in playbook), a before-you-write lookup step (find the line in YOUR business info that answers the buyer before writing), the current time with every message, the closing playbook, the platform-safety rules (never share a phone number or move off Messenger), the sound-like-a-person rules, and the reply-format rules. Those ship with the extension — they are not editable here.");
+    L.push("");
+    L.push("── teaching code ──");
+    L.push("What is SAVED right now has the code " + savedFingerprint() + ". A computer that answers with this teaching reports the same code — the line under this panel and the Activity tab name the computers that do not.");
     el.textContent = L.join("\n");
   }
   if ($("teachPreviewBtn")) {
@@ -759,13 +941,117 @@
       const t = ($("ruleText").value || "").trim();
       if (!t) return;
       $("addRule").disabled = true;
-      await addCoaching({ kind: "bad", buyer: "(general rule from the boss)", bad: "", better: t, note: "always applies" });
-      $("ruleText").value = "";
+      const saved = await addCoaching({ kind: "bad", buyer: "(general rule from the boss)", bad: "", better: t, note: "always applies" });
       $("addRule").disabled = false;
-      flash("Rule taught \u2713 \u2014 every bot has it within ~1 min.");
+      // (v0.21.73) say what happened: this used to flash "Rule taught ✓" whatever the save did
+      if (saved) { $("ruleText").value = ""; flash("Rule taught \u2713 \u2014 every bot has it within ~1 min."); }
+      else flash("The rule was NOT saved \u2014 the line at the bottom of the page says why. Your text is still in the box.", true);
     };
     $("addRule").addEventListener("click", submitRule);
     $("ruleText").addEventListener("keydown", (e) => { if (e.key === "Enter") submitRule(); });
+  }
+
+  /* ---- (v0.21.73) WHICH COMPUTERS ANSWER WITH THIS TEACHING ----
+   * "Saved — live on every bot within ~1 min" was a promise nobody could check.
+   * Each extension now writes one hidden Activity row (kind "teach") whenever the
+   * teaching it answers with changes, carrying the code of that teaching. The
+   * code of the row THIS page saved is computed the same way (teachingFingerprint),
+   * so a computer that is behind — a dead cloud login, an old build, a config link
+   * that has not refreshed — is named here, instead of being discovered from odd
+   * replies days later. */
+  let fleetTimer = null;
+  // A computer is known by its install id (the "#PC-xxxxx" tail, or the whole label
+  // when none was typed); rows from before v0.21.71 carry only the typed label.
+  const machineKey = (m) => { const s = String(m || ""); const id = s.match(/#(PC-[a-z0-9]{3,})\s*$/i) || s.match(/^(PC-[a-z0-9]{3,})(?![a-z0-9])/i); return id ? id[1].toLowerCase() : s.replace(/\s*·\s*v[\d.]+\s*$/, "").trim().toLowerCase(); };
+  const machineShow = (m) => String(m || "—").replace(/\s*#PC-[a-z0-9]+\s*$/i, "");
+  function savedFingerprint() { return teachingFingerprint(Object.assign({}, DEFAULTS, baseConfig || {}), null); }
+  function scheduleFleet() {
+    clearTimeout(fleetTimer);
+    fleetTimer = setTimeout(loadFleet, 75000); // a computer pulls about once a minute
+    if (fleetTimer && fleetTimer.unref) fleetTimer.unref(); // (a test run must not be held open by it)
+  }
+  // (The report reads "teaching <8 hex>". If teachingFingerprint ever takes other
+  // inputs, change that word too — a build reporting the old way must read as
+  // "cannot report", never as "behind".)
+  // Pure: the rows in, five lists out. `teachRows` = kind "teach"; `seenRows` = any
+  // other recent row (a message, a video). `cur` = the code of the row AS IT IS IN
+  // THE CLOUD and `changedAt` = that row's own stamp — never this page's copy,
+  // which another device may have overtaken. All times but `now` are the
+  // database's clock, so "behind" does not depend on this browser's.
+  //   ok      its latest report is the saved teaching
+  //   behind  it sent a message (or a report) more than 12 min after the teaching
+  //           changed and still holds another code (cloud sync pulls every minute,
+  //           the config link every ten) — it is answering buyers with old teaching
+  //   syncing the change is less than 12 min old
+  //   idle    it has not sent anything since the change (asleep, closed, quiet)
+  //   silent  it sends messages but has never reported: a build before v0.21.73
+  function fleetStatus(teachRows, seenRows, cur, now, changedAt) {
+    const WEEK = 7 * 24 * 3600 * 1000, GRACE = 12 * 60 * 1000;
+    const byKey = {};
+    const touch = (m, at) => {
+      const k = machineKey(m);
+      if (!k || /^dashboard test/i.test(String(m))) return null;
+      const e = (byKey[k] = byKey[k] || { key: k, machine: m, lastAt: 0, seenAt: 0, fp: null, fpAt: 0 });
+      if (at >= e.lastAt) { e.lastAt = at; e.machine = m; }
+      return e;
+    };
+    for (const r of teachRows || []) {
+      const at = Date.parse(r.created_at) || 0;
+      const fp = (String(r.bot_text || "").match(/teaching ([0-9a-f]{8})/) || [])[1];
+      const e = touch(r.machine, at);
+      if (e && fp && at >= e.fpAt) { e.fp = fp; e.fpAt = at; }
+    }
+    for (const r of seenRows || []) {
+      const at = Date.parse(r.created_at) || 0;
+      const e = touch(r.machine, at);
+      if (e && at > e.seenAt) e.seenAt = at;
+    }
+    const out = { ok: [], syncing: [], behind: [], idle: [], silent: [] };
+    for (const e of Object.values(byKey)) {
+      if (now - e.lastAt > WEEK) continue; // nobody has heard from it in a week: retired, not behind
+      if (!e.fp) { if (e.seenAt) out.silent.push(e); }
+      else if (e.fp === cur) out.ok.push(e);
+      else if (changedAt && Math.max(e.seenAt, e.fpAt) - changedAt > GRACE) out.behind.push(e); // it worked, or reported, after the change — on other teaching
+      else if (changedAt && now - changedAt < GRACE) out.syncing.push(e);
+      else out.idle.push(e);
+    }
+    return out;
+  }
+  function renderFleet(st, cur) {
+    const total = st.ok.length + st.syncing.length + st.behind.length + st.idle.length + st.silent.length;
+    const when = (t) => (t ? new Date(t).toLocaleString() : "?");
+    const lines = [];
+    if (!total) lines.push("No computer has reported its teaching yet. Each one reports the first time it syncs after updating to v0.21.73.");
+    else {
+      lines.push((st.ok.length === total ? "✓ " : "") + "Computers answering with the teaching saved here: " + st.ok.length + " of " + total + " (code " + cur + ").");
+      for (const e of st.behind) lines.push("⚠ " + machineShow(e.machine) + " kept answering buyers with OLDER teaching after your last change (it last took a change on " + when(e.fpAt) + "). That computer has lost its cloud login: open the extension’s Settings on it and sign in again.");
+      for (const e of st.syncing) lines.push("… " + machineShow(e.machine) + " is picking up your last change.");
+      if (st.idle.length) lines.push("· Not active since your last change, they take it when they next sync: " + st.idle.map((e) => machineShow(e.machine)).join(", ") + ".");
+      for (const e of st.silent) lines.push("? " + machineShow(e.machine) + " runs an older build that cannot report its teaching. It updates by itself; “Update now” in the extension popup on that computer does it at once.");
+    }
+    for (const id of ["teachFleet", "teachFleetBiz"]) {
+      const el = $(id);
+      if (!el) continue;
+      el.style.whiteSpace = "pre-line";
+      el.className = st.behind.length ? "err" : "hint";
+      el.textContent = lines.join("\n");
+    }
+  }
+  async function loadFleet() {
+    if (!client || !session || !rowLoaded) return;
+    try {
+      // The row as it is in the cloud right now — another device may have saved since this page did.
+      const row = await client.from("subsell_configs").select("config, updated_at").maybeSingle();
+      if (row.error || !row.data) return;
+      const cur = teachingFingerprint(Object.assign({}, DEFAULTS, row.data.config || {}), null);
+      const t = await client.from("subsell_messages").select("created_at, machine, bot_text")
+        .eq("kind", "teach").order("created_at", { ascending: false }).limit(200);
+      if (t.error) return; // no Activity table yet: nothing to say
+      const since = new Date(Date.now() - 48 * 3600 * 1000).toISOString();
+      const s = await client.from("subsell_messages").select("created_at, machine")
+        .neq("kind", "claim").neq("kind", "teach").gte("created_at", since).order("created_at", { ascending: false }).limit(300);
+      renderFleet(fleetStatus(t.data || [], s.error ? [] : s.data || [], cur, Date.now(), Date.parse(row.data.updated_at || "") || 0), cur);
+    } catch (e) { /* a status line must never break the page */ }
   }
 
   /* ---------------- activity log (combined feed across all machines) ---------------- */
@@ -805,20 +1091,16 @@
       el.appendChild(row);
     });
   }
+  // Returns whether the lesson REACHED THE CLOUD (v0.21.73) — callers used to show
+  // ✓ whatever the save did, so a refused or conflicting save looked taught.
   async function addCoaching(item) {
     settings.coaching = settings.coaching || [];
-    settings.coaching.push(Object.assign({ at: Date.now() }, item));
-    // (v0.21.55) A standing RULE the boss typed ("never quote an exact price") must
-    // not be evicted by a run of thumbs-ups on ordinary replies — plain FIFO did
-    // exactly that. Drop the oldest graded EXAMPLE first; only start dropping rules
-    // when the list is nothing but rules.
-    const isRule = (c) => c && c.note === "always applies";
-    while (settings.coaching.length > COACH_MAX) {
-      const i = settings.coaching.findIndex((c) => !isRule(c));
-      settings.coaching.splice(i >= 0 ? i : 0, 1);
-    }
+    const same = (a) => a && a.kind === item.kind && (a.buyer || "") === (item.buyer || "") && (a.reply || "") === (item.reply || "") &&
+      (a.bad || "") === (item.bad || "") && (a.better || "") === (item.better || "") && (a.note || "") === (item.note || "");
+    if (!settings.coaching.some(same)) settings.coaching.push(Object.assign({ at: Date.now() }, item)); // a retry after a failed save must not add it twice
+    trimCoaching(settings.coaching); // rules are evicted last (v0.21.55)
     renderCoaching();
-    await saveConfig();
+    return await saveConfig();
   }
 
   async function loadActivity() {
@@ -832,6 +1114,7 @@
       .from("subsell_messages")
       .select("created_at, sent_at, machine, thread_name, kind, buyer_text, bot_text")
       .neq("kind", "claim")
+      .neq("kind", "teach") // (v0.21.73) a computer's teaching receipt — shown in the line above the feed, never as a message
       .order("created_at", { ascending: false })
       .limit(300);
     if (error) {
@@ -846,14 +1129,15 @@
     // All-time + today totals (cheap head counts).
     let total = rows.length, today = 0;
     try {
-      const all = await client.from("subsell_messages").select("id", { count: "exact", head: true }).neq("kind", "claim");
+      const all = await client.from("subsell_messages").select("id", { count: "exact", head: true }).neq("kind", "claim").neq("kind", "teach");
       if (all.count != null) total = all.count;
       const start = new Date(); start.setHours(0, 0, 0, 0);
-      const td = await client.from("subsell_messages").select("id", { count: "exact", head: true }).neq("kind", "claim").gte("created_at", start.toISOString());
+      const td = await client.from("subsell_messages").select("id", { count: "exact", head: true }).neq("kind", "claim").neq("kind", "teach").gte("created_at", start.toISOString());
       if (td.count != null) today = td.count;
     } catch (e) { /* counts are best-effort */ }
 
     totalsEl.innerHTML = `<b>${total}</b> messages all-time &nbsp;·&nbsp; <b>${today}</b> today &nbsp;·&nbsp; showing latest ${rows.length}`;
+    loadFleet(); // (v0.21.73) which computers answer with the teaching saved here
 
     const byMachine = {};
     for (const r of rows) { const m = r.machine || "—"; byMachine[m] = (byMachine[m] || 0) + 1; }
@@ -892,8 +1176,9 @@
         up.type = "button"; up.textContent = "👍"; up.title = "Good — answer like this";
         up.addEventListener("click", async () => {
           up.disabled = true;
-          await addCoaching({ kind: "good", buyer: truncTxt(r.buyer_text, 200), reply: truncTxt(r.bot_text, 300) });
-          up.textContent = "✓";
+          const saved = await addCoaching({ kind: "good", buyer: truncTxt(r.buyer_text, 200), reply: truncTxt(r.bot_text, 300) });
+          up.textContent = saved ? "✓" : "✗";
+          if (!saved) { up.disabled = false; up.title = "NOT saved — the line at the bottom of the page says why. Click to try again."; }
         });
         const down = document.createElement("button");
         down.type = "button"; down.textContent = "👎"; down.title = "Wrong — correct it";
@@ -917,14 +1202,15 @@
             const better = ta.value.trim();
             if (!better) { ta.focus(); return; }
             ok.disabled = true;
-            await addCoaching({
+            const saved = await addCoaching({
               kind: "fix",
               buyer: truncTxt(r.buyer_text, 200),
               bad: truncTxt(r.bot_text, 200),
               better: truncTxt(better, 300),
               note: truncTxt(note.value.trim(), 120),
             });
-            ftr.remove();
+            if (saved) ftr.remove();
+            else { ok.disabled = false; ok.textContent = "NOT saved — try again"; } // the correction stays in the box
           });
           const cancel = document.createElement("button");
           cancel.type = "button"; cancel.textContent = "Cancel"; cancel.className = "danger";

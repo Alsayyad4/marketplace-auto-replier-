@@ -9,7 +9,26 @@ all chrome.debugger/CDP work) + Supabase dashboard in docs/. Live branch:
   permissions ships OFF by default behind a cloud setting and goes to ONE machine first.
 - The operator wants zero manual steps in normal operation.
 
-## Known state (v0.21.72)
+## Known state (v0.21.73)
+- TEACHING (.73): THE OWNER IS THE ONLY TEACHER. `ownerTeachingOnly` (a NEW key, default
+  on) → `buildOwnerPrompt` (background.js): the owner's sections first, in tags (info,
+  instructions, rules, corrections, prices, listings, closing goal, examples), a contract
+  ("this text is all you know; a gap is 'best confirmed at the shop', never a guess"),
+  then mechanics only — NO playbook, NO phrasebook, and an unwritten Instructions /
+  Closer-goals box is one neutral line (`settings.ownerWrote`, set by getSettings), never
+  this file's DEFAULTS text. Off = the .72 prompt byte for byte. `lessonFor` puts a graded
+  lesson whose buyer text matches the incoming message beside it in the USER turn.
+  THE CHAT'S TITLE ("Name · listing headline") is no longer read as a line of the chat:
+  content.js `labelLike` drops UNPAINTED title blocks at the read (`legacyKey` keeps
+  older dedupe keys valid — an update must never re-answer a chat); background
+  `isChatTitle` / `dropTitleLines` is the second wall. Every machine reports the code of
+  the teaching it answers with (`noteTeaching` → hidden Activity row kind "teach"); the
+  dashboard computes the same code (`teachingFingerprint`, mirrored in docs/app.js) and
+  names the computers that are behind. A dashboard save that loses the stamp race MERGES
+  (`saveMerged`: fields edited here win, lists merge item by item) instead of dropping
+  into a draft, and 👍 / Save lesson / Teach it show the real save result.
+  `store/smoke-teach.js`, `store/smoke-merge.js`. 🩺 `teaching:` line (mode, fp, sizes);
+  open chat `title=known dropped=N`. Field-unverified: judge from Activity rows.
 - CLIPS (.72): each chat has a CLIP LEDGER (`videoClips[chatId] = {s, t}`: sent /
   handed over unconfirmed, by clip identity `clipIdsOf` — helper block above
   `maybeSendVideo`, `store/smoke-clips.js`). The loop steps over held clips
@@ -54,11 +73,11 @@ all chrome.debugger/CDP work) + Supabase dashboard in docs/. Live branch:
   dashboard does the same on open. Unreachable: a stale machine whose cloud session
   died (frozen copy) — needs a re-login or Load unpacked. Never ship `true` again;
   `store/smoke-linkoff.js`.
-- Teaching (.68): `buildSystemPrompt` puts the owner's text first with a stated
-  authority order, renders Activity-tab RULES at the top as orders (not as
-  corrections), adds a silent BEFORE-YOU-WRITE lookup step, and `nowLine()` puts
-  the clock in the USER turn only (system prompt stays byte-identical = cache).
-  `store/smoke-prompt.js` locks this in. Operator: engine + video untouched.
+- Playbook prompt (.68 — since .73 ONLY when `ownerTeachingOnly` is off): owner's text
+  first with a stated authority order, Activity RULES at the top as orders, a
+  BEFORE-YOU-WRITE lookup step, the 12-move closer playbook, the phrasebook padding to
+  Haiku's 4096-token cache floor. `nowLine()` puts the clock in the USER turn only (both
+  modes). `store/smoke-prompt.js` locks this mode in.
 - The periodic alarms are `ensureAlarm()` (create-if-absent): a top-level
   `chrome.alarms.create` re-ran on every worker wake and reset the 10-min updater
   and remote-config alarms forever. Machines still on ≤ .50 must update ONCE by hand
@@ -81,3 +100,8 @@ all chrome.debugger/CDP work) + Supabase dashboard in docs/. Live branch:
 ## Cheap work
 - Read with `grep -n` / `sed -n` ranges; the two JS files are 8k lines — never dump them.
 - `node --check <file>` before any commit. No multi-agent workflows.
+- Shell trap on the owner's PC: a Bash heredoc turns two backslashes into one, and the
+  Write tool turns a `\u` escape into the character itself. Spell such strings with
+  `String.fromCharCode(...)` or a `\p{...}` class, and grep the diff for backslashes.
+  `git stash` / a checkout rewrites the working files as CRLF (autocrlf): do not stash;
+  if it happened, turn the modified files back to LF with node before testing or zipping.

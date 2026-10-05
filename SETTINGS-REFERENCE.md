@@ -48,6 +48,7 @@ endpoint serves that object to the extension.
 
 | Field | id | Type | Default | What it does |
 |---|---|---|---|---|
+| Answer only from what I teach | `ownerTeachingOnly` | bool | `true` | (v0.21.73) On: the prompt is built from what the owner wrote (this tab + the Activity rules/corrections) plus mechanics only: no built-in sales playbook, no phrasebook, no fact the owner never wrote. An empty Instructions / Closer-goals box then means one neutral line (shown in the teaching preview), never the extension's DEFAULTS text. Off: the v0.21.72 prompt with the built-in playbook. |
 | Business name | `businessName` | string | `SubSell` | Used in the system prompt. |
 | Address | `businessAddress` | string | `757 Rue Beaubien E, Montréal` | Shown in prompt. |
 | Hours (text) | `businessHoursText` | string | `9AM–10PM, 7 days` | Human-readable hours in prompt. |
@@ -88,6 +89,19 @@ list. There is no second place to teach the bot.
 - **“Show me exactly what the bot is being taught”** renders your fields in the order Claude gets
   them. It does not reproduce the built-in sales playbook, platform-safety rules or humanization
   rules — those ship in `background.js` and are not editable from the dashboard.
+- **(v0.21.73) The owner is the only teacher.** With `ownerTeachingOnly` on (the default) the
+  prompt is the owner's sections in this order — business info, instructions, standing rules,
+  corrections, prices, listings, closing goal, examples — then mechanics (reply tokens, platform
+  safety, how to write). The model is told that text is ALL it knows about the shop and that an
+  uncovered question is "best confirmed at the shop", never a guess. A correction or 👍 whose
+  buyer text matches the incoming message (same words, give or take) is also placed beside the
+  message in the user turn (`lessonFor`).
+- **(v0.21.73) Teaching code.** Each extension reports a short code of the teaching it answers
+  with (a hidden Activity row, kind `teach`); the dashboard computes the same code for the saved
+  row and names, under the preview button and on the Activity tab, the computers that are behind.
+- **(v0.21.73) A save that loses the race merges.** A stale-stamp save re-reads the row and
+  re-applies only what was changed on this page (lists merge item by item) instead of being
+  dropped into a browser draft; 👍 / Save lesson / Teach it now report whether the save landed.
 - **Coaching** (max 30): 👍 stores the reply as a model answer, 👎 stores your correction, and the
   “Teach a rule” box stores a standing rule tagged `note:"always applies"`. Rules are evicted last.
 ## Tab: Videos
