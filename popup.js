@@ -35,7 +35,7 @@
       // Show the cap that is actually ENFORCED (s.fullDailyCap). s.dailyCap is the
       // warm-up display target, which confused ("34 / 10") — warm-up isn't enforced.
       $("day").textContent = `${s.dayCount} / ${s.fullDailyCap != null ? s.fullDailyCap : s.dailyCap}`;
-      $("hours").textContent = s.withinHours ? "open ✓" : "closed";
+      $("hours").textContent = s.withinHours ? "yes ✓" : "paused (reply window)"; // (v0.21.75) 24/7 unless replyWindowOnly
       $("hours").className = s.withinHours ? "ok" : "warn";
       // Activity-log (central) health — so an empty Activity tab is self-explaining.
       const cl = $("cloudlog");

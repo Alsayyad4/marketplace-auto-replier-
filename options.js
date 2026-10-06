@@ -16,8 +16,9 @@
     dailyCap: 200,
     wpmMin: 38,
     wpmMax: 78,
-    businessHoursEnabled: true,
-    businessHoursStart: 9,
+    replyWindowOnly: false, // (v0.21.75) buyers are answered 24/7 unless this is on
+    businessHoursEnabled: true, // legacy, read by builds before v0.21.75 only
+    businessHoursStart: 9, // the window for messages the bot STARTS
     businessHoursEnd: 22,
     businessName: "SubSell",
     businessAddress: "757 Rue Beaubien E, Montréal",
@@ -89,7 +90,7 @@
     ["dailyCap", "number"],
     ["wpmMin", "number"],
     ["wpmMax", "number"],
-    ["businessHoursEnabled", "checked"],
+    ["replyWindowOnly", "checked"], // (v0.21.75)
     ["businessHoursStart", "number"],
     ["businessHoursEnd", "number"],
     ["businessName", "value"],

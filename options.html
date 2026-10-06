@@ -148,10 +148,10 @@
           <div><label>Typing WPM min</label><input type="number" id="wpmMin" min="1" /></div>
           <div><label>Typing WPM max</label><input type="number" id="wpmMax" min="1" /></div>
         </div>
-        <label class="check"><input type="checkbox" id="businessHoursEnabled" /> Respect business hours</label>
+        <label class="check"><input type="checkbox" id="replyWindowOnly" /> Reply to buyers only between these hours <span class="hint">off = buyers are answered 24/7; the hours still hold back the follow-ups the bot starts</span></label>
         <div class="inline">
-          <div><label>Open hour (0–23)</label><input type="number" id="businessHoursStart" min="0" max="23" /></div>
-          <div><label>Close hour (0–23)</label><input type="number" id="businessHoursEnd" min="0" max="23" /></div>
+          <div><label>Follow-ups from (0–23)</label><input type="number" id="businessHoursStart" min="0" max="23" /></div>
+          <div><label>Follow-ups until (0–23)</label><input type="number" id="businessHoursEnd" min="0" max="23" /></div>
         </div>
 
         <hr />

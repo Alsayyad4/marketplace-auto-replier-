@@ -157,11 +157,12 @@
           </div>
 
           <hr />
-          <label class="check"><input type="checkbox" id="businessHoursEnabled" /> Respect business hours</label>
+          <p class="hint" style="margin:0 0 6px;"><b>Buyers are answered at any hour.</b> The two hours below only hold back the messages the bot <i>starts</i> (visit checks and follow-ups): one due at night waits for the opening hour instead of being sent or lost. The bot still knows your opening hours and the clock, so a reply at 23:00 can say “on est fermé là, passe demain”.</p>
           <div class="inline">
-            <div><label>Open hour (0–23)</label><input type="number" id="businessHoursStart" min="0" max="23" /></div>
-            <div><label>Close hour (0–23)</label><input type="number" id="businessHoursEnd" min="0" max="23" /></div>
+            <div><label>Follow-ups from (0–23)</label><input type="number" id="businessHoursStart" min="0" max="23" /></div>
+            <div><label>Follow-ups until (0–23)</label><input type="number" id="businessHoursEnd" min="0" max="23" /></div>
           </div>
+          <label class="check"><input type="checkbox" id="replyWindowOnly" /> Reply to buyers only between these hours too <span class="hint">off = the bot answers buyers 24/7 (recommended: a buyer who writes at midnight is gone by morning)</span></label>
 
           <hr />
           <label class="check"><input type="checkbox" id="humanCadence" /> Human cadence <span class="hint">random breaks + occasional skipped cycles</span></label>
@@ -288,6 +289,10 @@
                         <div class="hint">Videos are sent instantly, all together in one message, the moment a buyer writes — no waiting, nothing to configure.</div>
           </div>
           <div id="demoVideoList" class="hint" style="margin-top:8px;">No central videos yet.</div>
+          <div style="margin-top:10px;padding:10px;border:1px solid #444;border-radius:8px;">
+            <b>Where the videos went, last 7 days</b> <span class="hint">read from what every computer logged in the Activity tab — a chat that got more clips than the list holds, two computers sending into one chat, a chat still short of a clip an hour later. Use “Copy report” below and paste it to Claude when something looks wrong.</span>
+            <div id="videoReport" class="hint" style="margin-top:6px;">Open this tab while signed in to load.</div>
+          </div>
 
           <hr />
           <p class="hint">The demo is sent as a <b>video file</b> in the chat, or not at all. The bot never posts a link to it — a link reads as a scam to buyers and Marketplace flags accounts for it.</p>
@@ -341,9 +346,14 @@
 
       <div id="fixBanner" class="hint hidden" style="padding:10px 18px;border-top:2px solid #c0392b;background:Canvas;color:CanvasText;font-size:13px;display:flex;flex-wrap:wrap;gap:8px;align-items:center;"></div>
       <div id="draftBanner" class="hint hidden" style="padding:10px 18px;border-top:2px solid #d98c00;background:Canvas;color:CanvasText;font-size:13px;display:flex;flex-wrap:wrap;gap:8px;align-items:center;"></div>
+      <div id="reportBox" class="hidden" style="padding:10px 18px;border-top:1px solid #444;">
+        <div class="hint" style="margin-bottom:4px;">Copy was blocked by the browser — select all the text below (click in it, Ctrl+A, Ctrl+C) and paste it to Claude. <button id="reportClose" type="button" style="margin-left:8px;">Close</button></div>
+        <textarea id="reportText" readonly style="width:100%;height:160px;font:12px/1.4 monospace;"></textarea>
+      </div>
       <div class="bar">
         <button id="save" class="primary" disabled title="Loading your settings…">Save to cloud</button>
         <button id="reload">Reload</button>
+        <button id="copyReport" title="Gathers computers, cost, videos, unanswered questions, the teaching and the last 20 messages as text — no key, no password">Copy report</button>
         <span id="savedMsg" class="saved"></span>
         <span id="autoSaveMsg" class="hint" style="margin-left:auto;">Saves automatically as you type.</span>
       </div>

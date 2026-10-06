@@ -124,7 +124,7 @@ const isOff = (c) => Object.keys(OFF).every((k) => c[k] === OFF[k]);
   ok(/videoLinkFallback:\s*false/.test(optSrc), "options.js DEFAULTS ships videoLinkFallback: false");
   ok(/videoLinkFallback:\s*false/.test(appSrc), "docs/app.js DEFAULTS ships videoLinkFallback: false");
   ok(!/^\s*videoLinkFallback:\s*true,/m.test(src + "\n" + optSrc + "\n" + appSrc), "no copy of DEFAULTS still says true (as a key, not in a comment)");
-  ok(/Object\.assign\(clean, LEGACY_LINK_OFF\)/.test(appSrc), "the dashboard's saveConfig clamps the four keys on every write");
+  ok(/Object\.assign\(clean, LEGACY_LINK_OFF, LEGACY_GATE_OFF\)/.test(appSrc), "the dashboard's saveConfig clamps the four keys on every write");
   ok(/Object\.assign\(clean, LEGACY_LINK_OFF\)/.test(src), "the extension's cloudPush clamps the four keys on every write");
   const ext = fs.readdirSync(root).filter((f) => /\.(js|html)$/.test(f)).map((f) => fs.readFileSync(path.join(root, f), "utf8")).join("\n");
   ok(!/function sendVideoLink|sendVideoLink\s*=|VIDEO_LINK_TEXT_DEFAULT\s*=|\{link\}/.test(ext), "no link sender is defined anywhere in the shipped extension files");

@@ -26,9 +26,10 @@ endpoint serves that object to the extension.
 | When that cap is hit | `convoCapBehavior` | enum | `stop` | `stop` (go quiet) or `notify` (flag the chat as needs-you in the popup). |
 | Typing WPM min | `wpmMin` | number | `38` | Lower bound of human typing speed — drives the typing pace above (v0.21.71). |
 | Typing WPM max | `wpmMax` | number | `78` | Upper bound of human typing speed — drives the typing pace above (v0.21.71). |
-| Respect business hours | `businessHoursEnabled` | bool | `true` | Only reply between the hours below. |
-| Open hour (0–23) | `businessHoursStart` | number | `9` | Start of business hours. |
-| Close hour (0–23) | `businessHoursEnd` | number | `22` | End of business hours. |
+| Reply to buyers only between these hours too | `replyWindowOnly` | bool | `false` | (v0.21.75) Off = buyers are answered at any hour. On = replies keep to the window below as well. |
+| Follow-ups from (0–23) | `businessHoursStart` | number | `9` | Start of the window for messages the bot STARTS (visit checks, timed and smart follow-ups). One due outside it is parked until the window opens. |
+| Follow-ups until (0–23) | `businessHoursEnd` | number | `22` | End of that window (exclusive). |
+| *(legacy, no field)* | `businessHoursEnabled` | bool | `true` | Read only by builds before v0.21.75 (their reply gate). The dashboard writes it `false` on every save and once on open, so those builds stop gating. Nothing in the current build reads it. |
 | Human cadence | `humanCadence` | bool | `true` | Random breaks + occasional skipped cycles. |
 | Skip chance (0–1) | `skipChance` | number | `0.12` | Chance to skip a cycle. |
 | Break chance / cycle (0–1) | `breakChance` | number | `0.05` | Chance per cycle to start a break. |
@@ -110,6 +111,14 @@ list. There is no second place to teach the bot.
   **Teach these** (Activity tab) lists the questions the bots could not answer from your text,
   one box each. Under the model list the page shows what the AI cost (measured by the computers)
   and an estimate per model for the teaching saved now.
+- **(v0.21.75) Buyers answered at any hour; evidence for the video complaint.** The old
+  "Respect business hours" gate is gone (see `replyWindowOnly`); the hours now window the
+  messages the bot starts. The Activity tab's computers line names a computer that has **no cloud
+  login** (it logs but cannot read the Activity log, so it can answer or send the demo a second
+  time — sign in on it). The Videos tab shows **Where the videos went, last 7 days** (chats that
+  look double-served, chats still short of a clip and who answered them since). The toolbar's
+  **Copy report** gathers the computers line, the cost, the video report, the unanswered
+  questions, the teaching text and the last 20 messages as text to paste to support — no key.
 - **Coaching** (120 graded answers + rules): 👍 stores the reply as a model answer, 👎 stores your correction, and the
   “Teach a rule” box stores a standing rule tagged `note:"always applies"`. Rules are evicted last.
 ## Tab: Videos

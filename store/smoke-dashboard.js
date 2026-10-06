@@ -113,9 +113,9 @@ const ok = (cond, msg) => { console.log((cond ? "  PASS  " : "  FAIL  ") + msg);
   // send the demo as a raw LINK unless it is exactly false — a save here must never re-arm them.
   ok(/^\s*videoLinkFallback:\s*false,/m.test(src) && !/^\s*videoLinkFallback:\s*true,/m.test(src),
      "dashboard DEFAULTS ship videoLinkFallback: false (the stale builds' link gate)");
-  ok(/delete clean\.enabled;[^\n]*\n\s*Object\.assign\(clean, LEGACY_LINK_OFF\)/.test(src),
-     "saveConfig clamps the four legacy link keys off on every write");
-  ok(/if \(legacyLinkArmed\(data\.config \|\| \{\}\)\) \{\s*\n\s*const saved = await saveConfig\(true, SYSTEM_SAVE\)/.test(src) &&
+  ok(/delete clean\.enabled;[^\n]*\n\s*Object\.assign\(clean, LEGACY_LINK_OFF, LEGACY_GATE_OFF\)/.test(src),
+     "saveConfig clamps the four legacy link keys off on every write (and, since v0.21.75, the old reply-hours gate)");
+  ok(/if \(legacyLinkArmed\(data\.config \|\| \{\}\) \|\| legacyGateArmed\(data\.config \|\| \{\}\)\) \{\s*\n\s*const saved = await saveConfig\(true, SYSTEM_SAVE\)/.test(src) &&
      /function legacyLinkArmed\(cfg\)/.test(src) && /videoLinkFallback !== false \|\| cfg\.videoLinkOptIn === true/.test(src),
      "loadConfig disarms an armed row the moment the page opens (quiet save), with the same test as background.js");
 
@@ -135,7 +135,7 @@ const ok = (cond, msg) => { console.log((cond ? "  PASS  " : "  FAIL  ") + msg);
   ok(/\} finally \{\s*\n\s*offerDraft\(\);/.test(src) && src.indexOf("offerDraft();") > src.indexOf("legacyLinkArmed(data.config || {})) {"),
      "loadConfig offers the draft back LAST (finally), after the seed / legacy-link load-time saves");
   ok(/accountIsDead\(data\.config \|\| \{\}\) && window\.SUBSELL_SEED\) \{[\s\S]{0,200}saveConfig\(true, SYSTEM_SAVE\)/.test(src) &&
-     /legacyLinkArmed\(data\.config \|\| \{\}\)\) \{\s*\n\s*const saved = await saveConfig\(true, SYSTEM_SAVE\)/.test(src) &&
+     /legacyGateArmed\(data\.config \|\| \{\}\)\) \{\s*\n\s*const saved = await saveConfig\(true, SYSTEM_SAVE\)/.test(src) &&
      /autoPending = false; await saveConfig\(true\);/.test(src),
      "the seed and legacy-link load-time saves are SYSTEM saves; the keystroke auto-save stays a normal quiet save (runtime proof: store/smoke-draft.js)");
   ok(/id="draftBanner"[^>]*class="hint hidden"/.test(html), "the draft offer has its own element, so the fix banner cannot replace it");

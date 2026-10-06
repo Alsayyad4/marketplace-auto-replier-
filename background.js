@@ -41,9 +41,19 @@ const DEFAULTS = {
   dailyCap: 200,
   wpmMin: 38,
   wpmMax: 78,
-  businessHoursEnabled: true,
-  businessHoursStart: 9, // 9 AM
-  businessHoursEnd: 22, // 10 PM
+  // (v0.21.75) Buyers are answered AT ANY HOUR (operator, Oct 6 2026: "remove business
+  // hours, need the machine run all times"). The two hours below are now the window
+  // for messages the BOT starts (visit checks, timed and smart follow-ups): outside
+  // it they wait for the next opening instead of being dropped. `replyWindowOnly`
+  // (a NEW key, default off — the old `businessHoursEnabled` is stored as true on
+  // every account and is ignored by this build; the dashboard writes it false for
+  // the builds that still read it) brings the old reply gate back for anyone who
+  // wants it. The model still gets the opening hours as text and the clock, so a
+  // 23:00 reply says "on est fermé là, passe demain" instead of staying silent.
+  replyWindowOnly: false,
+  businessHoursEnabled: true, // legacy, read by builds before v0.21.75 only
+  businessHoursStart: 9, // 9 AM — start of the window for bot-started messages
+  businessHoursEnd: 22, // 10 PM — end of that window
   businessName: "SubSell",
   businessAddress: "757 Rue Beaubien E, Montréal",
   businessHoursText: "9AM–10PM, 7 days",
@@ -742,10 +752,16 @@ async function noteTeaching(settings) {
   teachNoting = true;
   try {
     const fp = teachingFingerprint(settings, settings.ownerWrote);
+    // (v0.21.75) …and whether this computer can READ the Activity log (cloud login):
+    // without it the thread memory is blind — it cannot know what another computer
+    // already answered or sent, which is how a chat gets a second reply or a
+    // second demo video. The dashboard names such computers.
+    const auth = await getCloudAuth();
+    const mem = settings.threadMemory !== false && !!(auth && auth.refresh_token) ? "on" : "off";
     const seen = await new Promise((r) => chrome.storage.local.get(["teachSeen"], (x) => r((x && x.teachSeen) || null)));
-    if (seen && seen.fp === fp) return;
-    const ok = await mirrorToCloud({ action: "teach", thread: null, threadId: null, buyer: null, reply: "teaching " + fp });
-    if (ok) await new Promise((r) => chrome.storage.local.set({ teachSeen: { fp, at: Date.now() } }, () => { void chrome.runtime.lastError; r(); }));
+    if (seen && seen.fp === fp && seen.mem === mem) return;
+    const ok = await mirrorToCloud({ action: "teach", thread: null, threadId: null, buyer: null, reply: "teaching " + fp + " mem=" + mem });
+    if (ok) await new Promise((r) => chrome.storage.local.set({ teachSeen: { fp, mem, at: Date.now() } }, () => { void chrome.runtime.lastError; r(); }));
   } catch (e) { /* a receipt must never disturb a reply or a sync */ }
   finally { teachNoting = false; }
 }
@@ -1669,12 +1685,28 @@ async function recordVisit(threadId, threadName, status) {
   LOG("visit recorded (silent):", threadName, status);
 }
 
+// (v0.21.75) Replies to buyers: any hour, unless the owner opted back into a window.
 function withinBusinessHours(settings) {
-  if (!settings.businessHoursEnabled) return true;
-  const h = new Date().getHours();
-  const s = settings.businessHoursStart;
-  const e = settings.businessHoursEnd;
+  if (!settings.replyWindowOnly) return true;
+  return withinNudgeHours(settings);
+}
+// Messages the bot STARTS (visit checks, timed and smart follow-ups) keep to the
+// window: nobody wants "still coming?" at 3 AM. Pure.
+function withinNudgeHours(settings, d) {
+  const h = (d || new Date()).getHours();
+  const s = Number(settings.businessHoursStart), e = Number(settings.businessHoursEnd);
+  if (!Number.isFinite(s) || !Number.isFinite(e) || s === e) return true;
   return s <= e ? h >= s && h < e : h >= s || h < e;
+}
+// When the window next opens (today or tomorrow at the start hour, plus a few minutes so a
+// fleet does not all wake at once). Pure.
+function nextNudgeWindowStart(settings, now) {
+  now = now || Date.now();
+  const s = Number(settings.businessHoursStart);
+  const d = new Date(now);
+  d.setHours(Number.isFinite(s) ? s : 9, 0, 0, 0);
+  if (d.getTime() <= now) d.setDate(d.getDate() + 1);
+  return d.getTime() + Math.floor(Math.random() * 10 * 60 * 1000);
 }
 
 /* ---------------- system prompt ---------------- */
@@ -3830,10 +3862,15 @@ function cancelFollowUps(threadId) {
 }
 
 chrome.alarms.onAlarm.addListener(async (alarm) => {
+  if (!alarm.name.startsWith(ALARM_PREFIX) && !alarm.name.startsWith(VISIT_PREFIX)) return; // the periodic alarms have their own listeners
   const settings = await getSettings();
   if (!settings.enabled) return;
-  if (!withinBusinessHours(settings)) {
-    LOG("alarm skipped: outside business hours", alarm.name);
+  // (v0.21.75) A visit check or timed follow-up due outside the window is parked
+  // until it opens — it used to be dropped ("alarm skipped: outside business hours").
+  if (!withinNudgeHours(settings)) {
+    const when = nextNudgeWindowStart(settings);
+    chrome.alarms.create(alarm.name, { when });
+    LOG("alarm parked until the window opens", alarm.name, new Date(when).toLocaleString());
     return;
   }
   const rl = await checkRateLimit(settings);
@@ -3994,7 +4031,7 @@ async function buildDiagnostic() {
   L.push(
     "settings: on=" + (settings.enabled ? "Y" : "OFF") + " api=" + (settings.apiKey ? "set" : "NOT-SET") +
     " model=" + settings.model + " caps=" + settings.hourlyCap + "/h " + settings.dailyCap + "/d" +
-    " hours=" + settings.businessHoursStart + "-" + settings.businessHoursEnd + (withinBusinessHours(settings) ? "(open)" : "(CLOSED-now)") +
+    " replies=" + (settings.replyWindowOnly ? settings.businessHoursStart + "-" + settings.businessHoursEnd + (withinBusinessHours(settings) ? "(open)" : "(CLOSED-now)") : "24/7") + " nudges=" + settings.businessHoursStart + "-" + settings.businessHoursEnd + (withinNudgeHours(settings) ? "(open)" : "(closed-now)") +
     " delay=" + settings.responseDelaySec + "s+j" + settings.jitterSec + " maxReplies=" + settings.maxRepliesPerConvo
   );
   // (v0.21.73) what this computer is actually taught with. fp = the code the
@@ -4515,8 +4552,8 @@ chrome.runtime.onMessage.addListener((msg, _sender, sendResponse) => {
             sendResponse({ ok: true, skip: true, reason: "smart follow-up off" });
             break;
           }
-          if (!withinBusinessHours(settings)) {
-            sendResponse({ ok: true, skip: true, reason: "outside business hours" });
+          if (!withinNudgeHours(settings)) { // (v0.21.75) a nudge the bot starts keeps to the window; replies do not
+            sendResponse({ ok: true, skip: true, reason: "outside the follow-up window" });
             break;
           }
           const cf = rollWindows(await getCounters(), Date.now());

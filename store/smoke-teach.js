@@ -305,9 +305,9 @@ const withWrote = (cfg) => {
 
   console.log("\n— 5. a save that loses the race merges —");
   const G = new Function(
-    "teachCanon", "DEFAULTS", "EXT_DEFAULT_TEXT", "LEGACY_LINK_OFF", "COACH_MAX",
+    "teachCanon", "DEFAULTS", "EXT_DEFAULT_TEXT", "LEGACY_LINK_OFF", "LEGACY_GATE_OFF", "COACH_MAX",
     between(app, "  const cj = (v) =>", "  async function saveMerged(") + "\nreturn { cj, mergeList, mergeOverTheirs, normalizeForSave, trimCoaching };"
-  )(M.teachCanon, appDefaults, { businessInfo: 1, instructions: 1, closerGoals: 1 }, { videoLinkFallback: false, videoLinkOptIn: false, videoLinkUrl: "", videoLinkText: "" }, 30);
+  )(M.teachCanon, appDefaults, { businessInfo: 1, instructions: 1, closerGoals: 1 }, { videoLinkFallback: false, videoLinkOptIn: false, videoLinkUrl: "", videoLinkText: "" }, { businessHoursEnabled: false }, 30);
   const les = (n, extra) => Object.assign({ kind: "good", buyer: "q" + n, reply: "a" + n, at: n }, extra || {});
   const rule = (n) => ({ kind: "bad", buyer: "(general rule from the boss)", bad: "", better: "rule " + n, note: "always applies", at: n });
   const row0 = G.normalizeForSave(Object.assign({}, appDefaults, { apiKey: "sk-real", businessInfo: "INFO", instructions: "TONE", priceList: "", coaching: [les(1), les(2)] }));

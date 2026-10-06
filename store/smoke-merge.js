@@ -64,7 +64,7 @@ const nextStamp = () => "2026-10-05T12:00:" + String(++stampN).padStart(2, "0") 
 const state = {
   row: {
     config: { apiKey: "sk-real", model: "claude-haiku-4-5", businessInfo: "INFO v1", instructions: "TONE v1", priceList: "", examples: "",
-      videoLinkFallback: false, videoLinkOptIn: false, videoLinkUrl: "", videoLinkText: "",
+      videoLinkFallback: false, videoLinkOptIn: false, videoLinkUrl: "", videoLinkText: "", businessHoursEnabled: false, /* (v0.21.75) a row still carrying the old gate gets one system save on open */
       coaching: [{ kind: "good", buyer: "dispo?", reply: "ouais", at: 1 }] },
     config_key: "ck", updated_at: nextStamp(),
   },

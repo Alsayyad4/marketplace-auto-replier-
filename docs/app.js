@@ -23,8 +23,9 @@
     convoCapBehavior: "stop",
     wpmMin: 38,
     wpmMax: 78,
-    businessHoursEnabled: true,
-    businessHoursStart: 9,
+    replyWindowOnly: false, // (v0.21.75) MUST match background.js DEFAULTS — off = buyers answered at any hour
+    businessHoursEnabled: true, // legacy (builds before v0.21.75 read it); every save writes it false, see LEGACY_GATE_OFF
+    businessHoursStart: 9, // the window for messages the bot STARTS (visit checks, follow-ups)
     businessHoursEnd: 22,
     humanCadence: true,
     skipChance: 0.12,
@@ -83,7 +84,7 @@
     ["hourlyCap", "number"], ["dailyCap", "number"],
     ["maxRepliesPerConvo", "number"], ["convoCapBehavior", "value"],
     ["wpmMin", "number"], ["wpmMax", "number"],
-    ["businessHoursEnabled", "checked"], ["businessHoursStart", "number"], ["businessHoursEnd", "number"],
+    ["replyWindowOnly", "checked"], ["businessHoursStart", "number"], ["businessHoursEnd", "number"], // (v0.21.75)
     ["humanCadence", "checked"], ["skipChance", "number"], ["breakChance", "number"], ["breakMinMin", "number"], ["breakMaxMin", "number"],
     ["warmupEnabled", "checked"], ["warmupDays", "number"], ["warmupStartCap", "number"],
     ["offPlatformGuard", "checked"], ["closerMode", "checked"], ["closerIntensity", "value"], ["noExactPrices", "checked"],
@@ -113,6 +114,11 @@
   // storage LINK unless it is exactly false. Every save writes these four so no
   // edit here can ever re-arm them. Mirrors LEGACY_LINK_OFF in background.js.
   const LEGACY_LINK_OFF = { videoLinkFallback: false, videoLinkOptIn: false, videoLinkUrl: "", videoLinkText: "" };
+  // (v0.21.75) Builds before .75 gate every reply on `businessHoursEnabled` (stored true on
+  // every account). The owner wants buyers answered at any hour, so every save writes it
+  // false and the page does so on open — the same lever as the link gate above.
+  const LEGACY_GATE_OFF = { businessHoursEnabled: false };
+  const legacyGateArmed = (cfg) => !!cfg && typeof cfg === "object" && cfg.businessHoursEnabled !== false;
   let settings = Object.assign({}, DEFAULTS); // working copy (preserves loaded advanced fields)
   const liveSettings = () => settings; // formToFields shadows the name when it reads into a copy
   // (v0.21.56) Nothing may be written to the shared row until THIS page has read
@@ -434,6 +440,7 @@
     snapshotBase(); // (v0.21.73) the row as read — what a merge compares this page's edits against
     loadFleet(); // which computers answer with this teaching (never blocks the load)
     loadCost(); // (v0.21.74) what the AI cost, measured and estimated (never blocks the load)
+    loadVideoReport(); // (v0.21.75) the video delivery report on the Videos tab
     try { // (v0.21.70) the draft offer is in the finally: nothing on this load may clear it first
     // (v0.21.66) A DEAD account — no API key AND nothing it has been taught — is
     // what a blank-form save leaves behind, and what the operator was looking at:
@@ -457,10 +464,10 @@
     // already holds the row, so it switches the gate off right now — the same
     // write an updated machine would make on its next pull, only sooner. Fires
     // once per account: after this save the row reads off and never qualifies.
-    if (legacyLinkArmed(data.config || {})) {
+    if (legacyLinkArmed(data.config || {}) || legacyGateArmed(data.config || {})) {
       const saved = await saveConfig(true, SYSTEM_SAVE);
       flash(saved
-        ? "Switched the old demo-link fallback OFF for every computer — machines on old builds stop sending the video as a link on their next sync."
+        ? (legacyGateArmed(data.config || {}) ? "Buyers are now answered at any hour on every computer (the old business-hours gate was switched off in your settings)." : "Switched the old demo-link fallback OFF for every computer — machines on old builds stop sending the video as a link on their next sync.")
         : "Loaded from cloud.");
       return;
     }
@@ -666,7 +673,7 @@
     const c = Object.assign({}, o);
     delete c.enabled; // per-machine
     for (const k of Object.keys(EXT_DEFAULT_TEXT)) if (!String(c[k] == null ? "" : c[k]).trim()) delete c[k]; // blank = the extension's own line, never ""
-    return Object.assign(c, LEGACY_LINK_OFF);
+    return Object.assign(c, LEGACY_LINK_OFF, LEGACY_GATE_OFF);
   }
   function snapshotBase() {
     const b = Object.assign({}, settings);
@@ -765,7 +772,7 @@
     formToFields();
     let clean = Object.assign({}, settings);
     delete clean.enabled; // per-machine
-    Object.assign(clean, LEGACY_LINK_OFF); // (v0.21.69) the stale builds' link sender stays off
+    Object.assign(clean, LEGACY_LINK_OFF, LEGACY_GATE_OFF); // (v0.21.69) the stale builds' link sender stays off; (v0.21.75) their reply gate too
     // (v0.21.56) OPTIMISTIC CONCURRENCY. Both this page and every extension write
     // the whole config column, with no precondition — so whoever saved last simply
     // erased the other's edits, and the loser was never told. Send the stamp we
@@ -862,6 +869,10 @@
   function renderTeachPreview() {
     const el = $("teachPreview");
     if (!el || el.classList.contains("hidden")) return;
+    el.textContent = teachPreviewText();
+  }
+  // What the bot is taught, as the panel shows it — also the "Teaching" part of the report.
+  function teachPreviewText() {
     formToFields();
     // (v0.21.73) "Answer only from what I teach": the bot gets this page and the
     // Activity rules/corrections, in this order, plus mechanics — nothing else.
@@ -933,7 +944,7 @@
     L.push("");
     L.push("── teaching code ──");
     L.push("What is SAVED right now has the code " + savedFingerprint() + ". A computer that answers with this teaching reports the same code — the line under this panel and the Activity tab name the computers that do not.");
-    el.textContent = L.join("\n");
+    return L.join("\n");
   }
   if ($("teachPreviewBtn")) {
     $("teachPreviewBtn").addEventListener("click", () => {
@@ -1012,17 +1023,19 @@
     for (const r of teachRows || []) {
       const at = Date.parse(r.created_at) || 0;
       const fp = (String(r.bot_text || "").match(/teaching ([0-9a-f]{8})/) || [])[1];
+      const mem = (String(r.bot_text || "").match(/\bmem=(on|off)\b/) || [])[1]; // (v0.21.75) can this computer read the Activity log?
       const e = touch(r.machine, at);
-      if (e && fp && at >= e.fpAt) { e.fp = fp; e.fpAt = at; }
+      if (e && fp && at >= e.fpAt) { e.fp = fp; e.fpAt = at; if (mem) e.mem = mem; }
     }
     for (const r of seenRows || []) {
       const at = Date.parse(r.created_at) || 0;
       const e = touch(r.machine, at);
       if (e && at > e.seenAt) e.seenAt = at;
     }
-    const out = { ok: [], syncing: [], behind: [], idle: [], silent: [] };
+    const out = { ok: [], syncing: [], behind: [], idle: [], silent: [], blind: [] };
     for (const e of Object.values(byKey)) {
       if (now - e.lastAt > WEEK) continue; // nobody has heard from it in a week: retired, not behind
+      if (e.mem === "off") out.blind.push(e); // no cloud login: it cannot see what the other computers sent
       if (!e.fp) { if (e.seenAt) out.silent.push(e); }
       else if (e.fp === cur) out.ok.push(e);
       else if (changedAt && Math.max(e.seenAt, e.fpAt) - changedAt > GRACE) out.behind.push(e); // it worked, or reported, after the change — on other teaching
@@ -1042,12 +1055,13 @@
       for (const e of st.syncing) lines.push("… " + machineShow(e.machine) + " is picking up your last change.");
       if (st.idle.length) lines.push("· Not active since your last change, they take it when they next sync: " + st.idle.map((e) => machineShow(e.machine)).join(", ") + ".");
       for (const e of st.silent) lines.push("? " + machineShow(e.machine) + " runs an older build that cannot report its teaching. It updates by itself; “Update now” in the extension popup on that computer does it at once.");
+      for (const e of st.blind) lines.push("⚠ " + machineShow(e.machine) + " has NO cloud login, so it cannot see what the other computers already sent: it can answer a buyer a second time or send the demo video again. On that computer: extension Settings → Cloud sync → sign in.");
     }
     for (const id of ["teachFleet", "teachFleetBiz"]) {
       const el = $(id);
       if (!el) continue;
       el.style.whiteSpace = "pre-line";
-      el.className = st.behind.length ? "err" : "hint";
+      el.className = st.behind.length || st.blind.length ? "err" : "hint";
       el.textContent = lines.join("\n");
     }
   }
@@ -1163,7 +1177,7 @@
   // same site). The two markers are comments in that file; store/smoke-teach.js fails if they move.
   const CORE_BEGIN = "/* ===================== (v0.21.73) THE OWNER IS THE ONLY TEACHER";
   const CORE_END = "/* ---------------- video fetch ---------------- */";
-  const CORE_VER = "20261005b";
+  const CORE_VER = "20261006";
   let teachCore = null, teachCoreErr = "";
   async function loadTeachCore() {
     if (teachCore) return teachCore;
@@ -1304,6 +1318,124 @@
     el.textContent = lines.join("\n");
   }
 
+  /* ---- (v0.21.75) WHERE THE VIDEOS WENT ----
+   * Operator, Oct 6 2026: "double sending videos and not sending 1 of each videos I
+   * upload". Three releases fixed that path blind. This reads what the computers
+   * themselves logged (Activity rows of kind "video", last 7 days) and names the
+   * chats worth a look: more clips counted than configured, two computers sending
+   * into one chat, a chat still short of a clip an hour later. Pure core. */
+  const VIDEO_SENT_RE = /^\s*(\d+)\s*\/\s*(\d+)\s+demo video|^\s*(\d+)\s+staged demo clip/i;
+  // `otherRows` (optional): the NON-video rows of the same chats. A chat short of a clip
+  // whose buyer another computer has answered since is the known structural case —
+  // that computer reads the partial row as "sent" and stops, so nobody adds the clip.
+  function videoReport(rows, now, otherRows) {
+    const chats = new Map();
+    for (const r of rows || []) {
+      if (!r || (r.kind && r.kind !== "video")) continue; // the words in a text row never count
+      const m = String(r.bot_text || "").match(VIDEO_SENT_RE);
+      if (!m) continue;
+      const sent = Number(m[1] != null ? m[1] : m[3]) || 0;
+      const total = m[2] != null ? Number(m[2]) : null;
+      if (!sent) continue;
+      const key = String(r.thread_id || r.thread_name || "?");
+      const c = chats.get(key) || { key, name: String(r.thread_name || key), rows: [], machines: new Set(), maxSent: 0, total: null, full: 0 };
+      c.rows.push({ at: Date.parse(r.created_at) || 0, machine: machineShow(r.machine), text: String(r.bot_text) });
+      c.machines.add(machineKey(r.machine));
+      if (sent > c.maxSent) c.maxSent = sent;
+      if (total != null) { c.total = Math.max(c.total || 0, total); if (sent >= total) c.full++; } // counts are cumulative per chat: "1/2 … finishing" then "2/2 sent" is ONE set
+      chats.set(key, c);
+    }
+    const out = { chats: chats.size, sends: 0, doubles: [], missing: [] };
+    for (const c of chats.values()) {
+      c.rows.sort((a, b) => a.at - b.at);
+      out.sends += c.rows.length;
+      c.last = c.rows[c.rows.length - 1];
+      if (c.total != null && c.maxSent > c.total) { c.why = "more clips counted than the list holds (" + c.maxSent + " of " + c.total + ")"; out.doubles.push(c); }
+      else if (c.machines.size > 1) { c.why = "two computers sent into this chat"; out.doubles.push(c); }
+      else if (c.full > 1) { c.why = "the full set was logged " + c.full + " times by the same computer"; out.doubles.push(c); }
+      else if (c.total != null && c.maxSent < c.total && now - c.last.at > 60 * 60 * 1000) {
+        const sender = Array.from(c.machines)[0];
+        const after = (otherRows || []).find((x) => x && String(x.thread_id || x.thread_name || "?") === c.key && machineKey(x.machine) !== sender && (Date.parse(x.created_at) || 0) > c.last.at);
+        if (after) c.why = "since then " + machineShow(after.machine) + " has been answering this buyer — it reads the row as “sent” and never adds the missing clip";
+        out.missing.push(c);
+      }
+    }
+    return out;
+  }
+  let videoReportText = "";
+  function renderVideoReport(rep) {
+    const el = $("videoReport");
+    const when = (t) => (t ? new Date(t).toLocaleString() : "?");
+    const line = (c) => "• " + truncTxt(c.name, 40) + " — " + Array.from(c.machines).join(", ") + " — last: " + truncTxt(c.last.text, 90) + " (" + when(c.last.at) + ")";
+    const L = [];
+    if (!rep.chats) L.push("No demo video was logged as sent in the last 7 days.");
+    else {
+      L.push("Last 7 days: " + rep.chats + " chat" + (rep.chats === 1 ? "" : "s") + " received the demo (" + rep.sends + " send" + (rep.sends === 1 ? "" : "s") + " logged).");
+      L.push(rep.doubles.length ? "⚠ " + rep.doubles.length + " chat" + (rep.doubles.length === 1 ? "" : "s") + " look double-served:" : "✓ No chat looks double-served.");
+      for (const c of rep.doubles.slice(0, 10)) L.push(line(c) + " — " + c.why);
+      L.push(rep.missing.length ? "⚠ " + rep.missing.length + " chat" + (rep.missing.length === 1 ? "" : "s") + " still miss a clip:" : "✓ No chat is short of a clip.");
+      for (const c of rep.missing.slice(0, 10)) L.push(line(c) + (c.why ? " — " + c.why : ""));
+    }
+    videoReportText = L.join("\n");
+    if (el) { el.style.whiteSpace = "pre-line"; el.className = rep.doubles.length || rep.missing.length ? "err" : "hint"; el.textContent = videoReportText; }
+  }
+  async function loadVideoReport() {
+    if (!client || !session || !rowLoaded) return;
+    try {
+      const since = new Date(Date.now() - 7 * 24 * 3600 * 1000).toISOString();
+      const v = await client.from("subsell_messages").select("created_at, machine, thread_id, thread_name, bot_text")
+        .eq("kind", "video").gte("created_at", since).order("created_at", { ascending: false }).limit(500);
+      if (v.error) return;
+      let rep = videoReport(v.data || [], Date.now());
+      if (rep.missing.length) { // who answered those buyers afterwards?
+        const ids = rep.missing.slice(0, 10).map((c) => c.key).filter((k) => k && k !== "?");
+        if (ids.length) {
+          const o = await client.from("subsell_messages").select("created_at, machine, thread_id").in("thread_id", ids).neq("kind", "video").gte("created_at", since).limit(500);
+          if (!o.error) rep = videoReport(v.data || [], Date.now(), o.data || []);
+        }
+      }
+      renderVideoReport(rep);
+    } catch (e) { /* a report must never break the page */ }
+  }
+
+  /* ---- (v0.21.75) ONE CLICK TO SEND EVERYTHING SUPPORT NEEDS ----
+   * Every diagnosis so far began with "send me a screenshot of…". This gathers, as
+   * text, what the page knows — computers, cost, videos, unanswered questions, the
+   * teaching, the last 20 messages — and copies it. It never includes the API key
+   * or any password (the teaching preview has neither). */
+  async function buildReport() {
+    const L = ["SubSell dashboard report — " + new Date().toLocaleString() + " — dashboard build " + CORE_VER];
+    const sec = (title, body) => { L.push(""); L.push("== " + title + " =="); L.push(body && String(body).trim() ? String(body).trim() : "(nothing)"); };
+    sec("Computers", $("teachFleet") && $("teachFleet").textContent);
+    sec("Cost", $("costLine") && $("costLine").textContent);
+    sec("Videos, last 7 days", videoReportText);
+    const gaps = gapList(gapRows, settings.coaching, gapDismissed());
+    sec("Questions the bot could not answer", gaps.map((it) => "• " + truncTxt(it.question, 120) + (it.n > 1 ? " (asked " + it.n + " times)" : "") + (it.said ? " — bot said: " + truncTxt(it.said, 80) : "")).join("\n"));
+    sec("Teaching", teachPreviewText());
+    let rows = "";
+    try {
+      const r = await messagesOnly(client.from("subsell_messages").select("created_at, machine, thread_name, kind, buyer_text, bot_text")).order("created_at", { ascending: false }).limit(20);
+      rows = (r.error ? [] : r.data || []).map((x) => [new Date(x.created_at).toLocaleString(), machineShow(x.machine), truncTxt(x.thread_name, 30), x.kind, truncTxt(x.buyer_text, 100), truncTxt(x.bot_text, 140)].join(" | ")).join("\n");
+    } catch (e) { rows = "(could not load)"; }
+    sec("Last 20 messages (time | computer | chat | kind | buyer | bot)", rows);
+    return L.join("\n");
+  }
+  if ($("copyReport")) {
+    $("copyReport").addEventListener("click", async () => {
+      $("copyReport").disabled = true;
+      try {
+        const text = await buildReport();
+        let copied = false;
+        try { if (navigator.clipboard && navigator.clipboard.writeText) { await navigator.clipboard.writeText(text); copied = true; } } catch (e) { copied = false; }
+        const box = $("reportBox"), ta = $("reportText");
+        if (ta) ta.value = text;
+        if (box) box.classList.toggle("hidden", copied);
+        flash(copied ? "Report copied — paste it to Claude. It holds no key or password." : "Copy was blocked by the browser — select the text below and copy it.", !copied);
+      } finally { $("copyReport").disabled = false; }
+    });
+    if ($("reportClose")) $("reportClose").addEventListener("click", () => $("reportBox").classList.add("hidden"));
+  }
+
   /* ---------------- activity log (combined feed across all machines) ---------------- */
   const truncTxt = (s, n) => { s = s == null ? "" : String(s); return s.length > n ? s.slice(0, n) + "…" : s; };
 
@@ -1394,6 +1526,7 @@
     totalsEl.innerHTML = `<b>${total}</b> messages all-time &nbsp;·&nbsp; <b>${today}</b> today &nbsp;·&nbsp; showing latest ${rows.length}`;
     loadFleet(); // (v0.21.73) which computers answer with the teaching saved here
     loadGaps(); // (v0.21.74) what the bots could not answer — one box each to teach it
+    loadVideoReport(); // (v0.21.75) which chats got the demo twice, which still miss a clip
 
     const byMachine = {};
     for (const r of rows) { const m = r.machine || "—"; byMachine[m] = (byMachine[m] || 0) + 1; }

@@ -9,7 +9,21 @@ all chrome.debugger/CDP work) + Supabase dashboard in docs/. Live branch:
   permissions ships OFF by default behind a cloud setting and goes to ONE machine first.
 - The operator wants zero manual steps in normal operation.
 
-## Known state (v0.21.74)
+## Known state (v0.21.75)
+- HOURS (.75): buyers are answered 24/7. `withinBusinessHours` gates a reply only when
+  `replyWindowOnly` (NEW key, default off) is on; the OLD `businessHoursEnabled` is read
+  by nothing here but is `true` on every live row and gates the builds before .75, so
+  the dashboard writes it `false` on every save (`LEGACY_GATE_OFF`) and once on open
+  (`legacyGateArmed`). The two hour fields now window the messages the BOT STARTS:
+  `withinNudgeHours` (smart follow-up) and the alarm handler, which PARKS a follow-up /
+  visit alarm due at night (`nextNudgeWindowStart`) instead of dropping it. 🩺
+  `replies=24/7 nudges=9-22`. EVIDENCE for the video complaint (do not fix blind — three
+  fixes already did): the teaching receipt carries `mem=on|off` (cloud login → can read
+  the Activity log; a `mem=off` computer re-answers and re-sends clips, the fleet line
+  names it); the Videos tab has "Where the videos went" (`videoReport`: double-served /
+  short chats, incl. the structural case — `memVideoSent` is binary per chat, so a set
+  left at 1/2 by one computer is never completed by another); the toolbar "Copy report"
+  button gathers everything support needs as text, no key. `store/smoke-hours.js`.
 - LEARNING WITHOUT CODE (.74). Teaching never needs a code change: Business tab +
   Activity tab reach every computer in ~1 min. What .74 added — (a) NOTHING DROPPED:
   rules are never evicted (61st refused out loud), the 120 newest graded answers are
