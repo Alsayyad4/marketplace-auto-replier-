@@ -83,6 +83,15 @@ const ok = (cond, msg) => { console.log((cond ? "  PASS  " : "  FAIL  ") + msg);
   s = api.status();
   ok(s.objUrl === 2 && s.other === 1, "only blobs of OUR size count as ours (" + s.objUrl + " ours / " + s.other + " other)");
 
+  // 2b. (v0.21.77) a big FOREIGN blob's size is kept — the engine compares it with the
+  // set's other clips to name a clip Messenger was handed in place of ours ("dup:")
+  ok(Array.isArray(s.otherSizes) && s.otherSizes.length === 0, "(v0.21.77) the 10 KB foreign blob (a thumbnail) is not recorded");
+  URL.createObjectURL(new Blob(15 * 1024 * 1024));
+  s = api.status();
+  ok(s.otherSizes.length === 1 && s.otherSizes[0] === 15 * 1024 * 1024 && s.objUrl === 2, "(v0.21.77) a 15 MB foreign blob's size is recorded, ours untouched");
+  for (let k = 0; k < 12; k++) URL.createObjectURL(new Blob(200000 + k));
+  ok(api.status().otherSizes.length === 8, "(v0.21.77) the size list is capped at 8");
+
   // 3. reads and uploads
   ok(new Blob(OUR).slice() === "SLICED" && new Blob(OUR).arrayBuffer() === "AB" && new Blob(OUR).stream() === "STREAM", "Blob reads pass through");
   ok(new FileReader().readAsArrayBuffer(new Blob(OUR)) === "FR:" + OUR && new FileReader().readAsDataURL(new Blob(OUR)) === "FRD", "FileReader reads pass through");
@@ -125,6 +134,7 @@ const ok = (cond, msg) => { console.log((cond ? "  PASS  " : "  FAIL  ") + msg);
   const a2 = api.arm(OUR, 5000);
   s = api.status();
   ok(a2.ok && a2.already === true && s.objUrl === 0 && s.read === 0 && s.vidSrc === 0, "re-arming resets the counters without double-wrapping");
+  ok(Array.isArray(s.otherSizes) && s.otherSizes.length === 0, "(v0.21.77) re-arming clears the foreign sizes");
   const v4 = document.createElement("video"); v4.src = ourUrl; v4.fire("loadedmetadata");
   ok(api.status().vidSrc === 0 && api.status().meta === 0, "an object URL from BEFORE the re-arm is no longer ours");
   ok(/^blob:/.test(URL.createObjectURL(new Blob(OUR))) && api.status().objUrl === 1, "counting works after a re-arm");
@@ -151,6 +161,29 @@ const ok = (cond, msg) => { console.log((cond ? "  PASS  " : "  FAIL  ") + msg);
   ok(URL.createObjectURL !== orig.create, "armed again with a 1 s life");
   await new Promise((r) => setTimeout(r, 1700));
   ok(URL.createObjectURL === orig.create && api.status().armed === false, "expired on its own and restored the page");
+
+  // 10. (v0.21.77) content.js rxDupOf — the engine's reading of those sizes (evidence only)
+  {
+    const csrc = fs.readFileSync(path.join(__dirname, "..", "content.js"), "utf8");
+    const i0 = csrc.indexOf("const rxDupOf = (s, ch) => {");
+    const i1 = i0 >= 0 ? csrc.indexOf("\n      };", i0) : -1;
+    ok(i0 >= 0 && i1 > i0, "(v0.21.77) rxDupOf found in content.js");
+    const fn = (opts, fired) => new Function("opts", "lastShimFired", csrc.slice(i0, i1 + 9) + "; return rxDupOf;")(opts, fired);
+    // the common case below: the btn channel did hand a file over in this attach
+    const mk = (opts) => { const g = fn(opts, 1); return (s) => g(s, "btn"); };
+    const MB = 1024 * 1024;
+    const set = [3 * MB, 15 * MB, 7 * MB];
+    const zero = { objUrl: 0, vidSrc: 0, meta: 0, read: 0, up: 0 };
+    ok(mk({ setSizes: set, slot: 2 })(Object.assign({}, zero, { expect: 7 * MB, otherSizes: [15 * MB] })) === "clip2", "(v0.21.77) clip 3's slot, nothing of clip 3 touched, clip 2's bytes minted => dup:clip2 (the .76 field signature)");
+    ok(mk({ setSizes: set, slot: 2 })(Object.assign({}, zero, { objUrl: 1, expect: 7 * MB, otherSizes: [15 * MB] })) === "", "(v0.21.77) Messenger handled OUR clip => another clip's blob (e.g. the sent bubble) is not a dup");
+    ok(mk({ setSizes: set, slot: 1 })(Object.assign({}, zero, { expect: 15 * MB, otherSizes: [15 * MB] })) === "", "(v0.21.77) the clip's own slot is never its own dup");
+    ok(mk({ setSizes: [3 * MB, 3 * MB], slot: 1 })(Object.assign({}, zero, { expect: 3 * MB, otherSizes: [3 * MB] })) === "", "(v0.21.77) a clip listed twice (same bytes as ours) is never called a dup");
+    ok(mk({ setSizes: set, slot: 2 })(Object.assign({}, zero, { expect: 7 * MB, otherSizes: [] })) === "" && mk({ setSizes: set, slot: 2 })(null) === "", "(v0.21.77) no foreign sizes / no probe => no claim");
+    ok(mk({ slot: 0 })(Object.assign({}, zero, { expect: 3 * MB, otherSizes: [15 * MB] })) === "", "(v0.21.77) no set sizes passed (legacy caller) => no claim");
+    const dupCase = Object.assign({}, zero, { expect: 7 * MB, otherSizes: [15 * MB] });
+    ok(fn({ setSizes: set, slot: 2 }, 0)(dupCase, "btn") === "", "(v0.21.77) btn never handed anything over (fired=0) => no claim (an earlier clip's bubble is not a dup)");
+    ok(fn({ setSizes: set, slot: 2 }, 1)(dupCase, "paste") === "" && fn({ setSizes: set, slot: 2 }, 1)(dupCase, "dom") === "", "(v0.21.77) a claim only for the btn channel (the shim is what could hand over a stale clip)");
+  }
 
   console.log(failed ? "\n" + failed + " CHECK(S) FAILED" : "\nall checks passed");
   process.exit(failed ? 1 : 0);

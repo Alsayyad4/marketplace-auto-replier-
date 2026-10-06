@@ -1423,6 +1423,7 @@
     lastAttachVia = "-";
     lastAttachRx = "-"; // (v0.21.67) the legacy ladder has no reaction probe — never report a stale code
     lastAttachHeld = false;
+    lastAttachDupOf = "";
     const composer = findComposer();
     if (composer) composer.focus();
     // "aborted" (v0.21.41) = navigated away BEFORE anything was dispatched: the
@@ -1555,8 +1556,22 @@
       let url = null;
       try {
         url = URL.createObjectURL(f);
-        const armed = await ask({ type: "ARM_FILE_SHIM", url, name: f.name, mime: f.type, ms: 20000 });
+        const armMsg = { type: "ARM_FILE_SHIM", url, name: f.name, mime: f.type, ms: 20000 };
+        let armed = await ask(armMsg);
+        if (armed && !armed.ok && armed.legacyWaitMs > 0) {
+          // (v0.21.77) once, right after the update: the previous build's shim is still
+          // winding down (its timer cannot be cancelled). Wait it out (≤ 21 s) rather
+          // than hand this clip to a channel that cannot stage it on this build.
+          setStatus({ lastAction: "waiting for the previous build's file shim to expire…" });
+          const until = Date.now() + Math.min(armed.legacyWaitMs, 22000) + 250;
+          while (Date.now() < until) { await sleep(500); if (tid && !stillOnThread(tid)) return false; }
+          armed = await ask(armMsg);
+        }
         if (!(armed && armed.ok)) { setStatus({ videoLast: "could not arm the page file shim: " + trunc((armed && armed.error) || "?", 60) }); return false; }
+        // (v0.21.77) the previous clip's shim was still alive — before .77 it was
+        // RENEWED and handed Messenger that previous clip again (the double clip /
+        // missing clip of a set). Counted for the 🩺 ("[rearm=N]" on btn).
+        if (armed.replaced) bumpChannelStats("btn", (e) => { e.rearm = (e.rearm || 0) + 1; e.rearmAt = Date.now(); });
         safe(() => target.el.click());
         if (target.more) {
           // compact bar: the attach item lives inside the "+" menu
@@ -1574,6 +1589,25 @@
           st = (r && r.status) || null;
           if (st && st.fired > 0) break;
         }
+        // (v0.21.77) Messenger clicked its input (seen) but the hand-over had not run
+        // yet — it runs 60 ms after the click, later on a throttled tab: a moment more.
+        if (st && !st.fired && st.seen > 0 && !st.err) {
+          for (let i = 0; i < 4 && !(st && st.fired > 0); i++) {
+            await sleep(400);
+            const r = await ask({ type: "SHIM_STATUS" });
+            st = (r && r.status) || st;
+          }
+        }
+        if (!st || !st.fired) {
+          // (v0.21.77) moving on to another channel: SPEND the shim — a late click, or a
+          // hand-over still scheduled, must not put this clip in behind the next
+          // channel's copy (the shim stays: still no dialog). The page answers with its
+          // counters as of the spend: a hand-over that ran just before it IS this
+          // channel's dispatch.
+          const sp = await ask({ type: "SHIM_STATUS", spend: true });
+          const st2 = sp && sp.status && typeof sp.status === "object" ? sp.status : null;
+          if (st2 && st2.fired > 0) st = st2;
+        }
         lastShimFired = st ? st.fired : 0;
         lastShimSeen = st ? st.seen : 0;
         if (st && st.info) {
@@ -1584,7 +1618,17 @@
           const pk = (st.info.connected ? "inDOM" : "detached") + "/" + (st.info.react ? "react" : "native") + (st.info.filesRead != null ? "/read" + st.info.filesRead : "") + (st.info.accept ? "/accept:" + trunc(st.info.accept, 16) : "");
           bumpChannelStats("btn", (e) => { e.picker = pk; e.pickerAt = Date.now(); });
         }
-        if (!st || !st.fired) { setStatus({ videoLast: "clicked attach but Messenger never opened a file picker (seen=" + ((st && st.seen) || 0) + (st && st.err ? ", shim error: " + trunc(st.err, 40) : "") + ")" }); return false; }
+        if (st && st.swallowed > 0) bumpChannelStats("btn", (e) => { e.swallowed = (e.swallowed || 0) + st.swallowed; }); // Messenger clicked its input again: no second copy went in
+        // (v0.21.77) EXACT evidence: the shim records the size of the file it handed
+        // over; any other size than this clip's is a wrong hand-over (🩺 "[wrongfile=N]")
+        if (st && st.fired > 0 && st.info && st.info.size > 0 && f.size > 0 && st.info.size !== f.size) {
+          bumpChannelStats("btn", (e) => { e.wrongFile = (e.wrongFile || 0) + 1; e.wrongFileAt = Date.now(); });
+          setStatus({ videoLast: "the page shim handed over " + st.info.size + " bytes for a " + f.size + "-byte clip" });
+        }
+        if (!st || !st.fired) {
+          setStatus({ videoLast: "clicked attach but Messenger never opened a file picker (seen=" + ((st && st.seen) || 0) + (st && st.err ? ", shim error: " + trunc(st.err, 40) : "") + ")" });
+          return false;
+        }
         return true;
       } catch (e) { return false; }
       finally { if (url) setTimeout(() => safe(() => URL.revokeObjectURL(url)), 30000); }
@@ -1702,10 +1746,27 @@
       const rxRead = async () => { if (!rxOn) return null; const r = await Promise.race([ask({ type: "RX_STATUS" }), sleep(6000).then(() => null)]); return r && r.ok && r.status ? r.status : null; };
       // Every exit reads the probe once more, records the channel's code (a healthy
       // machine's signature is what a dead one is compared against) and disarms.
+      // (v0.21.77) EVIDENCE, never a verdict: Messenger did nothing with THIS clip's
+      // bytes but minted a URL for a blob the size of ANOTHER clip of the set ⇒ it
+      // was handed that clip again (the stale-shim double of .76 and before). Shown
+      // as "dup:clipK" in the attach trace; the send decision is unchanged.
+      const rxDupOf = (s, ch) => {
+        if (ch !== "btn" || !(lastShimFired > 0)) return ""; // only a hand-over that happened can have handed the wrong clip
+        if (!s || !Array.isArray(s.otherSizes) || !s.otherSizes.length) return "";
+        if ((s.objUrl || 0) + (s.vidSrc || 0) + (s.meta || 0) + (s.read || 0) + (s.up || 0) > 0) return ""; // it handled OUR clip
+        const sizes = Array.isArray(opts.setSizes) ? opts.setSizes : [];
+        for (let k = 0; k < sizes.length; k++) {
+          if (k === opts.slot || !(sizes[k] > 0)) continue;
+          if (Math.abs(sizes[k] - (s.expect || 0)) < 4096) continue; // the same bytes as ours (a clip listed twice)
+          if (s.otherSizes.some((z) => Math.abs(z - sizes[k]) < 4096)) return "clip" + (k + 1);
+        }
+        return "";
+      };
       const rxFinish = async (ch, verdict) => {
         const s = await rxRead();
         const code = rxCode(s);
         if (code !== "-") { lastAttachRx = code; noteChannelRx(ch, code, false); }
+        lastAttachDupOf = rxDupOf(s, ch);
         if (rxOn) ask({ type: "RX_STATUS", disarm: true });
         return verdict;
       };
@@ -1825,6 +1886,7 @@
         const rxF = await rxRead();
         const codeF = rxCode(rxF);
         if (codeF !== "-") { lastAttachRx = codeF; if (rxHeld(rxF) && !held) held = dispatched; }
+        lastAttachDupOf = rxDupOf(rxF, dispatched);
         if (rxOn) ask({ type: "RX_STATUS", disarm: true });
       }
       // Decide from Messenger's state, never assume: the control still reads
@@ -2658,6 +2720,7 @@
   let lastActPulse = null;
   let lastAttachRx = "-";
   let lastAttachHeld = false;
+  let lastAttachDupOf = ""; // (v0.21.77) "clipK" = the probe saw clip K's bytes handed over, never this clip's
   const userActivated = () => safe(() => !!(navigator.userActivation && navigator.userActivation.hasBeenActive), false);
   const rxCode = (s) => (s && s.armed !== undefined && s.objUrl !== undefined
     ? "o" + (s.objUrl || 0) + "v" + (s.vidSrc || 0) + "m" + (s.meta || 0) + "e" + (s.err || 0) + "r" + (s.read || 0) + "u" + (s.up || 0)
@@ -4337,8 +4400,13 @@
           await setLocal({ videoSentThreads: dmA });
         }
         setStatus({ lastAction: `attaching video ${i + 1}/${files.length}…`, currentThread: name });
-        let res = await attachVideo(files[i], knownCount, id, paths[i], { justSend, onTick: () => { busySince = Date.now(); refreshThreadLock(sidebarKey || id); } });
+        // (v0.21.77) every slot's byte size (disk record, else a loaded File) — lets the
+        // probe name a clip that was handed over in place of this one (trace "dup:")
+        const setSizes = files.map((f, k) => (paths[k] && diskSizeByPath[paths[k]]) || (f && !f.lazy && !f.excluded && typeof f.size === "number" ? f.size : 0));
+        let res = await attachVideo(files[i], knownCount, id, paths[i], { justSend, setSizes, slot: i, onTick: () => { busySince = Date.now(); refreshThreadLock(sidebarKey || id); } });
         const resVia = lastAttachVia;
+        const resDup = lastAttachDupOf; // read now — the trace below is written from a storage callback
+        if (resDup) vstat("clip " + (i + 1) + ": Messenger was handed " + resDup + " in its place (" + (name || id) + ")");
         if (resVia && resVia !== "-") setVia = resVia;
         const resTrace = res === true ? "ok" : String(res);
         // ATTACH TRACE (ring of 12, shown in 🩺): which clip, what verdict, how
@@ -4346,7 +4414,7 @@
         safe(() => chrome.storage.local.get(["videoAttachTrace"], (rT) => {
           if (chrome.runtime.lastError) return;
           const tr = (rT && rT.videoAttachTrace) || [];
-          tr.push({ at: Date.now(), clip: i + 1, of: files.length, res: resTrace + (resVia && resVia !== "-" ? "/" + resVia : "") + (lastAttachRx && lastAttachRx !== "-" ? " rx:" + lastAttachRx : ""), tray: trayRemoveBtns().length, up: trayUploads() });
+          tr.push({ at: Date.now(), clip: i + 1, of: files.length, res: resTrace + (resVia && resVia !== "-" ? "/" + resVia : "") + (lastAttachRx && lastAttachRx !== "-" ? " rx:" + lastAttachRx : "") + (resDup ? " dup:" + resDup : ""), tray: trayRemoveBtns().length, up: trayUploads() });
           while (tr.length > 12) tr.shift();
           chrome.storage.local.set({ videoAttachTrace: tr }, () => void chrome.runtime.lastError);
         }));

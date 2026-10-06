@@ -867,17 +867,24 @@ const memKey = (s) => memNorm(s).slice(0, 120); // buyer text is compared on its
 const memWho = (r) => { const m = r && r.machine ? String(r.machine).replace(/\s*#PC-[a-z0-9]+\s*$/i, "").trim() : ""; return m || "another computer"; };
 const memNow = () => Date.now() + memSkewMs;
 function memNote(patch) {
+  // (v0.21.77) one write at a time: two notes from the same read (memFetch's own and
+  // the caller's) used to read the same snapshot, and the later write erased the other
+  memNote.chain = (memNote.chain || Promise.resolve()).then(() => new Promise((done) => {
+    memNoteOnce(patch, done);
+  })).catch(() => { /* telemetry only */ });
+}
+function memNoteOnce(patch, done) {
   try {
     chrome.storage.local.get(["memStats"], (r) => {
-      if (chrome.runtime.lastError) return;
+      if (chrome.runtime.lastError) { done(); return; }
       const s = (r && r.memStats) || {};
       for (const k of Object.keys(patch)) {
         if (k === "lastAt" || k === "lastErr") s[k] = patch[k];
         else s[k] = (s[k] || 0) + patch[k];
       }
-      chrome.storage.local.set({ memStats: s }, () => void chrome.runtime.lastError);
+      chrome.storage.local.set({ memStats: s }, () => { void chrome.runtime.lastError; done(); });
     });
-  } catch (e) { /* telemetry only */ }
+  } catch (e) { done(); /* telemetry only */ }
 }
 async function memFetch(query) {
   const work = (async () => {
@@ -3111,6 +3118,10 @@ async function cdpChooser(target, tabId, paths) {
   try {
     await cdpCmd(target, "Page.enable", {}, 5000);
     await cdpCmd(target, "Page.setInterceptFileChooserDialog", { enabled: true }, 5000);
+    // (v0.21.77) Chrome intercepts every file chooser on this page from here on (no
+    // OS dialog can open), so the page shim — spent after a btn miss, it would
+    // swallow the click below — steps aside and the chooser gets Messenger's request.
+    try { await chrome.scripting.executeScript({ target: { tabId }, world: "MAIN", func: pageDisarmFileShim }); } catch (e) { /* no shim / no access */ }
     const opened = new Promise((resolve) => {
       listener = (src, method, params) => { if (src && src.tabId === tabId && method === "Page.fileChooserOpened") resolve(params || {}); };
       chrome.debugger.onEvent.addListener(listener);
@@ -3544,30 +3555,64 @@ async function cdpActivate(tabId, opts) {
 // Nothing else changes; both are restored on a timer and in a finally.
 async function pageArmFileShim(blobUrl, name, mime, ms) {
   try {
-    if (window.__subsellShim) { window.__subsellShim.renew(Date.now() + ms); return { ok: true, already: true }; }
+    // (v0.21.77) ONE ARM = ONE FILE, HANDED OVER ONCE. A shim still alive from the
+    // previous clip used to be RENEWED here, not rebuilt — and it kept the previous
+    // clip's File in its closure. The clips of a set go back to back (no gap; only
+    // clip 1 is followed by the typed reply), so the next clip was armed inside the
+    // old shim's 20-s life and Messenger was handed the PREVIOUS clip again: a second
+    // copy of it staged, its tile was counted, Enter sent it, and the clip that was
+    // due never reached Messenger (rx:o0v0m0e0r0u0 on every third clip, PC-v51j4 and
+    // PC-dodu3, Oct 6 2026) while the ledger recorded it as sent — the owner's
+    // "double videos, not 1 of each", and "triple" when the reply did not separate
+    // clips 1 and 2. Now the blob is fetched first, then the old shim is taken down
+    // (its own timer cancelled, so it can never unhook this one) and this one carries
+    // the new clip. A second file-input click while armed gets NOTHING — no copy, and
+    // still no dialog.
     const blob = await (await fetch(blobUrl)).blob();
     const file = new File([blob], name || "video.mp4", { type: mime || "video/mp4" });
+    let replaced = false;
+    const prev = window.__subsellShim;
+    if (prev) {
+      replaced = true;
+      try { prev.restore(); } catch (e) { /* replaced below either way */ }
+      // A shim armed by a build before .77 (no spend()) still has its own restore
+      // timer running (≤ 20.5 s), and that timer would unhook a new shim mid-attach —
+      // a real file dialog could then open. The engine waits that window out
+      // (legacyWaitMs) and arms again; nothing is installed until then.
+      if (typeof prev.spend !== "function") window.__subsellShimLegacyUntil = Date.now() + 21000;
+    }
+    const legacyWaitMs = (window.__subsellShimLegacyUntil || 0) - Date.now();
+    if (legacyWaitMs > 0) return { ok: false, legacyWaitMs, error: "an older build's file shim is still winding down" };
     let until = Date.now() + ms;
-    const live = () => Date.now() < until;
+    let delivered = false; // one file per arm
+    let dead = false;
+    let spent = false; // the engine moved on: not even a scheduled hand-over may land
+    const live = () => !dead && Date.now() < until;
     const origClick = HTMLInputElement.prototype.click;
     const origPicker = window.showOpenFilePicker;
     window.__subsellShimFired = 0;
     window.__subsellShimSeen = 0;
-    HTMLInputElement.prototype.click = function () {
+    window.__subsellShimSwallowed = 0;
+    window.__subsellShimInfo = null; // a click of THIS arm describes the input, never the last clip's
+    window.__subsellShimErr = "";
+    const shimClick = function () {
       if (this.type === "file" && live()) {
         window.__subsellShimSeen++;
+        if (delivered) { window.__subsellShimSwallowed++; return; } // already handed over: no second copy, no dialog
         try {
+          delivered = true;
           const inp = this;
           // (v0.21.67) what Messenger clicked, for the 🩺: is its input in the
           // document, does React own it, what does it accept?
           let react = false;
           try { react = Object.keys(inp).some((k) => k.indexOf("__reactProps") === 0 || k.indexOf("__reactEventHandlers") === 0); } catch (e) { /* page world */ }
-          window.__subsellShimInfo = { connected: !!inp.isConnected, react, accept: String((inp.getAttribute && inp.getAttribute("accept")) || ""), multiple: !!inp.multiple, filesRead: 0 };
+          window.__subsellShimInfo = { connected: !!inp.isConnected, react, accept: String((inp.getAttribute && inp.getAttribute("accept")) || ""), multiple: !!inp.multiple, filesRead: 0, size: file.size }; // (v0.21.77) size = exactly what is handed over
           // (v0.21.67) DELIVER LIKE A REAL DIALOG: asynchronously, after this
           // click() has returned to Messenger. The events used to fire inside the
           // click call itself — before a listener Messenger attaches right after
           // calling click() could exist. A dialog never answers synchronously.
           setTimeout(function () {
+            if (dead || spent) return; // taken down (a newer clip armed) or spent (the engine moved on): never a late copy
             try {
               const dt = new DataTransfer();
               dt.items.add(file);
@@ -3583,31 +3628,50 @@ async function pageArmFileShim(blobUrl, name, mime, ms) {
             } catch (e) { window.__subsellShimErr = String((e && e.message) || e); }
           }, 60);
           return; // the original click is never called ⇒ no dialog is possible
-        } catch (e) { /* fall through to the real click below */ }
+        } catch (e) {
+          // (v0.21.77) never fall through to the real click from here: that one
+          // opens a Windows file dialog on the operator's desktop.
+          window.__subsellShimErr = String((e && e.message) || e);
+          return;
+        }
       }
       return origClick.apply(this, arguments);
     };
-    if (typeof origPicker === "function") {
-      window.showOpenFilePicker = function () {
-        if (live()) {
-          window.__subsellShimFired++;
-          return Promise.resolve([{ kind: "file", name: file.name, getFile: async () => file }]);
-        }
-        return origPicker.apply(this, arguments);
-      };
-    }
-    const restore = () => {
-      try { HTMLInputElement.prototype.click = origClick; } catch (e) { /* ignore */ }
-      try { if (typeof origPicker === "function") window.showOpenFilePicker = origPicker; } catch (e) { /* ignore */ }
-      window.__subsellShim = null;
+    const shimPicker = function () {
+      if (live()) {
+        if (delivered) { window.__subsellShimSwallowed++; return Promise.reject(new DOMException("The user aborted a request.", "AbortError")); } // like a cancelled dialog
+        delivered = true;
+        window.__subsellShimFired++;
+        return Promise.resolve([{ kind: "file", name: file.name, getFile: async () => file }]);
+      }
+      return origPicker.apply(this, arguments);
     };
-    window.__subsellShim = { renew: (t) => { until = t; }, restore };
-    setTimeout(restore, Math.min(Math.max(ms, 1000), 60000) + 500);
-    return { ok: true };
+    HTMLInputElement.prototype.click = shimClick;
+    if (typeof origPicker === "function") window.showOpenFilePicker = shimPicker;
+    let timer = 0;
+    const self = {};
+    // Idempotent; cancels its OWN timer; unhooks only what is still ITS hook, and
+    // clears the global only while it still points at itself — an old shim's late
+    // restore can never take down a newer one.
+    const restore = () => {
+      if (dead) return;
+      dead = true;
+      if (timer) { try { clearTimeout(timer); } catch (e) { /* ignore */ } timer = 0; }
+      try { if (HTMLInputElement.prototype.click === shimClick) HTMLInputElement.prototype.click = origClick; } catch (e) { /* ignore */ }
+      try { if (typeof origPicker === "function" && window.showOpenFilePicker === shimPicker) window.showOpenFilePicker = origPicker; } catch (e) { /* ignore */ }
+      if (window.__subsellShim === self) window.__subsellShim = null;
+    };
+    // spend(): the engine moved on without a hand-over (Messenger never clicked) —
+    // a late click must not deliver a copy behind the next channel's; still no dialog.
+    self.restore = restore;
+    self.spend = () => { delivered = true; spent = true; };
+    window.__subsellShim = self;
+    timer = setTimeout(restore, Math.min(Math.max(ms, 1000), 60000) + 500);
+    return { ok: true, replaced };
   } catch (e) { return { ok: false, error: String((e && e.message) || e) }; }
 }
 function pageShimStatus() {
-  return { fired: window.__subsellShimFired || 0, seen: window.__subsellShimSeen || 0, armed: !!window.__subsellShim, info: window.__subsellShimInfo || null, err: window.__subsellShimErr || "" };
+  return { fired: window.__subsellShimFired || 0, seen: window.__subsellShimSeen || 0, swallowed: window.__subsellShimSwallowed || 0, armed: !!window.__subsellShim, info: window.__subsellShimInfo || null, err: window.__subsellShimErr || "" };
 }
 // ---- (v0.21.67) THE REACTION PROBE: did Messenger READ the clip we handed over? ----
 // Every verdict so far was read off the composer's rendering or its send control —
@@ -3624,7 +3688,7 @@ function pageArmReactionProbe(expectSize, ms) {
   try {
     const W = window;
     if (W.__subsellRx && W.__subsellRx.armed) { W.__subsellRx.reset(expectSize, Date.now() + ms); return { ok: true, already: true }; }
-    const st = { objUrl: 0, vidNew: 0, vidSrc: 0, meta: 0, err: 0, read: 0, up: 0, other: 0, expect: 0, until: 0, armed: true };
+    const st = { objUrl: 0, vidNew: 0, vidSrc: 0, meta: 0, err: 0, read: 0, up: 0, other: 0, otherSizes: [], expect: 0, until: 0, armed: true };
     // OUR clip is recognised by its exact byte size — never guessed: with no size
     // known nothing counts (an unrelated photo or sticker must not read as "held").
     const ours = (b) => {
@@ -3672,7 +3736,18 @@ function pageArmReactionProbe(expectSize, ms) {
     const oCE = Document.prototype.createElement;
     URL.createObjectURL = function (b) {
       const u = oCreate.apply(this, arguments);
-      try { if (live()) { if (ours(b)) { st.objUrl++; oursUrls.add(String(u)); } else st.other++; } } catch (e) { /* page world */ }
+      try {
+        if (live()) {
+          if (ours(b)) { st.objUrl++; oursUrls.add(String(u)); }
+          else {
+            st.other++;
+            // (v0.21.77) the size of a big FOREIGN blob Messenger minted a URL for: the
+            // engine compares it with the set's other clips ("dup:clipK" in the trace =
+            // Messenger was handed an earlier clip instead of this one). Evidence only.
+            if (b && typeof b.size === "number" && b.size > 65536 && st.otherSizes.length < 8) st.otherSizes.push(b.size);
+          }
+        }
+      } catch (e) { /* page world */ }
       return u;
     };
     Blob.prototype.slice = function () { if (live() && ours(this)) st.read++; return oSlice.apply(this, arguments); };
@@ -3720,7 +3795,7 @@ function pageArmReactionProbe(expectSize, ms) {
       if (timer) clearTimeout(timer);
       timer = setTimeout(restore, Math.min(Math.max(until - Date.now(), 1000), 180000) + 500);
     };
-    st.reset = (size, until) => { st.objUrl = st.vidNew = st.vidSrc = st.meta = st.err = st.read = st.up = st.other = 0; st.expect = Number(size) || 0; oursUrls = new Set(); arm(until); };
+    st.reset = (size, until) => { st.objUrl = st.vidNew = st.vidSrc = st.meta = st.err = st.read = st.up = st.other = 0; st.otherSizes = []; st.expect = Number(size) || 0; oursUrls = new Set(); arm(until); };
     st.restore = restore;
     W.__subsellRx = st;
     st.reset(expectSize, Date.now() + ms);
@@ -3732,7 +3807,7 @@ function pageReactionStatus() {
   let userAct = null;
   try { userAct = navigator.userActivation ? { been: !!navigator.userActivation.hasBeenActive, now: !!navigator.userActivation.isActive } : null; } catch (e) { userAct = null; }
   if (!st) return { armed: false, userAct };
-  return { armed: !!st.armed, objUrl: st.objUrl, vidNew: st.vidNew, vidSrc: st.vidSrc, meta: st.meta, err: st.err, read: st.read, up: st.up, other: st.other, expect: st.expect, userAct };
+  return { armed: !!st.armed, objUrl: st.objUrl, vidNew: st.vidNew, vidSrc: st.vidSrc, meta: st.meta, err: st.err, read: st.read, up: st.up, other: st.other, otherSizes: (st.otherSizes || []).slice(0, 8), expect: st.expect, userAct };
 }
 function pageDisarmReactionProbe() {
   try { if (window.__subsellRx && window.__subsellRx.restore) window.__subsellRx.restore(); } catch (e) { /* ignore */ }
@@ -3756,6 +3831,13 @@ function pageDisarmFileShim() {
   try { if (window.__subsellShim) window.__subsellShim.restore(); } catch (e) { /* ignore */ }
   return true;
 }
+// (v0.21.77) the shim stays armed (no dialog) but hands nothing over any more — not
+// even a hand-over already scheduled. Answers with the counters AS OF THE SPEND: a
+// hand-over that ran just before it is the btn channel's dispatch after all.
+function pageSpendFileShim() {
+  try { if (window.__subsellShim && typeof window.__subsellShim.spend === "function") window.__subsellShim.spend(); } catch (e) { /* ignore */ }
+  return { fired: window.__subsellShimFired || 0, seen: window.__subsellShimSeen || 0, swallowed: window.__subsellShimSwallowed || 0, armed: !!window.__subsellShim, info: window.__subsellShimInfo || null, err: window.__subsellShimErr || "" };
+}
 async function armFileShim(tabId, blobUrl, name, mime, ms) {
   if (!tabId || !chrome.scripting) return { ok: false, error: "no tab / scripting API" };
   try {
@@ -3765,10 +3847,10 @@ async function armFileShim(tabId, blobUrl, name, mime, ms) {
     return (r && r[0] && r[0].result) || { ok: false, error: "shim not applied" };
   } catch (e) { return { ok: false, error: String((e && e.message) || e) }; }
 }
-async function shimStatus(tabId, disarm) {
+async function shimStatus(tabId, disarm, spend) {
   if (!tabId || !chrome.scripting) return { ok: false };
   try {
-    const r = await chrome.scripting.executeScript({ target: { tabId }, world: "MAIN", func: disarm ? pageDisarmFileShim : pageShimStatus });
+    const r = await chrome.scripting.executeScript({ target: { tabId }, world: "MAIN", func: disarm ? pageDisarmFileShim : spend ? pageSpendFileShim : pageShimStatus });
     return { ok: true, status: (r && r[0] && r[0].result) || null };
   } catch (e) { return { ok: false, error: String((e && e.message) || e) }; }
 }
@@ -4135,7 +4217,7 @@ async function buildDiagnostic() {
         // (v0.21.67) [rx:…] = the last reaction-probe code for the channel (o objectURLs,
         // v video src, m loadedmetadata, e media errors, r blob reads, u upload bodies —
         // of OUR clip); "held" = Messenger read the clip but never staged it that time
-        return e ? k + ":" + (e.dispatched || 0) + "d/" + (e.tile || 0) + "t/" + (e.blind || 0) + "b/" + (e.none || 0) + "n/" + (e.unverified || 0) + "u" + (e.rx ? "[rx:" + e.rx + (e.held ? " held" + e.held : "") + "]" : "") + (e.picker ? "[picker:" + e.picker + "]" : "") : k + ":-";
+        return e ? k + ":" + (e.dispatched || 0) + "d/" + (e.tile || 0) + "t/" + (e.blind || 0) + "b/" + (e.none || 0) + "n/" + (e.unverified || 0) + "u" + (e.rx ? "[rx:" + e.rx + (e.held ? " held" + e.held : "") + "]" : "") + (e.picker ? "[picker:" + e.picker + "]" : "") + (e.rearm ? "[rearm=" + e.rearm + "]" : "") + (e.swallowed ? "[swallow=" + e.swallowed + "]" : "") + (e.wrongFile ? "[WRONGFILE=" + e.wrongFile + "]" : "") : k + ":-";
       }).join(" ") +
       " retryMax=" + (settings.videoRetryMax != null ? settings.videoRetryMax : "?") +
       // (v0.21.67) gate = are this page's media loads parked? primed = how the frame was made to play media
@@ -4171,7 +4253,7 @@ async function buildDiagnostic() {
       "memory: " + (settings.threadMemory === false ? "OFF(setting)" : !loginOk ? "NO cloud login → reads off" : ms.lastAt ? "on" : "on, NO successful read yet") +
       " id=" + (st.machineId || "-") + " typingPace=" + (settings.typingPaceMaxSec != null ? settings.typingPaceMaxSec : "?") + "s" +
       " | reads=" + (ms.reads || 0) + " fails=" + (ms.fails || 0) + " last=" + ageM(ms.lastAt) + " skew=" + Math.round(memSkewMs / 1000) + "s" +
-      " | skips: answered=" + (ms.answered || 0) + " echo=" + (ms.echo || 0) + " claim=" + (ms.claimed || 0) + " video=" + (ms.video || 0) + " videoWait=" + (ms.videoWait || 0) +
+      " | skips: answered=" + (ms.answered || 0) + " echo=" + (ms.echo || 0) + " claim=" + (ms.claimed || 0) + " video=" + (ms.video || 0) + " videoWait=" + (ms.videoWait || 0) + (ms.videoRetry ? " videoRetryOk=" + ms.videoRetry : "") + (ms.videoBlind ? " videoBlind=" + ms.videoBlind : "") +
       (ms.lastErr ? " err=\"" + cut(ms.lastErr, 40) + "\"" : "")
     );
   }
@@ -4552,8 +4634,16 @@ chrome.runtime.onMessage.addListener((msg, _sender, sendResponse) => {
           const settings = await getSettings();
           if (settings.threadMemory === false || !msg.threadId) { sendResponse({ ok: true, sent: false, off: true }); break; }
           if (memClaimPending[msg.threadId]) { try { await memClaimPending[msg.threadId]; } catch (e) { /* bounded inside */ } }
-          const rows = await memThreadRows(msg.threadId, true);
-          if (!rows) { sendResponse({ ok: true, sent: false, unavailable: true }); break; }
+          let rows = await memThreadRows(msg.threadId, true);
+          // (v0.21.77) a failed read made this decision BLIND — a set another computer
+          // already sent would go out a second time. One more read (logged-in machines
+          // only: without a login every read fails) before deciding without memory.
+          if (!rows && (await Promise.race([cloudValidAuth().catch(() => null), new Promise((r) => setTimeout(() => r(null), 3000))]))) {
+            await new Promise((r) => setTimeout(r, 1500));
+            rows = await memThreadRows(msg.threadId, true);
+            if (rows) memNote({ videoRetry: 1 });
+          }
+          if (!rows) { memNote({ videoBlind: 1 }); sendResponse({ ok: true, sent: false, unavailable: true }); break; }
           const machineId = await getMachineId();
           const myLabel = await getMachineLabel();
           let v = memVideoSent(rows, machineId, memNow(), myLabel);
@@ -4669,7 +4759,7 @@ chrome.runtime.onMessage.addListener((msg, _sender, sendResponse) => {
         }
         case "SHIM_STATUS": {
           const tabId = _sender && _sender.tab && _sender.tab.id;
-          sendResponse(await shimStatus(tabId, !!msg.disarm));
+          sendResponse(await shimStatus(tabId, !!msg.disarm, !!msg.spend));
           break;
         }
         case "CDP_ACTIVATE": {
