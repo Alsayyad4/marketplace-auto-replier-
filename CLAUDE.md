@@ -9,7 +9,13 @@ all chrome.debugger/CDP work) + Supabase dashboard in docs/. Live branch:
   permissions ships OFF by default behind a cloud setting and goes to ONE machine first.
 - The operator wants zero manual steps in normal operation.
 
-## Known state (v0.21.75)
+## Known state (v0.21.76)
+- FIRST 🩺 SINCE .70 (.76, PC-v51j4 Oct 6 2026 — read it in HANDOFF): the cache works
+  (~$1.1 per 1,000 replies), cloud memory skips videos sent elsewhere, and the third
+  clip's send was counted on a tray tile while the ARMED probe saw Messenger do nothing
+  (`rx:o0…`) — the candidate "not 1 of each" cause; its disk copy was "downloading" 22 h.
+  .76 = the stall watchdog resumes a paused download and never cancels a fully-received
+  one; the 🩺 names a pending download's state. A second computer (PC-w2gmy) is on .71.
 - HOURS (.75): buyers are answered 24/7. `withinBusinessHours` gates a reply only when
   `replyWindowOnly` (NEW key, default off) is on; the OLD `businessHoursEnabled` is read
   by nothing here but is `true` on every live row and gates the builds before .75, so

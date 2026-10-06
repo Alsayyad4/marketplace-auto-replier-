@@ -134,6 +134,13 @@ ok(/function renderTeachPreview\(\) \{[\s\S]{0,200}el\.textContent = teachPrevie
 ok(/navigator\.clipboard\.writeText\(text\)/.test(app) && /box\.classList\.toggle\("hidden", copied\)/.test(app), "copied to the clipboard; when the browser refuses, the text is shown to select by hand");
 ok(/id="copyReport"/.test(html) && /id="reportBox"/.test(html) && /id="reportText"/.test(html) && /id="reportClose"/.test(html), "the button and the fallback box are in the markup");
 
+console.log("\n— 3e. (v0.21.76) the on-disk clip download: no false stall, a visible state —");
+const W = between(bg, '        if (it && it.state === "in_progress") {', "        // gone from history / interrupted / deleted on disk / stalled");
+ok(/if \(it\.paused && it\.canResume\) \{\s*\n\s*try \{ chrome\.downloads\.resume\(hit\.id/.test(W), "a paused download (network drop) is resumed, not cancelled");
+ok(/const total = it\.totalBytes \|\| 0;\s*\n\s*if \(total > 0 && got >= total\) \{[\s\S]{0,300}return \{ ok: false, error: "still downloading \(received, finishing/.test(W), "a download whose bytes are all received is finishing (scan / rename) — never cancelled as stalled");
+ok(W.indexOf("it.paused && it.canResume") < W.indexOf("hit.bytes === got && hit.bytesAt") && W.indexOf("got >= total") < W.indexOf("hit.bytes === got && hit.bytesAt"), "…both checks run BEFORE the 2-minute stall cancel");
+ok(/pendNote\.push\(!it \? "gone" : it\.state === "complete" \? "complete-not-adopted" : it\.state === "interrupted" \? "interrupted:"/.test(bg) && /" downloading=" \+ pending \+ "\[" \+ pendNote\.join\("; "\) \+ "\]"/.test(bg), "the 🩺 names what a pending download is doing (gone / complete-not-adopted / interrupted / paused / MB received, danger, age)");
+
 console.log("\n— 4. RUNTIME: a live row still carrying the old gate gets ONE system save on open —");
 function makeDom() {
   const cache = {};

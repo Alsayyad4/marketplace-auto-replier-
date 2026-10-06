@@ -2772,6 +2772,22 @@ async function ensureVideoOnDisk(req) {
           // proxy that accepts the connection and never sends) would stay
           // in_progress for hours — cancel it and start over below.
           const got = it.bytesReceived || 0;
+          // (v0.21.76) Two states the watchdog must NOT read as a stall (PC-v51j4
+          // showed one clip "downloading" for 22 h — cancel, restart, cancel…):
+          // a PAUSED download (Chrome pauses on a network drop) is resumed, and a
+          // download whose bytes are ALL received is finishing (a Safe Browsing
+          // scan, the rename off .crdownload) — cancelling it only restarts the
+          // scan. Both are reported as still downloading; the 🩺 names the state.
+          if (it.paused && it.canResume) {
+            try { chrome.downloads.resume(hit.id, () => void chrome.runtime.lastError); } catch (e) { /* best effort */ }
+            await save(Object.assign({}, hit, { bytes: got, bytesAt: Date.now() }));
+            return { ok: false, error: "still downloading (resumed)" };
+          }
+          const total = it.totalBytes || 0;
+          if (total > 0 && got >= total) {
+            if (hit.bytes !== got || !hit.bytesAt) await save(Object.assign({}, hit, { bytes: got, bytesAt: Date.now() }));
+            return { ok: false, error: "still downloading (received, finishing" + (it.danger && it.danger !== "safe" && it.danger !== "accepted" ? ": " + it.danger : "") + ")" };
+          }
           if (hit.bytes === got && hit.bytesAt && Date.now() - hit.bytesAt > 120000) {
             try { await new Promise((r) => chrome.downloads.cancel(hit.id, () => { void chrome.runtime.lastError; r(); })); } catch (e) { /* best effort */ }
           } else {
@@ -4074,11 +4090,20 @@ async function buildDiagnostic() {
     const cs = st.cdpStats || {};
     const vd = st.videoDisk || {};
     let onDisk = 0, missing = 0, pending = 0, failed = 0;
+    const pendNote = []; // (v0.21.76) what a pending download is doing — the 22-hour "downloading=1" had no state
+    const mb = (b) => (Math.round((b || 0) / 104857.6) / 10).toFixed(1);
     for (const k of Object.keys(vd)) {
       const e = vd[k];
       if (!e) continue;
       if (e.failAt) { failed++; continue; }
-      if (e.pending) { pending++; continue; }
+      if (e.pending) {
+        pending++;
+        const it = chrome.downloads && e.id != null ? (await dlSearch({ id: e.id }))[0] : null;
+        pendNote.push(!it ? "gone" : it.state === "complete" ? "complete-not-adopted" : it.state === "interrupted" ? "interrupted:" + (it.error || "?") :
+          (it.paused ? "paused " : "") + mb(it.bytesReceived) + "/" + (it.totalBytes > 0 ? mb(it.totalBytes) : "?") + "MB" + (it.danger && it.danger !== "safe" && it.danger !== "accepted" ? " " + it.danger : ""));
+        pendNote[pendNote.length - 1] += " " + ageM(e.at);
+        continue;
+      }
       if (e.id == null) continue;
       const it = chrome.downloads ? (await dlSearch({ id: e.id }))[0] : null;
       if (it && it.state === "complete" && it.exists !== false) onDisk++; else missing++;
@@ -4094,7 +4119,7 @@ async function buildDiagnostic() {
       (cs.lastErr ? " lastErr=\"" + cut(cs.lastErr, 70) + "\"" : "") +
       (cs.actN || cs.actHadN ? " act=" + (cs.actN || 0) + (cs.actAt ? "(" + ageM(cs.actAt) + ":" + (cs.actHow || "?") + ")" : "") + (cs.actHadN ? " had=" + cs.actHadN : "") + (cs.actFailN ? " actFail=" + cs.actFailN : "") + (cs.actKeysFailN ? " keysFail=" + cs.actKeysFailN : "") : "") +
       (/not allowed/i.test(cs.lastErr || "") && (cs.lastErrAt || 0) > (cs.lastOkAt || 0) ? " ⚠ turn ON 'Allow access to file URLs' for SubSell in chrome://extensions" : "") +
-      " | disk=" + onDisk + " clip(s)" + (missing ? " missing=" + missing : "") + (pending ? " downloading=" + pending : "") + (failed ? " failed=" + failed : "")
+      " | disk=" + onDisk + " clip(s)" + (missing ? " missing=" + missing : "") + (pending ? " downloading=" + pending + "[" + pendNote.join("; ") + "]" : "") + (failed ? " failed=" + failed : "")
     );
   }
   {
