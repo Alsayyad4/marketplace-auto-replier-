@@ -141,7 +141,7 @@ const ok = (cond, msg) => { console.log((cond ? "  PASS  " : "  FAIL  ") + msg);
   ok(/id="draftBanner"[^>]*class="hint hidden"/.test(html), "the draft offer has its own element, so the fix banner cannot replace it");
   ok(/if \(!sql\) \{[\s\S]{0,400}return;\s*\}/.test(src) && !/window\.open\(SQL_FIX_URLS/.test(src),
      "'Copy the fix' never opens or hands over a file that failed the security-definer check");
-  ok(/app\.js\?v=20261005b/.test(html), "app.js cache-buster bumped for this release");
+  ok(/app\.js\?v=20261006/.test(html), "app.js cache-buster bumped for this release");
   // (v0.21.72) the video list saves itself; the clip-ledger switch is bound; sizes are shown
   ok(/await saveVideoList\("Uploaded", url\);/.test(src) && /await saveVideoList\("Removed"\);/.test(src), "uploading or removing a video saves the list at once");
   ok(/id="videoCompleteSet"/.test(html) && /\["videoCompleteSet", "checked"\]/.test(src) && /videoCompleteSet: true,/.test(src), "the 'every video, exactly once' switch is in the markup, bound, and defaults ON");
