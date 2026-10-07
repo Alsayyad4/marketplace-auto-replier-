@@ -562,6 +562,9 @@
           pull = " · last pull " + fmtWhen(lp.at) + ": " + pull;
         }
         const acct = s.userId ? " · account " + String(s.userId).slice(0, 8) : "";
+        // (v0.21.78) a refused token refresh being waited out: say which wait, and
+        // whether it ends by itself (it replaces the pull's own "FAILED", same cause)
+        if (s.holdLine && (!lp || lp.ok === false)) pull = " · cloud login: " + s.holdLine;
         el.textContent = "Logged in as " + (s.email || "?") + acct + " · last synced " + fmtWhen(s.lastPullAt) + pull;
       }
     });
@@ -705,49 +708,106 @@
       });
     });
   }
-  if ($("cloudLogin")) {
-    $("cloudLogin").addEventListener("click", () => {
-      $("cloudMsg").textContent = "Logging in…";
-      // Persist creds first in case they were typed but not explicitly saved.
-      persistCloudCreds(() => {
-        chrome.runtime.sendMessage(
-          { type: "CLOUD_LOGIN", email: ($("cloudEmail").value || "").trim(), password: $("cloudPassword").value },
-          (r) => {
-            if (chrome.runtime.lastError) {
-              $("cloudMsg").textContent = "Error: " + chrome.runtime.lastError.message;
-              return;
-            }
-            if (!r || !r.ok) {
-              $("cloudMsg").textContent = "Login failed: " + (r && r.error);
-              return;
-            }
-            $("cloudPassword").value = "";
-            // (v0.21.61) Say what came back. This line used to read "pulled your
-            // cloud settings" even when the account was empty, which is how a wiped
-            // account managed to look like a healthy login with a blank form.
-            const p = r.pull || {};
-            $("cloudMsg").textContent = p.wiped
-              ? "Logged in ✓ — the account was empty, so this computer's settings were put back."
-              : p.seeded
-              ? "Logged in ✓ — the account was empty, so it was set up again. Only the API key is missing — paste it above and press Save."
-              : p.empty
-              ? "Logged in ✓ — but the account has no settings saved in it."
-              : p.keys
-              ? "Logged in ✓ — pulled " + p.keys + " settings from your account."
-              : p.unchanged
-              ? "Logged in ✓ — already up to date."
-              : p.ok === false
-              ? "Logged in ✓ — but your settings could NOT be pulled from the account: " + (p.error || "unknown error") + ". Nothing on this page came from the cloud."
-              : "Logged in ✓.";
-            refreshCloudStatus();
-            load(); // re-read merged settings (cloud now wins) into the form
+  // (v0.21.78) A login refused by Supabase's per-address limit ("Request rate limit
+  // reached") is not a wrong password: say so, and try again by itself while this
+  // page stays open — the password stays in its box, nothing is stored. Editing the
+  // email/password, Log in or Log out cancels the countdown.
+  // Every login attempt carries a generation number: an answer or a countdown tick
+  // from an older attempt (a double click, Log in pressed while a retry was out)
+  // finds a newer number and does nothing — one countdown at a time, ever, and a
+  // countdown stops itself before it fires.
+  const LOGIN_RETRY_S = [60, 90, 120, 180, 240, 300];
+  let loginRetry = null;
+  let loginGen = 0;
+  function stopLoginRetry(note) {
+    loginGen++;
+    if (loginRetry) {
+      clearInterval(loginRetry);
+      loginRetry = null;
+      if (note) $("cloudMsg").textContent = note;
+    }
+  }
+  const fmtLeft = (s) => Math.floor(s / 60) + ":" + String(s % 60).padStart(2, "0");
+  function cloudLoginNow(attempt) {
+    stopLoginRetry();
+    const gen = loginGen;
+    $("cloudMsg").textContent = attempt ? "Logging in (try " + (attempt + 1) + ")…" : "Logging in…";
+    // Persist creds first in case they were typed but not explicitly saved.
+    persistCloudCreds(() => {
+      chrome.runtime.sendMessage(
+        { type: "CLOUD_LOGIN", email: ($("cloudEmail").value || "").trim(), password: $("cloudPassword").value },
+        (r) => {
+          const lastErr = chrome.runtime.lastError;
+          if (!(r && r.ok) && gen !== loginGen) return; // a newer attempt (or a cancel) owns the page now
+          if (lastErr) {
+            $("cloudMsg").textContent = "Error: " + lastErr.message;
+            return;
           }
-        );
-      });
+          if (!r || !r.ok) {
+            if (r && r.limited && attempt < LOGIN_RETRY_S.length && $("cloudPassword").value) {
+              let left = LOGIN_RETRY_S[attempt];
+              const say = () => {
+                $("cloudMsg").textContent = "Not in yet — Supabase is limiting logins from this internet connection for a few minutes " +
+                  "(too many requests from the computers here); your password is fine. Trying again by itself in " + fmtLeft(left) +
+                  " — keep this page open. No need to Log out: this computer keeps its settings meanwhile.";
+              };
+              say();
+              if (loginRetry) clearInterval(loginRetry);
+              const tick = setInterval(() => {
+                if (gen !== loginGen) { clearInterval(tick); return; } // superseded: never fires
+                left -= 1;
+                if (left > 0) { say(); return; }
+                clearInterval(tick);
+                if (loginRetry === tick) loginRetry = null;
+                cloudLoginNow(attempt + 1);
+              }, 1000);
+              loginRetry = tick;
+              return;
+            }
+            $("cloudMsg").textContent = "Login failed: " + (r && r.error) +
+              (r && r.limited ? " — Supabase is still limiting logins from this internet connection; try again later. This computer keeps its settings meanwhile." : "");
+            return;
+          }
+          stopLoginRetry(); // logged in: whatever else was pending stops here
+          $("cloudPassword").value = "";
+          // (v0.21.61) Say what came back. This line used to read "pulled your
+          // cloud settings" even when the account was empty, which is how a wiped
+          // account managed to look like a healthy login with a blank form.
+          const p = r.pull || {};
+          $("cloudMsg").textContent = p.wiped
+            ? "Logged in ✓ — the account was empty, so this computer's settings were put back."
+            : p.seeded
+            ? "Logged in ✓ — the account was empty, so it was set up again. Only the API key is missing — paste it above and press Save."
+            : p.empty
+            ? "Logged in ✓ — but the account has no settings saved in it."
+            : p.keys
+            ? "Logged in ✓ — pulled " + p.keys + " settings from your account."
+            : p.unchanged
+            ? "Logged in ✓ — already up to date."
+            : p.ok === false
+            ? "Logged in ✓ — but your settings could NOT be pulled from the account: " + (p.error || "unknown error") + ". Nothing on this page came from the cloud."
+            : "Logged in ✓.";
+          refreshCloudStatus();
+          load(); // re-read merged settings (cloud now wins) into the form
+        }
+      );
+    });
+  }
+  if ($("cloudLogin")) {
+    $("cloudLogin").addEventListener("click", () => cloudLoginNow(0));
+    // typing in the boxes stops a countdown (only a countdown: an answer on its way still lands)
+    ["cloudEmail", "cloudPassword"].forEach((id) => {
+      if ($(id)) $(id).addEventListener("input", () => { if (loginRetry) stopLoginRetry("Stopped trying by itself — press Log in when ready."); });
     });
   }
   if ($("cloudLogout")) {
     $("cloudLogout").addEventListener("click", () => {
+      // (v0.21.78) Log out also takes the account's settings off this computer (API
+      // key included) — that is how computers ended up "API key NOT set" while a
+      // frozen sync was being fixed, which never needs a log out. Ask first;
+      // "Cancel" leaves everything as it was, a login countdown included.
+      if (!window.confirm("Log out of the cloud on this computer?\n\nThis also removes the account's settings from this computer (API key, teaching, videos): the bot may stop answering here until you log in again.\n\nA frozen sync or a rate-limit message does NOT need a log out — just press Log in.")) return;
+      stopLoginRetry();
       chrome.runtime.sendMessage({ type: "CLOUD_LOGOUT" }, () => {
         $("cloudMsg").textContent = "Logged out.";
         setTimeout(() => ($("cloudMsg").textContent = ""), 2000);

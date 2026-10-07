@@ -9,7 +9,21 @@ all chrome.debugger/CDP work) + Supabase dashboard in docs/. Live branch:
   permissions ships OFF by default behind a cloud setting and goes to ONE machine first.
 - The operator wants zero manual steps in normal operation.
 
-## Known state (v0.21.77)
+## Known state (v0.21.78)
+- LOGIN STORM (.78, Oct 7 2026: "cloud sync frozen" + "Request rate limit reached"):
+  Supabase Auth's /token budget is per INTERNET ADDRESS (150 / 5 min) and shared by
+  refreshes AND password logins; the old `cloudValidAuth` retried a failed refresh on
+  every call on every Chrome, and the dashboard's `signOut()` (default scope global)
+  ended every computer's login. Now: refresh 10 min ahead IN THE BACKGROUND (a caller
+  with a valid token never waits), one at a time (20-s timeout), a persisted wait after
+  a refusal (`cloudAuthHold`: limited 2→15 min, offline 30 s→5 min, error/409/5xx
+  1→10 min, ended — only on GoTrue's "gone" codes — 30 min→2 h), nothing sent while
+  waiting except one try per 15 s for a click (Save / Restore / Pull now);
+  popup/Settings say which wait and whether it ends by itself; a rate-limited login
+  retries itself while Settings stays open (one countdown ever: `loginGen`); Log out
+  asks first; dashboard signs out `scope: "local"`. 🩺 ` tok= auth=`.
+  `store/smoke-authcalm.js`, `store/smoke-loginretry.js`. Every /token call
+  must go through `cloudValidAuth` / `cloudLogin` — never add another.
 - VIDEO DOUBLES FIXED AT THE ROOT (.77, Oct 6 2026, from PC-dodu3's 🩺): the btn
   channel's page shim (`pageArmFileShim`) was RENEWED, not rebuilt, when the next clip
   armed inside its 20-s life, and handed Messenger the PREVIOUS clip again — clip 3 of

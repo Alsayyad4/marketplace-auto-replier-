@@ -46,7 +46,19 @@
         else { cl.textContent = "✗ " + (m.error || "failed"); cl.className = "bad"; }
         // Frozen cloud sync outranks everything: settings (incl. dashboard videos)
         // are no longer updating on this machine — log in again in Options.
-        if (s.cloudStale) { cl.textContent = "⚠ cloud sync frozen — log in again (Options)"; cl.className = "bad"; }
+        // (v0.21.78) …unless the reason is a wait that ends by itself (Supabase's
+        // rate limit, no connection): logging in then cannot work and only adds to
+        // the limit, and Log out would remove this computer's settings.
+        if (s.cloudStale) {
+          const h = s.cloudHold;
+          let at = "";
+          try { at = h && h.until > Date.now() ? " at " + new Date(h.until).toLocaleTimeString([], { hour: "2-digit", minute: "2-digit" }) : ""; } catch (e) { /* no clock text */ }
+          const why = !h ? "" : h.kind === "limited" ? "cloud busy (Supabase limit on this internet)"
+            : h.kind === "offline" ? "cloud unreachable" : h.kind === "error" ? "cloud refused a refresh" : "";
+          if (why) { cl.textContent = "⏳ " + why + " — reconnects by itself" + at + ", nothing to do"; cl.className = "warn"; }
+          else if (h && h.kind === "ended") { cl.textContent = "⚠ cloud login ended — log in again (Options)"; cl.className = "bad"; }
+          else { cl.textContent = "⚠ cloud sync frozen — log in again (Options)"; cl.className = "bad"; }
+        }
       }
     });
   }

@@ -1156,6 +1156,7 @@ function authFromTokenResponse(data, prev) {
     access_token: data.access_token,
     refresh_token: data.refresh_token || (prev && prev.refresh_token),
     expires_at: Date.now() + (Number(data.expires_in) || 3600) * 1000,
+    ttl_ms: (Number(data.expires_in) || 3600) * 1000, // (v0.21.78) sizes the refresh-ahead window
     user_id: (data.user && data.user.id) || (prev && prev.user_id),
     email: (data.user && data.user.email) || (prev && prev.email),
   };
@@ -1167,9 +1168,12 @@ async function cloudLogin(email, password) {
   try {
     const { resp, data } = await cloudAuthFetch("/auth/v1/token?grant_type=password", { email, password });
     if (!resp.ok || !data.access_token)
-      return { ok: false, error: data.error_description || data.msg || data.error || ("HTTP " + resp.status) };
+      // (v0.21.78) `limited` = Supabase's per-address budget, not a wrong password:
+      // the Settings page says so and tries again by itself while it stays open.
+      return { ok: false, error: data.error_description || data.msg || data.error || ("HTTP " + resp.status), limited: authRefusalKind(resp.status, data) === "limited" };
     const auth = authFromTokenResponse(data, null);
     await setCloudAuth(auth);
+    await setAuthHold(null); // (v0.21.78) a new session owes nothing to the old one's wait
     const pulled = await cloudPull(true);
     // (v0.21.61) `pulled` used to be true for a pull that brought back nothing at
     // all, and the Settings page said "pulled your cloud settings" on the strength
@@ -1187,24 +1191,154 @@ async function cloudLogin(email, password) {
 
 async function cloudRefresh(auth) {
   const { resp, data } = await cloudAuthFetch("/auth/v1/token?grant_type=refresh_token", { refresh_token: auth.refresh_token });
-  if (!resp.ok || !data.access_token) throw new Error(data.error_description || data.msg || "token refresh failed");
+  if (!resp.ok || !data.access_token) {
+    const err = new Error(data.error_description || data.msg || "token refresh failed");
+    err.status = resp.status; // (v0.21.78) authRefusalKind reads these two
+    err.body = data;
+    throw err;
+  }
   const next = authFromTokenResponse(data, auth);
-  await setCloudAuth(next);
+  // (v0.21.78) only over the session it refreshed: a Log out or a new login that
+  // landed while this request was out is never undone by it. A stored session owes
+  // nothing to an old wait (also when it answers after the timeout gave up on it).
+  const cur = await getCloudAuth();
+  if (cur && cur.refresh_token === auth.refresh_token) {
+    await setCloudAuth(next);
+    await setAuthHold(null);
+  }
   return next;
 }
 
-// Usable auth (refreshing the access token if near expiry), or null when not
-// logged in / a refresh failed. Never throws — callers just skip this cycle.
-async function cloudValidAuth() {
+/* (v0.21.78) THE LOGIN STORM: "cloud sync frozen — log in again", then "Login failed:
+ * Request rate limit reached" on the very computer the owner was fixing.
+ * Supabase Auth gives ONE internet address 150 requests per 5 minutes on /token, and a
+ * password login draws from the same budget as a token refresh (supabase/auth
+ * token.go: every grant but web3 goes through limiterOpts.Token). This function used
+ * to retry a failed refresh on EVERY call — the 1-minute pull, every worker wake (the
+ * top-level cloudPull), 2-5 chat-memory reads per buyer message — on every Chrome of
+ * the shop. One login that had ENDED was enough to start it (the dashboard's Log out
+ * signed out every device until .78: supabase-js signOut() defaults to scope
+ * "global"); the refusals then failed every healthy computer's hourly refresh too,
+ * they all joined in, the budget never refilled, and a login typed by hand was
+ * refused with them. Now:
+ *   - the token is refreshed 10 min BEFORE it expires (a third of its life if that is
+ *     shorter), in the background: callers keep the still-valid token and never wait
+ *     for the refresh, and a refused one costs nothing;
+ *   - one refresh at a time per computer (every caller shares the one in flight);
+ *   - after a refusal, a wait before the next try, kept in storage so a worker wake
+ *     cannot reset it: rate limit 2 → 15 min, no connection 30 s → 5 min, other
+ *     refusals 1 → 10 min, a login that ended 30 min → 2 h (never for ever: a wrong
+ *     reading heals itself), each plus up to 25 % so the computers spread out.
+ *     Nothing is sent to /token while waiting — except one try per 15 s for a click
+ *     (Save, Pull now, Restore), as before. Login and Log out clear the wait. */
+const AUTH_REFRESH_AHEAD_MS = 10 * 60 * 1000;
+const AUTH_MIN_LEFT_MS = 30 * 1000; // a token closer than this to expiry is not handed out
+const AUTH_REFRESH_TIMEOUT_MS = 20 * 1000; // a refresh with no answer by then counts as "offline"
+const AUTH_USER_RETRY_MS = 15 * 1000; // a click may try through a wait at most this often (the popup slider saves per step)
+let authUserTryAt = 0;
+const AUTH_HOLD_KEY = "cloudAuthHold";
+const AUTH_HOLD_STEPS = { // [first wait, longest wait]
+  limited: [2 * 60 * 1000, 15 * 60 * 1000],
+  offline: [30 * 1000, 5 * 60 * 1000],
+  error: [60 * 1000, 10 * 60 * 1000],
+  ended: [30 * 60 * 1000, 2 * 60 * 60 * 1000],
+};
+let authRefreshing = null; // the refresh in flight on this computer, shared by every caller
+// "ended" only on the codes that mean the session is gone for good (supabase/auth
+// apierrors/errorcode.go), or the older `invalid_grant` / "Invalid Refresh Token"
+// answer. Never on free text alone: a 409 "Too many concurrent token refresh requests
+// on the same session or refresh token" (tokens/service.go) is a moment, not an end.
+const AUTH_ENDED_CODES = /^(refresh_token_not_found|refresh_token_already_used|session_not_found|session_expired|user_not_found|user_banned|validation_failed)$/;
+function authRefusalKind(status, body) {
+  const b = body && typeof body === "object" ? body : {};
+  const code = String(b.error_code || "").toLowerCase();
+  const text = [b.msg, b.message, b.error_description, b.error].map((x) => String(x == null ? "" : x)).join(" ").toLowerCase();
+  if (!status) return "offline"; // no answer at all (fetch threw, or the timeout)
+  if (status === 429 || /rate_limit/.test(code) || /rate limit/.test(text)) return "limited";
+  if (status === 409 || code === "conflict" || status >= 500) return "error";
+  if (status >= 400 && status < 500 &&
+      (AUTH_ENDED_CODES.test(code) || String(b.error || "").toLowerCase() === "invalid_grant" || /invalid refresh token/.test(text))) return "ended";
+  return "error";
+}
+function authHoldNext(prev, kind, now, rnd) {
+  const steps = AUTH_HOLD_STEPS[kind] || AUTH_HOLD_STEPS.error;
+  const n = prev && prev.kind === kind ? (Number(prev.n) || 0) + 1 : 1;
+  const base = Math.min(steps[1], steps[0] * Math.pow(2, n - 1));
+  const r = typeof rnd === "number" ? rnd : Math.random();
+  return { kind, n, at: now, until: now + Math.round(base * (1 + 0.25 * r)) };
+}
+function getAuthHold() {
+  return new Promise((resolve) =>
+    chrome.storage.local.get([AUTH_HOLD_KEY], (r) => resolve((r && r[AUTH_HOLD_KEY]) || null))
+  );
+}
+function setAuthHold(h) {
+  return new Promise((resolve) => {
+    const done = () => { void chrome.runtime.lastError; resolve(); };
+    if (h) chrome.storage.local.set({ [AUTH_HOLD_KEY]: h }, done);
+    else chrome.storage.local.remove([AUTH_HOLD_KEY], done);
+  });
+}
+// One line for the Settings page, the popup and the 🩺 — what the wait is, and when it ends.
+function authHoldLine(h, now) {
+  if (!h || !h.kind) return "";
+  now = now || Date.now();
+  let when = "";
+  try { when = new Date(h.until).toLocaleTimeString([], { hour: "2-digit", minute: "2-digit" }); } catch (e) { when = "soon"; }
+  const next = h.until > now ? "next try " + when : "trying again now";
+  if (h.kind === "ended") return "this computer's cloud login ended (" + (h.msg || "refresh refused") + ") — log in again";
+  if (h.kind === "limited") return "Supabase is limiting logins from this internet connection for a few minutes — " + next + ", by itself";
+  if (h.kind === "offline") return "no connection to the cloud — " + next + ", by itself";
+  return "the cloud refused the login refresh (" + (h.msg || "HTTP " + h.status) + ") — " + next + ", by itself";
+}
+
+// Usable auth (refreshing the access token ahead of expiry), or null when not logged
+// in / the token ran out while refreshes are refused. Never throws — callers just
+// skip this cycle. Sends at most ONE /token request at a time, and none while a
+// refusal's wait is running. `opts.user` = a click (Save, Pull now, Restore): it may
+// try through a wait, at most once per AUTH_USER_RETRY_MS.
+async function cloudValidAuth(opts) {
   const auth = await getCloudAuth();
   if (!auth || !auth.refresh_token) return null;
-  if (auth.access_token && auth.expires_at && auth.expires_at - Date.now() > 60000) return auth;
-  try {
-    return await cloudRefresh(auth);
-  } catch (e) {
-    LOG("cloud token refresh failed:", e.message);
-    return null;
+  const left = auth.access_token && auth.expires_at ? auth.expires_at - Date.now() : 0;
+  const ahead = Math.min(AUTH_REFRESH_AHEAD_MS, Math.floor((Number(auth.ttl_ms) || 3600 * 1000) / 3));
+  if (left > ahead) return auth;
+  const usable = left > AUTH_MIN_LEFT_MS ? auth : null;
+  const hold = await getAuthHold();
+  const held = !!(hold && hold.until > Date.now());
+  const userTry = !!(opts && opts.user) && !usable && Date.now() - authUserTryAt > AUTH_USER_RETRY_MS;
+  if (held && !userTry && !authRefreshing) return usable;
+  if (!authRefreshing) {
+    if (held) authUserTryAt = Date.now();
+    authRefreshing = (async () => {
+      let timer = null;
+      try {
+        // a request that never answers must not hold every caller (each one would
+        // await this same promise): past the timeout it is an "offline" refusal
+        return await Promise.race([
+          cloudRefresh(auth), // clears the wait itself when it stores the new session
+          new Promise((resolve, reject) => { timer = setTimeout(() => reject(new Error("token refresh: no answer in " + AUTH_REFRESH_TIMEOUT_MS / 1000 + " s")), AUTH_REFRESH_TIMEOUT_MS); }),
+        ]);
+      } catch (e) {
+        const kind = authRefusalKind(e && e.status, e && e.body);
+        const h = authHoldNext(await getAuthHold(), kind, Date.now());
+        h.status = (e && e.status) || 0;
+        h.msg = String((e && e.message) || e || "").slice(0, 120);
+        // a login or Log out while this request was out: its refusal is not theirs
+        const cur = await getCloudAuth();
+        if (cur && cur.refresh_token === auth.refresh_token) await setAuthHold(h);
+        LOG("cloud token refresh failed (" + kind + "), next try in " + Math.round((h.until - Date.now()) / 1000) + " s:", h.msg);
+        return null;
+      } finally {
+        if (timer) clearTimeout(timer);
+        authRefreshing = null;
+      }
+    })();
   }
+  // A still-valid token is handed out at once: the refresh finishes in the background
+  // (memFetch's 5-s budget and the 3-s video check must never wait for /token).
+  if (usable) return usable;
+  return (await authRefreshing) || null;
 }
 
 // (v0.21.61) The account's CURRENT config, read live. The outgoing guard uses it
@@ -1401,7 +1535,7 @@ async function cloudPull(force) {
 // Pull the account's config row. Applies it as `cloudConfig` (the getSettings
 // source of truth) only when the server's updated_at changed, so polling is cheap.
 async function cloudPullRaw(force) {
-  const auth = await cloudValidAuth();
+  const auth = await cloudValidAuth({ user: !!force }); // (v0.21.78) force = Pull now / a login: may try through a wait
   if (!auth) {
     // Breadcrumb (state-change only): a cloudConfig exists but auth can no longer
     // refresh — this machine is running on a FROZEN copy (dashboard edits, incl.
@@ -1413,7 +1547,10 @@ async function cloudPullRaw(force) {
       if (hasCfg && !x.cloudStale)
         chrome.storage.local.set({ cloudStale: { since: Date.now(), error: "auth invalid (refresh failed or logged out)" } }, () => void chrome.runtime.lastError);
     });
-    return { ok: false, error: "not logged in" };
+    // (v0.21.78) logged in but waiting out a refused refresh is not "not logged in":
+    // the Settings line says which wait it is and when it ends.
+    const hold = await getAuthHold();
+    return { ok: false, error: (hold && authHoldLine(hold)) || "not logged in" };
   }
   // Auth is valid again → clear the breadcrumb.
   chrome.storage.local.get(["cloudStale"], (x) => {
@@ -1507,9 +1644,9 @@ async function cloudPullRaw(force) {
 }
 
 // Upsert the account's config row (called when settings are saved while logged in).
-async function cloudPush(config) {
-  const auth = await cloudValidAuth();
-  if (!auth) return { ok: false, error: "not logged in" };
+async function cloudPush(config, opts) {
+  const auth = await cloudValidAuth(opts); // (v0.21.78) opts.user = Save / Restore: may try through a wait
+  if (!auth) { const hold = await getAuthHold(); return { ok: false, error: (hold && authHoldLine(hold)) || "not logged in" }; }
   const { url, key } = await getCloudCreds();
   // (v0.21.60) never publish a wipe
   const guarded = await guardOutgoingConfig(config);
@@ -1549,7 +1686,7 @@ async function cloudLogout() {
   // runs on a copy staler than it would have been under the old always-poll.
   try { await fetchRemoteConfig(); } catch (e) { /* offline: fallback is no staler than before */ }
   await new Promise((r) =>
-    chrome.storage.local.remove(["cloudAuth", "cloudConfig", "cloudConfigAt", "cloudUpdatedAt", "cloudStale"], r)
+    chrome.storage.local.remove(["cloudAuth", "cloudConfig", "cloudConfigAt", "cloudUpdatedAt", "cloudStale", AUTH_HOLD_KEY], r)
   );
   return { ok: true };
 }
@@ -1558,7 +1695,7 @@ async function cloudStatus() {
   const auth = await getCloudAuth();
   const { url, key } = await getCloudCreds();
   const extra = await new Promise((r) =>
-    chrome.storage.local.get(["cloudConfigAt", "supabaseUrl", "supabaseAnonKey", "lastPull", "cloudWipe", "cloudSeeded"], (x) => r(x || {}))
+    chrome.storage.local.get(["cloudConfigAt", "supabaseUrl", "supabaseAnonKey", "lastPull", "cloudWipe", "cloudSeeded", AUTH_HOLD_KEY], (x) => r(x || {}))
   );
   return {
     ok: true,
@@ -1572,6 +1709,8 @@ async function cloudStatus() {
     lastPull: extra.lastPull || null,   // (v0.21.61) what actually came back
     wipe: extra.cloudWipe || null,      // (v0.21.61) the account was found emptied
     seeded: extra.cloudSeeded || null,  // (v0.21.62) an empty account was filled from the build
+    hold: extra[AUTH_HOLD_KEY] || null, // (v0.21.78) a refused token refresh this computer is waiting out
+    holdLine: authHoldLine(extra[AUTH_HOLD_KEY] || null),
   };
 }
 
@@ -4085,7 +4224,7 @@ async function buildDiagnostic() {
     chrome.storage.local.get(
       [
         "enabledLocal", "remoteConfig", "remoteConfigAt", "remoteConfigUrl", "configKey",
-        "cloudConfig", "cloudConfigAt", "cloudAuth", "cloudStale", "lastMirror", "debugTick",
+        "cloudConfig", "cloudConfigAt", "cloudAuth", "cloudStale", "lastMirror", "debugTick", AUTH_HOLD_KEY,
         "supabaseAnonKey", "supabaseUrl", "credsFallback",
         "videoSentThreads", "videoAttempts", "videoUrlFails", "waitingSince", "videoPending",
         "videoCatchUp", "autoCatchUp01213", "autoCatchUp01217", "videoEnabled", "demoVideos",
@@ -4122,7 +4261,13 @@ async function buildDiagnostic() {
               : /^eyJ/.test(st.supabaseAnonKey) ? "shipped(ignoring legacy typed key)"
               : "TYPED-on-this-machine") +
     " | cloud: login=" + (st.cloudAuth && st.cloudAuth.refresh_token ? "Y" : "n") +
-    " age=" + ageM(st.cloudConfigAt) + " stale=" + (st.cloudStale ? "YES(" + ageM(st.cloudStale.at || st.cloudStale) + ")" : "n") +
+    " age=" + ageM(st.cloudConfigAt) + " stale=" + (st.cloudStale ? "YES(" + ageM(st.cloudStale.since || st.cloudStale.at) + ")" : "n") +
+    // (v0.21.78) the token's minutes left, and a refused refresh being waited out:
+    // auth=<limited|offline|error|ended>#<tries> next=<min> http<status>
+    " tok=" + (st.cloudAuth && st.cloudAuth.expires_at ? Math.round((st.cloudAuth.expires_at - now) / 60000) + "m" : "-") +
+    " auth=" + (st[AUTH_HOLD_KEY] && st[AUTH_HOLD_KEY].kind
+      ? st[AUTH_HOLD_KEY].kind + "#" + st[AUTH_HOLD_KEY].n + " next=" + Math.max(0, Math.round((st[AUTH_HOLD_KEY].until - now) / 60000)) + "m http" + (st[AUTH_HOLD_KEY].status || 0)
+      : "ok") +
     " | remote: host=" + host(st.remoteConfigUrl || "") + " age=" + ageM(st.remoteConfigAt) +
     " | logKey=" + (st.configKey ? "set" : "-") + " sync=" + (hadSync ? "Y" : "n")
   );
@@ -4380,7 +4525,7 @@ chrome.runtime.onMessage.addListener((msg, _sender, sendResponse) => {
           await syncedConfigWrite(cfg);
           await new Promise((r) => chrome.storage.local.set({ cloudConfig: cfg, cloudConfigAt: Date.now() }, r));
           const auth = await getCloudAuth();
-          const pushed = auth && auth.refresh_token ? await cloudPush(cfg) : null;
+          const pushed = auth && auth.refresh_token ? await cloudPush(cfg, { user: true }) : null;
           sendResponse({ ok: true, restoredFrom: pick.at, weight: pick.weight, pushed: !!(pushed && pushed.ok), pushError: pushed && pushed.error });
           break;
         }
@@ -4405,7 +4550,7 @@ chrome.runtime.onMessage.addListener((msg, _sender, sendResponse) => {
           const ok = await syncedConfigWrite(safe);
           let cloud = null;
           const auth = await getCloudAuth();
-          if (auth && auth.refresh_token) cloud = await cloudPush(safe);
+          if (auth && auth.refresh_token) cloud = await cloudPush(safe, { user: true });
           if (typeof s.enabled === "boolean") {
             await new Promise((r) => chrome.storage.local.set({ enabledLocal: s.enabled }, r));
           }
@@ -4477,9 +4622,12 @@ chrome.runtime.onMessage.addListener((msg, _sender, sendResponse) => {
           const dayCap = await effectiveDailyCap(settings);
           const lastMirror = await new Promise((r) => chrome.storage.local.get(["lastMirror"], (x) => r((x && x.lastMirror) || null)));
           const cloudStale = await new Promise((r) => chrome.storage.local.get(["cloudStale"], (x) => r((x && x.cloudStale) || null)));
+          const cloudHold = await getAuthHold(); // (v0.21.78) why it is frozen, and whether waiting fixes it
           sendResponse({
             ok: true,
             cloudStale, // non-null = cloud sync frozen (auth dead) — settings/videos no longer updating
+            cloudHold,
+            cloudHoldLine: authHoldLine(cloudHold),
             enabled: settings.enabled,
             apiKeySet: !!settings.apiKey,
             hourCount: counters.hourCount,

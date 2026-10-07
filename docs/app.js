@@ -1709,7 +1709,10 @@
     if (data.session) showApp(data.session);
     else { $("loginStatus").className = "hint"; $("loginStatus").textContent = "Account created — check your email to confirm, then log in."; }
   });
-  $("logoutBtn").addEventListener("click", async () => { await client.auth.signOut(); showLogin(); });
+  // (v0.21.78) scope "local": supabase-js signOut() defaults to "global", which signs the
+  // account out on EVERY device — every computer's bot lost its cloud login an hour later
+  // ("cloud sync frozen"), and their retries then got the shop's logins rate-limited.
+  $("logoutBtn").addEventListener("click", async () => { await client.auth.signOut({ scope: "local" }); showLogin(); });
   $("loginPassword").addEventListener("keydown", (e) => { if (e.key === "Enter") $("loginBtn").click(); });
 
   /* ---------------- boot ---------------- */
