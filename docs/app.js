@@ -404,13 +404,16 @@
     catch (e) { $("configUrl").select(); flash("Press Ctrl+C to copy"); }
   });
   $("regenKey").addEventListener("click", async () => {
-    if (!confirm("Make a new config URL? The old one will stop working — you'll need to re-paste the new URL into each extension.")) return;
+    // (v0.21.79) computers logged into the cloud follow a new key by themselves (it
+    // rides on their next pull, and a 404 makes them look it up); only a config URL
+    // PASTED into an extension has to be pasted again
+    if (!confirm("Make a new key? Computers running v0.21.79 or newer whose cloud login is working switch to it by themselves within about a minute. A computer whose cloud login is waiting out a limit or has ended switches when it logs in again (until then its Activity log stops). Older builds switch after their next update. A config URL pasted into an extension (Settings → Remote config URL) must be pasted again — the old URL stops working.")) return;
     const newKey = (crypto.randomUUID && crypto.randomUUID().replaceAll("-", "")) || String(Date.now()) + Math.random().toString(16).slice(2);
     const { error } = await client.from("subsell_configs").update({ config_key: newKey }).eq("user_id", session.user.id);
     if (error) { flash("Failed: " + error.message, true); return; }
     configKey = newKey;
     buildUrl();
-    flash("New URL generated — re-paste it into your extensions.");
+    flash("New key made — up-to-date computers with a working cloud login follow it by themselves; re-paste the URL where one was pasted.");
   });
 
   function flash(msg, isErr) {

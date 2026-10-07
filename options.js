@@ -554,8 +554,8 @@
             : lp.wiped ? "refused an emptied account, kept this computer's settings" + (lp.healed ? " and put them back" : "")
             : lp.seeded ? "account was empty, set it up again (" + (lp.keys || 0) + " settings)"
             : lp.empty ? "account has no settings in it"
-            : lp.unchanged ? "no change"
-            : lp.keys ? "applied " + lp.keys + " settings from the account"
+            : lp.unchanged ? "no change" + (lp.viaKey ? " (checked through the account key)" : "")
+            : lp.keys ? "applied " + lp.keys + " settings from the account" + (lp.viaKey ? " through the account key" : "")
             : "ok";
           // (v0.21.69) visible proof that the old builds' demo-link sender was switched off in the account
           if (lp.linkDisarm === "patched") pull += " · switched the old demo-link fallback OFF for every computer";
@@ -564,7 +564,13 @@
         const acct = s.userId ? " · account " + String(s.userId).slice(0, 8) : "";
         // (v0.21.78) a refused token refresh being waited out: say which wait, and
         // whether it ends by itself (it replaces the pull's own "FAILED", same cause)
-        if (s.holdLine && (!lp || lp.ok === false)) pull = " · cloud login: " + s.holdLine;
+        // (v0.21.79) …except when the key door itself answered: its text already carries
+        // the wait AND what the key did (a dead key names its cure, not the bare wait)
+        if (s.holdLine && (!lp || (lp.ok === false && !lp.viaKey))) pull = " · cloud login: " + s.holdLine;
+        else if (lp && lp.viaKey && lp.ok !== false && s.holdLine) pull += " · cloud login: " + s.holdLine;
+        const kd = s.keyDoor || null;
+        if (kd && kd.okAt && !kd.error && Date.now() - kd.okAt < 20 * 60 * 1000 && !(lp && lp.viaKey))
+          pull += " · settings still arrive through the account key (last " + fmtWhen(kd.okAt) + ")";
         el.textContent = "Logged in as " + (s.email || "?") + acct + " · last synced " + fmtWhen(s.lastPullAt) + pull;
       }
     });

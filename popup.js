@@ -55,9 +55,19 @@
           try { at = h && h.until > Date.now() ? " at " + new Date(h.until).toLocaleTimeString([], { hour: "2-digit", minute: "2-digit" }) : ""; } catch (e) { /* no clock text */ }
           const why = !h ? "" : h.kind === "limited" ? "cloud busy (Supabase limit on this internet)"
             : h.kind === "offline" ? "cloud unreachable" : h.kind === "error" ? "cloud refused a refresh" : "";
-          if (why) { cl.textContent = "⏳ " + why + " — reconnects by itself" + at + ", nothing to do"; cl.className = "warn"; }
-          else if (h && h.kind === "ended") { cl.textContent = "⚠ cloud login ended — log in again (Options)"; cl.className = "bad"; }
-          else { cl.textContent = "⚠ cloud sync frozen — log in again (Options)"; cl.className = "bad"; }
+          // (v0.21.79) the second door: the settings (and, with the .79 function, the
+          // chat memory) still arrive through the account key — say what still works
+          // (okAt and memKeyAt are set to 0 by any later failure, so a claim here is current)
+          const kd = s.cloudKeyDoor || null;
+          const doorOk = !!(kd && kd.okAt && !kd.error && Date.now() - kd.okAt < 20 * 60 * 1000);
+          const memOk = !!(s.memKeyAt && s.memKeyAt > 0);
+          if (why) { cl.textContent = "⏳ " + why + " — reconnects by itself" + at + ", nothing to do" + (doorOk ? " · settings still arrive" : ""); cl.className = "warn"; }
+          else {
+            const what = h && h.kind === "ended" ? "cloud login ended" : "cloud sync frozen";
+            if (doorOk && memOk) { cl.textContent = "⚠ " + what + " — settings and chat memory still arrive through the account key; log in again when convenient (Options)"; cl.className = "warn"; }
+            else if (doorOk) { cl.textContent = "⚠ " + what + " — settings still arrive through the account key, but this computer cannot see what the others answered: log in again (Options)"; cl.className = "bad"; }
+            else { cl.textContent = "⚠ " + what + " — log in again (Options)"; cl.className = "bad"; }
+          }
         }
       }
     });

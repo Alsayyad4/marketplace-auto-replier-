@@ -521,9 +521,11 @@ async function fetchRemoteConfig(auto) {
     const put = { remoteConfig: cfg, remoteConfigAt: Date.now() };
     try {
       const k = new URL(url).searchParams.get("key") || "";
-      if (k) put.configKey = k; // URL without ?key= — leave any cloud-derived key alone
+      if (k) { put.configKey = k; put.configKeyUser = ""; } // URL without ?key= — leave any cloud-derived key alone; a URL's key is nobody's login (v0.21.79)
     } catch (e) { /* unparseable URL — keep existing key */ }
     await new Promise((r) => chrome.storage.local.set(put, r));
+    // (v0.21.79) a URL that serves settings proves its key alive again
+    if (put.configKey) chrome.storage.local.remove(["configKeyDead", "configKeyDeadAt", "configKeyDeadWhy"], () => void chrome.runtime.lastError);
     LOG("remote config applied from", url);
     return { ok: true, keys: Object.keys(cfg).length };
   } catch (e) {
@@ -636,16 +638,31 @@ async function cloudAuthFetch(path, payload) {
 
 // The config_key the dashboard issued — pulled from the Remote config URL's ?key=,
 // then cached. (Same key the extension already uses to fetch settings.)
+// (v0.21.79) THE DEAD KEY. The cached key was never looked at again: after the
+// dashboard's "Regenerate key", or on a computer that changed accounts, every
+// logged-in computer kept sending the OLD key — "Activity log ✗ HTTP 404
+// {"error":"not found"}" on that computer for ever, and its rows vanished from the
+// dashboard (the chat memory of the other computers with them). Now the key travels
+// with the account row on every full pull (`adoptRowKey`), a 404 drops it
+// (`dropConfigKey`) and the next call looks it up again.
 async function getConfigKey() {
-  const cached = await new Promise((r) =>
-    chrome.storage.local.get(["configKey"], (x) => r((x && x.configKey) || ""))
+  const st = await new Promise((r) =>
+    chrome.storage.local.get(["configKey", "configKeyDead"], (x) => r(x || {}))
   );
+  const cached = st.configKey || "";
   if (cached) return cached;
   // (a) From the Remote config URL's ?key= (machines using the config link).
   let url = "";
   try { url = await getRemoteConfigUrl(); } catch (e) { /* none */ }
   let k = "";
   if (url) { try { k = new URL(url).searchParams.get("key") || ""; } catch (e) { /* not a URL */ } }
+  // a URL whose key the cloud already refused is not cached again: only a fresh
+  // paste (or a successful fetch of that URL) brings it back
+  if (k && st.configKeyDead && k === st.configKeyDead) k = "";
+  // (v0.21.79) whose key this is (`configKeyUser`): the login's user id when it came
+  // from the row, "" for a pasted URL's. The second door (settings and memory through
+  // the key) opens only for a key that is THIS login's — never another account's.
+  let fromUser = "";
   // (b) Cloud-login fallback: machines using Cloud sync have no config URL, but can
   // read their own row's config_key via the authenticated REST API (RLS-scoped).
   if (!k) {
@@ -660,12 +677,60 @@ async function getConfigKey() {
         if (resp.ok) {
           const rows = await resp.json().catch(() => []);
           k = (Array.isArray(rows) && rows[0] && rows[0].config_key) || "";
+          if (k) fromUser = auth.user_id || "";
         }
       }
     } catch (e) { /* no cloud login either — nothing to attribute logs to */ }
   }
-  if (k) chrome.storage.local.set({ configKey: k });
+  if (k) {
+    chrome.storage.local.set({ configKey: k, configKeyUser: fromUser });
+    if (st.configKeyDead) chrome.storage.local.remove(["configKeyDead", "configKeyDeadAt", "configKeyDeadWhy"], () => void chrome.runtime.lastError); // a key found now is the live one
+  }
   return k;
+}
+// (v0.21.79) Only the functions' OWN 404 — the body {"error":"not found"} — means "this
+// key matches no account row". The functions gateway also answers 404 for a function that
+// is missing or renamed ({"code":"NOT_FOUND",…}); that must not cost the key.
+async function deadKeyAnswer(resp) {
+  if (!resp || resp.status !== 404) return false;
+  try {
+    const b = JSON.parse(await resp.clone().text());
+    return !!(b && b.error === "not found");
+  } catch (e) { return false; }
+}
+// (v0.21.79) The cloud answered 404 for this key: it matches no account row. Forget
+// it (unless a newer one has replaced it meanwhile), remember which one it was, and
+// let getConfigKey find the current one — from the row on the next call or the next
+// full pull; from a pasted URL only once it is pasted again.
+function dropConfigKey(key, why) {
+  return new Promise((resolve) => {
+    chrome.storage.local.get(["configKey"], (x) => {
+      const cur = (x && x.configKey) || "";
+      if (cur && key && cur !== key) return resolve(false); // already replaced meanwhile
+      const dead = key || cur || "";
+      chrome.storage.local.set({ configKeyDead: dead, configKeyDeadAt: Date.now(), configKeyDeadWhy: String(why || "HTTP 404").slice(0, 120) }, () => {
+        void chrome.runtime.lastError;
+        chrome.storage.local.remove(["configKey", "configKeyUser"], () => {
+          void chrome.runtime.lastError;
+          LOG("the account key this computer held is no longer valid (" + (why || "HTTP 404") + ") — looking it up again");
+          resolve(true);
+        });
+      });
+    });
+  });
+}
+// (v0.21.79) The account key travels with the row: a key the dashboard regenerated
+// reaches every logged-in computer on its next full pull (the regen bumps the stamp).
+async function adoptRowKey(row, userId) {
+  const k = row && typeof row.config_key === "string" ? row.config_key : "";
+  if (!k) return false;
+  const u = userId || ""; // whose row it is — the second door opens only for this login's key
+  const cur = await new Promise((r) => chrome.storage.local.get(["configKey", "configKeyUser", "configKeyDead"], (x) => r(x || {})));
+  if (cur.configKey === k && (cur.configKeyUser || "") === u && !cur.configKeyDead) return false;
+  await new Promise((r) => chrome.storage.local.set({ configKey: k, configKeyUser: u }, () => { void chrome.runtime.lastError; r(); }));
+  await new Promise((r) => chrome.storage.local.remove(["configKeyDead", "configKeyDeadAt", "configKeyDeadWhy"], () => { void chrome.runtime.lastError; r(); }));
+  if (cur.configKey && cur.configKey !== k) LOG("the account key changed — this computer follows it");
+  return true;
 }
 
 // A friendly per-machine label for the activity log (set in Settings; falls back to
@@ -692,11 +757,18 @@ function getMachineId() {
   });
 }
 
+let mirrorRekeyAt = 0; // (v0.21.79) the last time a 404 made the mirror look its key up again (once a minute at most)
+const MIRROR_TIMEOUT_MS = 25 * 1000; // (v0.21.79) a function that has not answered by then has failed for this row (its gateway gives up at 150 s; Oct 7 2026 both functions hung that long)
+const abortedMsg = (e, what, ms) => (/abort/i.test(String((e && (e.name + " " + e.message)) || "")) ? "no answer from " + what + " in " + Math.round(ms / 1000) + " s" : String((e && e.message) || e));
 async function mirrorToCloud(entry) {
   try {
     const key = await getConfigKey();
     if (!key) {
-      chrome.storage.local.set({ lastMirror: { at: Date.now(), ok: false, error: "no config key — set the Remote config URL or log into Cloud sync" } });
+      // (v0.21.79) say WHICH no-key it is: never had one, or the one it had died
+      const dead = await new Promise((r) => chrome.storage.local.get(["configKeyDead"], (x) => r((x && x.configKeyDead) || "")));
+      chrome.storage.local.set({ lastMirror: { at: Date.now(), ok: false, error: dead
+        ? "the account key this computer held is no longer valid (HTTP 404) — log in to Cloud sync (Options) to get the current one, or paste the new config URL"
+        : "no config key — set the Remote config URL or log into Cloud sync" } });
       return false; // nothing to attribute it to
     }
     const { url, key: anon } = await getCloudCreds();
@@ -720,18 +792,42 @@ async function mirrorToCloud(entry) {
       bot_text: entry.reply != null ? String(entry.reply) : null,
       sent_at: Date.now(),
     };
-    const resp = await fetch(url + "/functions/v1/subsell-log", {
-      method: "POST",
-      headers: { "content-type": "application/json", apikey: anon, authorization: "Bearer " + anon },
-      body: JSON.stringify({ key, events: [ev] }),
-    });
+    const post = (k) => {
+      const ctl = typeof AbortController === "function" ? new AbortController() : null;
+      const timer = ctl ? setTimeout(() => { try { ctl.abort(); } catch (e) { /* ignore */ } }, MIRROR_TIMEOUT_MS) : null;
+      return fetch(url + "/functions/v1/subsell-log", {
+        method: "POST",
+        headers: { "content-type": "application/json", apikey: anon, authorization: "Bearer " + anon },
+        body: JSON.stringify({ key: k, events: [ev] }),
+        signal: ctl ? ctl.signal : undefined,
+      }).finally(() => { if (timer) clearTimeout(timer); });
+    };
+    let resp = await post(key);
+    let rekeyed = false;
+    let dead = await deadKeyAnswer(resp);
+    if (dead) {
+      // (v0.21.79) THE DEAD KEY: the function's 404 = this key matches no account
+      // row (the dashboard made a new one, or this computer changed accounts), and
+      // the old code sent it again on every message, for ever. Forget it, look the
+      // current one up (the row, when the login works) and send this row once more
+      // so it is not lost. One lookup per minute, whatever the message rate.
+      await dropConfigKey(key, "subsell-log answered 404");
+      if (Date.now() - mirrorRekeyAt > 60 * 1000) {
+        mirrorRekeyAt = Date.now();
+        const fresh = await getConfigKey();
+        if (fresh && fresh !== key) { resp = await post(fresh); rekeyed = true; dead = await deadKeyAnswer(resp); }
+      }
+    }
     // Health breadcrumb (read it via chrome.storage.local.get('lastMirror') when
     // diagnosing an empty Activity tab). Never throws into the reply path.
-    const out = resp.ok ? { at: Date.now(), ok: true } : { at: Date.now(), ok: false, error: "HTTP " + resp.status + " " + (await resp.text().catch(() => "")).slice(0, 200) };
+    const out = resp.ok ? { at: Date.now(), ok: true }
+      : dead ? { at: Date.now(), ok: false, error: "the account key this computer held is no longer valid (HTTP 404) — " + (rekeyed ? "and the one looked up now failed too" : "log in to Cloud sync (Options) to get the current one, or paste the new config URL") }
+      : { at: Date.now(), ok: false, error: "HTTP " + resp.status + " " + (await resp.text().catch(() => "")).slice(0, 200) };
+    if (rekeyed) out.rekeyed = true;
     chrome.storage.local.set({ lastMirror: out });
     return !!out.ok; // (v0.21.73) the teaching receipt needs to know its row landed; every other caller ignores it
   } catch (e) {
-    chrome.storage.local.set({ lastMirror: { at: Date.now(), ok: false, error: String(e && e.message) } });
+    chrome.storage.local.set({ lastMirror: { at: Date.now(), ok: false, error: abortedMsg(e, "subsell-log", MIRROR_TIMEOUT_MS) } });
     /* fire-and-forget — a logging hiccup must never disturb the bot */
     return false;
   }
@@ -757,7 +853,10 @@ async function noteTeaching(settings) {
     // already answered or sent, which is how a chat gets a second reply or a
     // second demo video. The dashboard names such computers.
     const auth = await getCloudAuth();
-    const mem = settings.threadMemory !== false && !!(auth && auth.refresh_token) ? "on" : "off";
+    // (v0.21.79) …or the account key carried a read lately (the memory's second door)
+    const ms = await new Promise((r) => chrome.storage.local.get(["memStats"], (x) => r((x && x.memStats) || {})));
+    const keyReads = !!(ms.keyAt && Date.now() - ms.keyAt < 24 * 3600 * 1000);
+    const mem = settings.threadMemory !== false && (!!(auth && auth.refresh_token) || keyReads) ? "on" : "off";
     const seen = await new Promise((r) => chrome.storage.local.get(["teachSeen"], (x) => r((x && x.teachSeen) || null)));
     if (seen && seen.fp === fp && seen.mem === mem) return;
     const ok = await mirrorToCloud({ action: "teach", thread: null, threadId: null, buyer: null, reply: "teaching " + fp + " mem=" + mem });
@@ -879,38 +978,97 @@ function memNoteOnce(patch, done) {
       if (chrome.runtime.lastError) { done(); return; }
       const s = (r && r.memStats) || {};
       for (const k of Object.keys(patch)) {
-        if (k === "lastAt" || k === "lastErr") s[k] = patch[k];
+        if (k === "lastAt" || k === "lastErr" || k === "keyAt" || k === "keyUnsupportedAt" || k === "keyDownAt") s[k] = patch[k]; // (v0.21.79) the key door's marks are moments, not counts
         else s[k] = (s[k] || 0) + patch[k];
       }
       chrome.storage.local.set({ memStats: s }, () => { void chrome.runtime.lastError; done(); });
     });
   } catch (e) { done(); /* telemetry only */ }
 }
-async function memFetch(query) {
+/* (v0.21.79) THE SECOND DOOR for the memory. The read used to need the login (REST
+ * under RLS): a computer whose login was waiting out a refusal, or had ended, or
+ * that only ever had the config link, read nothing — and answered a buyer another
+ * computer had already answered, or sent the demo video again. Now, when the login
+ * is out, the read goes through the account key to the subsell-log function
+ * (`read`), the same key that writes every row. The function must be the .79 one:
+ * an older one answers `{ok:true, inserted:0}` without `rows`, which is remembered
+ * for an hour (memStats.keyUnsupportedAt) so the question is not asked on every
+ * buyer message. The login door is untouched: with a working login nothing changes. */
+const MEM_KEY_RETRY_MS = 60 * 60 * 1000;
+const MEM_KEY_DOWN_MS = 2 * 60 * 1000; // after a timeout / 5xx through the key the door is left alone this long: a sick function must not be asked on every buyer message
+async function memKeyDoor() {
+  const st = await new Promise((r) => chrome.storage.local.get(["configKey", "configKeyUser", "cloudAuth", "memStats"], (x) => r(x || {})));
+  let key = st.configKey || "";
+  let user = st.configKeyUser || "";
+  if (!key) {
+    // a config-link computer that has not sent anything yet: the URL's key (getConfigKey
+    // caches it; its REST lookup needs the login, which is out here)
+    key = (await getConfigKey()) || "";
+    const again = await new Promise((r) => chrome.storage.local.get(["configKeyUser"], (x) => r(x || {})));
+    user = again.configKeyUser || "";
+  }
+  if (!key) return { key: "", why: "no cloud login and no account key on this machine" };
+  // logged in (even with the login out): the key must be THIS login's, never another account's rows
+  if (st.cloudAuth && st.cloudAuth.refresh_token && user !== (st.cloudAuth.user_id || "x")) return { key: "", why: "no cloud login right now, and the account key on this computer is not this login's" };
+  const ms = st.memStats || {};
+  if (ms.keyUnsupportedAt && Date.now() - ms.keyUnsupportedAt < MEM_KEY_RETRY_MS) return { key: "", why: "no cloud login; the subsell-log function cannot read yet (deploy the .79 one)" };
+  if (ms.keyDownAt && Date.now() - ms.keyDownAt < MEM_KEY_DOWN_MS) return { key: "", why: "no cloud login; the subsell-log function is not answering (asked again in a moment)" };
+  return { key, why: "" };
+}
+// `spec` = { q: <REST query>, read: { thread_id?, kinds?, limit } } — the same read, phrased for either door.
+async function memFetch(spec) {
+  const query = typeof spec === "string" ? spec : (spec && spec.q) || "";
+  const read = spec && typeof spec === "object" && spec.read ? spec.read : null;
   const work = (async () => {
     const auth = await cloudValidAuth();
-    if (!auth) { memNote({ fails: 1, lastErr: "no cloud login on this machine" }); return null; } // remote-link machines: no memory
     const { url, key } = await getCloudCreds();
     if (!url) return null;
+    let door = null;
+    if (!auth) {
+      door = read ? await memKeyDoor() : { key: "", why: "no cloud login on this machine" };
+      if (!door.key) { memNote({ fails: 1, lastErr: door.why || "no cloud login on this machine" }); return null; }
+    }
     const ctl = typeof AbortController === "function" ? new AbortController() : null;
     const timer = ctl ? setTimeout(() => { try { ctl.abort(); } catch (e) { /* ignore */ } }, 4000) : null;
     try {
-      const resp = await fetch(url + "/rest/v1/subsell_messages?" + query, {
-        headers: { apikey: key, authorization: "Bearer " + auth.access_token },
-        cache: "no-store",
-        signal: ctl ? ctl.signal : undefined,
-      });
+      const resp = door
+        ? await fetch(url + "/functions/v1/subsell-log", {
+            method: "POST",
+            headers: { "content-type": "application/json", apikey: key, authorization: "Bearer " + key },
+            body: JSON.stringify({ key: door.key, read }),
+            cache: "no-store",
+            signal: ctl ? ctl.signal : undefined,
+          })
+        : await fetch(url + "/rest/v1/subsell_messages?" + query, {
+            headers: { apikey: key, authorization: "Bearer " + auth.access_token },
+            cache: "no-store",
+            signal: ctl ? ctl.signal : undefined,
+          });
       try {
         const dh = Date.parse((resp.headers && resp.headers.get && resp.headers.get("date")) || "");
         if (dh) memSkewMs = dh - Date.now();
       } catch (e) { /* keep the last skew */ }
-      if (!resp.ok) { memNote({ fails: 1, lastErr: "HTTP " + resp.status }); return null; }
-      const rows = await resp.json().catch(() => null);
-      if (!Array.isArray(rows)) { memNote({ fails: 1, lastErr: "bad body" }); return null; }
-      memNote({ reads: 1, lastAt: Date.now() });
+      if (door && await deadKeyAnswer(resp)) {
+        await dropConfigKey(door.key, "subsell-log answered 404 on a read");
+        memNote({ fails: 1, lastErr: "the account key is no longer valid (HTTP 404)", keyAt: 0 }); // keyAt 0: the popup must not claim the memory still arrives
+        return null;
+      }
+      if (!resp.ok) {
+        memNote(door ? { fails: 1, lastErr: "HTTP " + resp.status, keyAt: 0, keyDownAt: Date.now() } : { fails: 1, lastErr: "HTTP " + resp.status });
+        return null;
+      }
+      const body = await resp.json().catch(() => null);
+      const rows = door ? (body && Array.isArray(body.rows) ? body.rows : null) : body;
+      if (!Array.isArray(rows)) {
+        if (door) { memNote({ fails: 1, lastErr: "the subsell-log function cannot read yet (deploy the .79 one)", keyUnsupportedAt: Date.now(), keyAt: 0 }); return null; }
+        memNote({ fails: 1, lastErr: "bad body" });
+        return null;
+      }
+      memNote(door ? { reads: 1, lastAt: Date.now(), keyAt: Date.now(), keyUnsupportedAt: 0, keyDownAt: 0 } : { reads: 1, lastAt: Date.now() });
       return rows;
     } catch (e) {
-      memNote({ fails: 1, lastErr: String((e && e.message) || e).slice(0, 80) });
+      const lastErr = abortedMsg(e, door ? "subsell-log" : "the Activity log", 4000).slice(0, 80);
+      memNote(door ? { fails: 1, lastErr, keyAt: 0, keyDownAt: Date.now() } : { fails: 1, lastErr });
       return null;
     } finally {
       if (timer) clearTimeout(timer);
@@ -925,7 +1083,10 @@ async function memThreadRows(threadId, fresh) {
   if (!threadId) return null;
   const c = memCache[threadId];
   if (!fresh && c && Date.now() - c.at < MEM_CACHE_MS) return c.rows;
-  const rows = await memFetch("thread_id=eq." + encodeURIComponent(String(threadId)) + "&kind=in.(text,followup,video,claim)" + memSelect + "&limit=" + MEM_THREAD_LIMIT);
+  const rows = await memFetch({
+    q: "thread_id=eq." + encodeURIComponent(String(threadId)) + "&kind=in.(text,followup,video,claim)" + memSelect + "&limit=" + MEM_THREAD_LIMIT,
+    read: { thread_id: String(threadId), kinds: ["text", "followup", "video", "claim"], limit: MEM_THREAD_LIMIT },
+  });
   if (rows) {
     memCache[threadId] = { at: Date.now(), rows };
     const keys = Object.keys(memCache);
@@ -936,11 +1097,17 @@ async function memThreadRows(threadId, fresh) {
 // Only when the window came back full without a video row: the video rows alone.
 async function memVideoRows(threadId) {
   if (!threadId) return null;
-  return memFetch("thread_id=eq." + encodeURIComponent(String(threadId)) + "&kind=eq.video" + memSelect + "&limit=5");
+  return memFetch({
+    q: "thread_id=eq." + encodeURIComponent(String(threadId)) + "&kind=eq.video" + memSelect + "&limit=5",
+    read: { thread_id: String(threadId), kinds: ["video"], limit: 5 },
+  });
 }
 async function memRecentRows() {
   if (memRecent.rows && Date.now() - memRecent.at < MEM_RECENT_CACHE_MS) return memRecent.rows;
-  const rows = await memFetch("kind=in.(text,followup)&select=created_at,machine,kind,thread_id,bot_text&order=created_at.desc&limit=30");
+  const rows = await memFetch({
+    q: "kind=in.(text,followup)&select=created_at,machine,kind,thread_id,bot_text&order=created_at.desc&limit=30",
+    read: { kinds: ["text", "followup"], limit: 30 },
+  });
   if (rows) memRecent = { at: Date.now(), rows };
   return rows;
 }
@@ -1174,6 +1341,12 @@ async function cloudLogin(email, password) {
     const auth = authFromTokenResponse(data, null);
     await setCloudAuth(auth);
     await setAuthHold(null); // (v0.21.78) a new session owes nothing to the old one's wait
+    // (v0.21.79) a key cached for another account (or for nobody) must not outlive this
+    // login: the login's own pull adopts THIS account's key, and until then the second
+    // door stays shut and nothing is attributed to the old account.
+    const kp = await new Promise((r) => chrome.storage.local.get(["configKey", "configKeyUser"], (x) => r(x || {})));
+    if (kp.configKey && (kp.configKeyUser || "") !== (auth.user_id || ""))
+      await new Promise((r) => chrome.storage.local.remove(["configKey", "configKeyUser"], () => { void chrome.runtime.lastError; r(); }));
     const pulled = await cloudPull(true);
     // (v0.21.61) `pulled` used to be true for a pull that brought back nothing at
     // all, and the Settings page said "pulled your cloud settings" on the strength
@@ -1541,26 +1714,44 @@ async function cloudPullRaw(force) {
     // refresh — this machine is running on a FROZEN copy (dashboard edits, incl.
     // demoVideoUrls, will never arrive). Written once on entering the state;
     // cleared on the next healthy-auth pull, and removed by cloudLogout.
-    chrome.storage.local.get(["cloudConfig", "cloudStale"], (x) => {
-      if (chrome.runtime.lastError) return;
-      const hasCfg = x && x.cloudConfig && typeof x.cloudConfig === "object" && Object.keys(x.cloudConfig).length;
-      if (hasCfg && !x.cloudStale)
-        chrome.storage.local.set({ cloudStale: { since: Date.now(), error: "auth invalid (refresh failed or logged out)" } }, () => void chrome.runtime.lastError);
-    });
+    const st = await new Promise((r) => chrome.storage.local.get(["cloudConfig", "cloudStale", "cloudAuth", "configKey", "configKeyUser", "cloudKeyDoor"], (x) => r(x || {})));
+    const hasCfg = !!(st.cloudConfig && typeof st.cloudConfig === "object" && Object.keys(st.cloudConfig).length);
+    if (hasCfg && !st.cloudStale)
+      await new Promise((r) => chrome.storage.local.set({ cloudStale: { since: Date.now(), error: "auth invalid (refresh failed or logged out)" } }, () => { void chrome.runtime.lastError; r(); }));
     // (v0.21.78) logged in but waiting out a refused refresh is not "not logged in":
     // the Settings line says which wait it is and when it ends.
     const hold = await getAuthHold();
-    return { ok: false, error: (hold && authHoldLine(hold)) || "not logged in" };
+    const why = (hold && authHoldLine(hold)) || "not logged in";
+    // (v0.21.79) THE KEY IS THE SECOND DOOR. A computer that is logged in but cannot
+    // refresh (the per-address limit, no connection, a login that ended) used to run
+    // on a FROZEN copy: no new teaching, no new videos, and after a Log out no API
+    // key at all. It still holds the account key — the one the config link and the
+    // Activity log already trust — so the settings come through the subsell-config
+    // function instead, with no /token request at all. Not after a Log out (no
+    // cloudAuth: the dialog promised the account's settings leave this computer).
+    const loggedIn = !!(st.cloudAuth && st.cloudAuth.refresh_token);
+    // …and only with THIS login's key (adopted from its row): a key cached for another
+    // account, or pasted for one, would bring that account's settings here.
+    const mine = !!(st.configKey && st.configKeyUser && st.cloudAuth && st.configKeyUser === st.cloudAuth.user_id);
+    const door = st.cloudKeyDoor || null;
+    const due = !!force || !door || !door.triedAt || Date.now() - door.triedAt >= KEY_PULL_MIN_MS;
+    if (loggedIn && mine && due) return await cloudPullViaKey(st.configKey, force, why);
+    return { ok: false, error: why };
   }
-  // Auth is valid again → clear the breadcrumb.
-  chrome.storage.local.get(["cloudStale"], (x) => {
-    if (!chrome.runtime.lastError && x && x.cloudStale)
-      chrome.storage.local.remove(["cloudStale"], () => void chrome.runtime.lastError);
+  // Auth is valid again → clear the breadcrumbs (the frozen mark and the key door's).
+  chrome.storage.local.get(["cloudStale", "cloudKeyDoor"], (x) => {
+    if (!chrome.runtime.lastError && x && (x.cloudStale || x.cloudKeyDoor))
+      chrome.storage.local.remove(["cloudStale", "cloudKeyDoor"], () => void chrome.runtime.lastError);
   });
   const creds = await getCloudCreds();
   const { url, key } = creds;
   try {
-    if (!force) {
+    // (v0.21.79) a cached key that was never tied to this login (a build before .79,
+    // or another account's / a pasted URL's) is re-read from the row NOW, whatever the
+    // stamp says: the full fetch below adopts it with its provenance. Once per key.
+    const kp = await new Promise((r) => chrome.storage.local.get(["configKey", "configKeyUser"], (x) => r(x || {})));
+    const keyUntied = !!(kp.configKey && (kp.configKeyUser || "") !== (auth.user_id || ""));
+    if (!force && !keyUntied) {
       // Stamp-only probe (~0.1KB) first: the full config row (which can be many
       // KB × every machine × every minute) is fetched ONLY when updated_at
       // actually changed. Mirrors the unchanged-check below exactly; any missing
@@ -1580,7 +1771,10 @@ async function cloudPullRaw(force) {
       if (prevStamp && probeStamp && prevStamp === probeStamp) return { ok: true, unchanged: true };
       // stamp differs or state missing → fall through to the full fetch
     }
-    const resp = await fetch(`${url}/rest/v1/subsell_configs?select=config,updated_at`, {
+    // (v0.21.79) …,config_key: the account key rides along, so a regenerated key
+    // reaches this computer here (the probe above does not carry it — a regen bumps
+    // the stamp, which is what brings the full row down).
+    const resp = await fetch(`${url}/rest/v1/subsell_configs?select=config,updated_at,config_key`, {
       headers: { apikey: key, authorization: "Bearer " + auth.access_token },
       cache: "no-store",
     });
@@ -1590,57 +1784,143 @@ async function cloudPullRaw(force) {
     }
     const rows = await resp.json().catch(() => []);
     if (!Array.isArray(rows) || !rows.length) return { ok: true, empty: true }; // nothing saved yet
+    await adoptRowKey(rows[0], auth.user_id); // (v0.21.79) before anything can return: the key is independent of what the row holds
     const cfg = rows[0].config || {};
     const stamp = rows[0].updated_at || "";
     delete cfg.enabled; // on/off stays per machine
-    const prev = await new Promise((r) => chrome.storage.local.get(["cloudUpdatedAt"], (x) => r(x.cloudUpdatedAt)));
-    if (!force && prev && stamp && prev === stamp) return { ok: true, unchanged: true };
-
-    // (v0.21.61) INCOMING WIPE GUARD — the reason a wipe was unsurvivable.
-    // The pull applied whatever the row said, so ONE machine saving a blank form
-    // emptied every other machine's copy within about a minute, and with it the
-    // last thing a restore could have been built from. A pull may bring settings;
-    // it may not take them away. The copy this machine holds stays, the event is
-    // recorded for the Settings page, and the account is put back.
-    const mine = await bestKnownConfig(); // local only — never the row we just read
-    const held = (mine && mine.weight) || 0;
-    const incoming = configWeight(cfg);
-    if (held >= 20 && (looksLikeWipe(cfg, mine.config) || incoming < held * 0.5)) {
-      await new Promise((r) =>
-        chrome.storage.local.set(
-          { cloudUpdatedAt: stamp, cloudWipe: { at: Date.now(), stamp, incoming, held, from: mine.from } },
-          () => { void chrome.runtime.lastError; r(); }
-        )
-      );
-      LOG("REFUSED an emptied cloud config (worth", incoming, "against", held, "held) — this machine keeps its settings");
-      const healed = await healWipedAccount(mine, stamp);
-      return { ok: true, wiped: true, held, incoming, healed: !!(healed && healed.ok), healError: healed && (healed.error || healed.skipped) };
-    }
-    // A healthy row clears the alarm.
-    await new Promise((r) => chrome.storage.local.remove(["cloudWipe"], () => { void chrome.runtime.lastError; r(); }));
-
-    // (v0.21.62) The account holds nothing worth having and neither does this
-    // machine — the state a fresh install lands in once the settings were lost
-    // everywhere. Applying the emptiness would only reproduce the blank form, so
-    // put the shipped starter setup into the account instead and let the sync
-    // carry it. Covers an untouched row ({}) and one overwritten with blanks.
-    // (v0.21.63) …or it weighs something but cannot work: no key, no teaching.
-    if (incoming < 20 || accountIsDead(cfg)) {
-      await new Promise((r) => chrome.storage.local.set({ cloudUpdatedAt: stamp }, () => { void chrome.runtime.lastError; r(); }));
-      const seeded = await seedEmptyAccount(stamp, cfg);
-      if (seeded && seeded.ok) return { ok: true, seeded: true, keys: seeded.keys };
-      if (incoming < 20) return { ok: true, empty: true, rowBlank: !Object.keys(cfg).length, seedError: seeded && (seeded.error || seeded.skipped) };
-      // dead but not seedable (already seeded this stamp, or offline): apply it as-is below
-    }
-    await new Promise((r) =>
-      chrome.storage.local.set({ cloudConfig: cfg, cloudConfigAt: Date.now(), cloudUpdatedAt: stamp }, r)
-    );
-    await bankConfig(cfg, "cloud"); // (v0.21.60) last-known-good, so a wipe is undoable
-    LOG("cloud config applied (", Object.keys(cfg).length, "keys)");
-    return { ok: true, keys: Object.keys(cfg).length };
+    return await applyPulledConfig(cfg, stamp, force, "login");
   } catch (e) {
     return { ok: false, error: e.message };
   }
+}
+
+// (v0.21.79) What a pull does with the settings it brought — through the login
+// (REST, with the row's stamp) or through the account key (the subsell-config
+// function, which has no stamp: an unchanged copy is told by content). One path, so
+// the wipe guard, the seed and the backups treat both doors alike. The heal and the
+// seed WRITE to the account, which the key cannot do: through the key they only say so.
+async function applyPulledConfig(cfg, stamp, force, via) {
+  const byKey = via === "key";
+  const stamped = (more) => (byKey ? more : Object.assign({ cloudUpdatedAt: stamp }, more)); // the key door records no stamp (it has none)
+  const prev = await new Promise((r) => chrome.storage.local.get(["cloudUpdatedAt"], (x) => r(x.cloudUpdatedAt)));
+  if (!force && prev && stamp && prev === stamp) return { ok: true, unchanged: true };
+
+  // (v0.21.61) INCOMING WIPE GUARD — the reason a wipe was unsurvivable.
+  // The pull applied whatever the row said, so ONE machine saving a blank form
+  // emptied every other machine's copy within about a minute, and with it the
+  // last thing a restore could have been built from. A pull may bring settings;
+  // it may not take them away. The copy this machine holds stays, the event is
+  // recorded for the Settings page, and the account is put back.
+  const mine = await bestKnownConfig(); // local only — never the row we just read
+  const held = (mine && mine.weight) || 0;
+  const incoming = configWeight(cfg);
+  if (held >= 20 && (looksLikeWipe(cfg, mine.config) || incoming < held * 0.5)) {
+    await new Promise((r) =>
+      chrome.storage.local.set(
+        stamped({ cloudWipe: { at: Date.now(), stamp, incoming, held, from: mine.from } }),
+        () => { void chrome.runtime.lastError; r(); }
+      )
+    );
+    LOG("REFUSED an emptied cloud config (worth", incoming, "against", held, "held) — this machine keeps its settings");
+    const healed = byKey ? { ok: false, skipped: "the account key cannot write — the heal waits for the login" } : await healWipedAccount(mine, stamp);
+    return { ok: true, wiped: true, held, incoming, healed: !!(healed && healed.ok), healError: healed && (healed.error || healed.skipped) };
+  }
+  // A healthy row clears the alarm.
+  await new Promise((r) => chrome.storage.local.remove(["cloudWipe"], () => { void chrome.runtime.lastError; r(); }));
+
+  // (v0.21.62) The account holds nothing worth having and neither does this
+  // machine — the state a fresh install lands in once the settings were lost
+  // everywhere. Applying the emptiness would only reproduce the blank form, so
+  // put the shipped starter setup into the account instead and let the sync
+  // carry it. Covers an untouched row ({}) and one overwritten with blanks.
+  // (v0.21.63) …or it weighs something but cannot work: no key, no teaching.
+  if (incoming < 20 || accountIsDead(cfg)) {
+    if (!byKey) await new Promise((r) => chrome.storage.local.set({ cloudUpdatedAt: stamp }, () => { void chrome.runtime.lastError; r(); }));
+    const seeded = byKey ? { ok: false, skipped: "the account key cannot write — the seed waits for the login" } : await seedEmptyAccount(stamp, cfg);
+    if (seeded && seeded.ok) return { ok: true, seeded: true, keys: seeded.keys };
+    if (incoming < 20) return { ok: true, empty: true, rowBlank: !Object.keys(cfg).length, seedError: seeded && (seeded.error || seeded.skipped) };
+    // dead but not seedable (already seeded this stamp, or offline): apply it as-is below
+  }
+  if (byKey) {
+    // no stamp through the key: the same settings again are not written again
+    const heldCfg = await new Promise((r) => chrome.storage.local.get(["cloudConfig"], (x) => r(x && x.cloudConfig)));
+    if (heldCfg && canonJson(heldCfg) === canonJson(cfg)) return { ok: true, unchanged: true };
+  }
+  await new Promise((r) =>
+    chrome.storage.local.set(stamped({ cloudConfig: cfg, cloudConfigAt: Date.now() }), r)
+  );
+  await bankConfig(cfg, "cloud"); // (v0.21.60) last-known-good, so a wipe is undoable
+  LOG("cloud config applied (", Object.keys(cfg).length, "keys)" + (byKey ? " through the account key" : ""));
+  return { ok: true, keys: Object.keys(cfg).length };
+}
+// JSON with its keys sorted, so two copies of the same settings compare equal whatever
+// order they were stored in (the row's jsonb orders keys its own way; a Save does not).
+function canonJson(v) {
+  if (Array.isArray(v)) return "[" + v.map(canonJson).join(",") + "]";
+  if (v && typeof v === "object") return "{" + Object.keys(v).sort().map((k) => JSON.stringify(k) + ":" + canonJson(v[k])).join(",") + "}";
+  return JSON.stringify(v === undefined ? null : v);
+}
+
+// (v0.21.79) The settings through the account key (the subsell-config function —
+// the config link's own endpoint, no login, no /token). Only while a login exists
+// but cannot refresh (cloudPullRaw decides). There is no cheap stamp probe on this
+// door, so the full settings come at most every KEY_PULL_MIN_MS — a click (Pull now,
+// a login) at once. `why` = what the login is doing meanwhile, for the Settings line.
+const KEY_PULL_MIN_MS = 5 * 60 * 1000;
+const KEY_PULL_TIMEOUT_MS = 20 * 1000; // a function that has not answered by then is "unreachable" for this round (its gateway gives up at 150 s — the minute pull must not hang that long)
+async function cloudPullViaKey(key, force, why) {
+  const note = (patch) => new Promise((r) =>
+    chrome.storage.local.get(["cloudKeyDoor"], (x) => {
+      const cur = (x && x.cloudKeyDoor) || {};
+      chrome.storage.local.set({ cloudKeyDoor: Object.assign({}, cur, patch) }, () => { void chrome.runtime.lastError; r(); });
+    })
+  );
+  await note({ triedAt: Date.now() });
+  const { url } = await getCloudCreds();
+  if (!url) return { ok: false, error: why };
+  let resp;
+  const ctl = typeof AbortController === "function" ? new AbortController() : null;
+  const timer = ctl ? setTimeout(() => { try { ctl.abort(); } catch (e) { /* ignore */ } }, KEY_PULL_TIMEOUT_MS) : null;
+  try {
+    resp = await fetch(url + "/functions/v1/subsell-config?key=" + encodeURIComponent(key), { cache: "no-store", signal: ctl ? ctl.signal : undefined });
+  } catch (e) {
+    const m = abortedMsg(e, "subsell-config", KEY_PULL_TIMEOUT_MS);
+    await note({ okAt: 0, error: m.slice(0, 80) }); // okAt 0: the popup must not claim the settings still arrive
+    return { ok: false, error: why + " — and the account key could not reach the cloud (" + m.slice(0, 80) + ")", viaKey: true };
+  } finally {
+    if (timer) clearTimeout(timer);
+  }
+  // the door's ticket: a working login (a click, a refresh that got through) removes
+  // cloudKeyDoor while this GET was out — then its answer is stale and is dropped,
+  // never written over what the login just applied
+  const ticket = await new Promise((r) => chrome.storage.local.get(["cloudKeyDoor"], (x) => r(!!(x && x.cloudKeyDoor))));
+  if (!ticket) return { ok: false, error: "the cloud login came back meanwhile — its own pull applies", viaKey: true, superseded: true };
+  if (await deadKeyAnswer(resp)) {
+    // the key matches no account: a new one was made in the dashboard, or this
+    // computer changed accounts — the next working login brings the current one
+    await dropConfigKey(key, "subsell-config answered 404");
+    await note({ okAt: 0, error: "the key matches no account (HTTP 404)" });
+    return { ok: false, error: why + " — and the account key this computer held is no longer valid (a new key was made in the dashboard?); the next login fetches the current one", viaKey: true, keyDead: true };
+  }
+  if (!resp.ok) {
+    await note({ okAt: 0, error: "HTTP " + resp.status });
+    return { ok: false, error: why + " — and the account key answered HTTP " + resp.status, viaKey: true };
+  }
+  const cfg = await resp.json().catch(() => null);
+  if (!cfg || typeof cfg !== "object" || Array.isArray(cfg)) {
+    await note({ okAt: 0, error: "no settings in the answer" });
+    return { ok: false, error: why + " — and the account key returned no settings", viaKey: true };
+  }
+  delete cfg.enabled; // on/off stays per machine
+  const out = await applyPulledConfig(cfg, "", force, "key");
+  out.viaKey = true;
+  out.login = why; // what the login is doing meanwhile
+  await note({ okAt: Date.now(), error: "", last: out.keys ? "applied " + out.keys : out.unchanged ? "unchanged" : out.wiped ? "refused a wipe" : out.empty ? "empty" : "ok" });
+  // the breadcrumb the popup reads: a frozen login — with the settings arriving anyway
+  const after = await new Promise((r) => chrome.storage.local.get(["cloudConfig", "cloudStale"], (x) => r(x || {})));
+  if (!after.cloudStale && after.cloudConfig && typeof after.cloudConfig === "object" && Object.keys(after.cloudConfig).length)
+    await new Promise((r) => chrome.storage.local.set({ cloudStale: { since: Date.now(), error: "auth invalid (refresh failed or logged out)" } }, () => { void chrome.runtime.lastError; r(); }));
+  return out;
 }
 
 // Upsert the account's config row (called when settings are saved while logged in).
@@ -1686,7 +1966,7 @@ async function cloudLogout() {
   // runs on a copy staler than it would have been under the old always-poll.
   try { await fetchRemoteConfig(); } catch (e) { /* offline: fallback is no staler than before */ }
   await new Promise((r) =>
-    chrome.storage.local.remove(["cloudAuth", "cloudConfig", "cloudConfigAt", "cloudUpdatedAt", "cloudStale", AUTH_HOLD_KEY], r)
+    chrome.storage.local.remove(["cloudAuth", "cloudConfig", "cloudConfigAt", "cloudUpdatedAt", "cloudStale", "cloudKeyDoor", AUTH_HOLD_KEY], r)
   );
   return { ok: true };
 }
@@ -1695,10 +1975,11 @@ async function cloudStatus() {
   const auth = await getCloudAuth();
   const { url, key } = await getCloudCreds();
   const extra = await new Promise((r) =>
-    chrome.storage.local.get(["cloudConfigAt", "supabaseUrl", "supabaseAnonKey", "lastPull", "cloudWipe", "cloudSeeded", AUTH_HOLD_KEY], (x) => r(x || {}))
+    chrome.storage.local.get(["cloudConfigAt", "supabaseUrl", "supabaseAnonKey", "lastPull", "cloudWipe", "cloudSeeded", "cloudKeyDoor", AUTH_HOLD_KEY], (x) => r(x || {}))
   );
   return {
     ok: true,
+    keyDoor: extra.cloudKeyDoor || null, // (v0.21.79) settings pulled through the account key while the login is out
     configured: !!(url && key),
     loggedIn: !!(auth && auth.refresh_token),
     email: (auth && auth.email) || null,
@@ -4224,6 +4505,7 @@ async function buildDiagnostic() {
     chrome.storage.local.get(
       [
         "enabledLocal", "remoteConfig", "remoteConfigAt", "remoteConfigUrl", "configKey",
+        "configKeyDead", "configKeyDeadAt", "cloudKeyDoor", // (v0.21.79) the dead key and the second door
         "cloudConfig", "cloudConfigAt", "cloudAuth", "cloudStale", "lastMirror", "debugTick", AUTH_HOLD_KEY,
         "supabaseAnonKey", "supabaseUrl", "credsFallback",
         "videoSentThreads", "videoAttempts", "videoUrlFails", "waitingSince", "videoPending",
@@ -4269,7 +4551,14 @@ async function buildDiagnostic() {
       ? st[AUTH_HOLD_KEY].kind + "#" + st[AUTH_HOLD_KEY].n + " next=" + Math.max(0, Math.round((st[AUTH_HOLD_KEY].until - now) / 60000)) + "m http" + (st[AUTH_HOLD_KEY].status || 0)
       : "ok") +
     " | remote: host=" + host(st.remoteConfigUrl || "") + " age=" + ageM(st.remoteConfigAt) +
-    " | logKey=" + (st.configKey ? "set" : "-") + " sync=" + (hadSync ? "Y" : "n")
+    " | logKey=" + (st.configKey ? "set" : st.configKeyDead ? "DEAD(" + ageM(st.configKeyDeadAt) + ")" : "-") +
+    // (v0.21.79) the second door: settings pulled through the account key while the login is out
+    " door=" + (st.cloudKeyDoor
+      ? (st.cloudKeyDoor.error ? "key(FAIL " + cut(st.cloudKeyDoor.error, 30) + ")" // the latest attempt first
+        : st.cloudKeyDoor.okAt ? "key(ok " + ageM(st.cloudKeyDoor.okAt) + (st.cloudKeyDoor.last ? " " + st.cloudKeyDoor.last : "") + ")"
+        : "key(trying)")
+      : "-") +
+    " sync=" + (hadSync ? "Y" : "n")
   );
   L.push(
     "settings: on=" + (settings.enabled ? "Y" : "OFF") + " api=" + (settings.apiKey ? "set" : "NOT-SET") +
@@ -4395,7 +4684,8 @@ async function buildDiagnostic() {
     const ms = st.memStats || {};
     const loginOk = !!(st.cloudAuth && st.cloudAuth.refresh_token);
     L.push(
-      "memory: " + (settings.threadMemory === false ? "OFF(setting)" : !loginOk ? "NO cloud login → reads off" : ms.lastAt ? "on" : "on, NO successful read yet") +
+      // (v0.21.79) "via the account key" = the second door (subsell-log `read`) carried the last read
+      "memory: " + (settings.threadMemory === false ? "OFF(setting)" : !loginOk ? (ms.keyAt ? "no cloud login, reads via the account key" : "NO cloud login → reads off") : ms.lastAt ? (ms.keyAt && ms.keyAt >= ms.lastAt ? "on(via the account key)" : "on") : "on, NO successful read yet") +
       " id=" + (st.machineId || "-") + " typingPace=" + (settings.typingPaceMaxSec != null ? settings.typingPaceMaxSec : "?") + "s" +
       " | reads=" + (ms.reads || 0) + " fails=" + (ms.fails || 0) + " last=" + ageM(ms.lastAt) + " skew=" + Math.round(memSkewMs / 1000) + "s" +
       " | skips: answered=" + (ms.answered || 0) + " echo=" + (ms.echo || 0) + " claim=" + (ms.claimed || 0) + " video=" + (ms.video || 0) + " videoWait=" + (ms.videoWait || 0) + (ms.videoRetry ? " videoRetryOk=" + ms.videoRetry : "") + (ms.videoBlind ? " videoBlind=" + ms.videoBlind : "") +
@@ -4623,10 +4913,13 @@ chrome.runtime.onMessage.addListener((msg, _sender, sendResponse) => {
           const lastMirror = await new Promise((r) => chrome.storage.local.get(["lastMirror"], (x) => r((x && x.lastMirror) || null)));
           const cloudStale = await new Promise((r) => chrome.storage.local.get(["cloudStale"], (x) => r((x && x.cloudStale) || null)));
           const cloudHold = await getAuthHold(); // (v0.21.78) why it is frozen, and whether waiting fixes it
+          const door = await new Promise((r) => chrome.storage.local.get(["cloudKeyDoor", "memStats"], (x) => r(x || {}))); // (v0.21.79) what still arrives through the account key
           sendResponse({
             ok: true,
             cloudStale, // non-null = cloud sync frozen (auth dead) — settings/videos no longer updating
             cloudHold,
+            cloudKeyDoor: door.cloudKeyDoor || null,
+            memKeyAt: (door.memStats && door.memStats.keyAt) || 0,
             cloudHoldLine: authHoldLine(cloudHold),
             enabled: settings.enabled,
             apiKeySet: !!settings.apiKey,

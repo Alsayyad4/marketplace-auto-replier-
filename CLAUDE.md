@@ -9,7 +9,32 @@ all chrome.debugger/CDP work) + Supabase dashboard in docs/. Live branch:
   permissions ships OFF by default behind a cloud setting and goes to ONE machine first.
 - The operator wants zero manual steps in normal operation.
 
-## Known state (v0.21.78)
+## Known state (v0.21.79)
+- THE DEAD KEY + THE SECOND DOOR (.79, Oct 7 2026: "Activity log ✗ HTTP 404 {"error":"not
+  found"}", "API key NOT set", "cloud sync frozen"): the 404 is subsell-log's — the cached
+  `configKey` matched no row (dashboard "Regenerate key" / a changed account) and was never
+  re-read. Now the key rides on every full pull (`adoptRowKey(row, user)`; select
+  `config,updated_at,config_key` — keep that order, the harnesses match on it) and carries
+  its OWNER (`configKeyUser`: the login's user id, "" for a pasted URL); a key not tied to
+  the login is re-read with one full fetch; `cloudLogin` drops a foreign key; only the
+  functions' own 404 body {"error":"not found"} is a dead key (`deadKeyAnswer` →
+  `dropConfigKey` → `configKeyDead`; 🩺 `logKey=DEAD`); the mirror looks it up once and
+  re-sends. SECOND DOOR: a login that exists but cannot refresh pulls the settings through
+  `subsell-config?key=` (`cloudPullViaKey`: THIS login's key only, 5-min pace, 20-s
+  timeout, no /token; the shared `applyPulledConfig(cfg, stamp, force, via)` keeps the wipe
+  guard; heal/seed never through the key; shut after Log out; a late answer after the login
+  came back is dropped; breadcrumb `cloudKeyDoor` — `okAt` is zeroed by ANY failure, the
+  popup claims only from it), and the chat memory reads through subsell-log `read`
+  (`memFetch({q, read})` / `memKeyDoor`: same owner rule, 2-min back-off after a
+  timeout/5xx; needs the .79 function, else `memStats.keyUnsupportedAt`, asked again
+  hourly). Both functions rewritten with NO imports (plain REST + service role, 10-s db
+  timeout → 504 "db timeout") + key-first + `read` — **NOT deployed by the session**:
+  `supabase functions deploy subsell-log --no-verify-jwt` and `… subsell-config
+  --no-verify-jwt`. Mirror POST 25-s abort. Oct 7 ~21:30 Z the PROJECT's data layer
+  (PostgREST, GoTrue, Storage) stopped answering — an outage looks like "offline" waits +
+  "✗ no answer from subsell-log in 25 s" on every computer; probe with the public key
+  before blaming the code. `store/smoke-keydoor.js`, `store/smoke-edgefns.js`. Never add a
+  third door: every /token call still goes through `cloudValidAuth` / `cloudLogin`.
 - LOGIN STORM (.78, Oct 7 2026: "cloud sync frozen" + "Request rate limit reached"):
   Supabase Auth's /token budget is per INTERNET ADDRESS (150 / 5 min) and shared by
   refreshes AND password logins; the old `cloudValidAuth` retried a failed refresh on

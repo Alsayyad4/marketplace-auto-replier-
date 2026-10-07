@@ -70,7 +70,8 @@ ok(/" replies=" \+ \(settings\.replyWindowOnly \? [^\n]*: "24\/7"\) \+ " nudges=
 ok(/Buyers are answered at any hour\./.test(html), "the dashboard says so where the hours are");
 
 console.log("\n— 2. the teaching receipt carries the memory flag —");
-ok(/const auth = await getCloudAuth\(\);\s*\n\s*const mem = settings\.threadMemory !== false && !!\(auth && auth\.refresh_token\) \? "on" : "off";/.test(bg), "mem=on needs the thread memory switch AND a cloud login on that computer");
+// (v0.21.79) …or a read through the account key (memStats.keyAt within a day): the memory's second door
+ok(/const auth = await getCloudAuth\(\);[\s\S]{0,600}?const keyReads = !!\(ms\.keyAt && Date\.now\(\) - ms\.keyAt < 24 \* 3600 \* 1000\);\s*\n\s*const mem = settings\.threadMemory !== false && \(!!\(auth && auth\.refresh_token\) \|\| keyReads\) \? "on" : "off";/.test(bg), "mem=on needs the thread memory switch AND a cloud login (or a read through the account key) on that computer");
 ok(/if \(seen && seen\.fp === fp && seen\.mem === mem\) return;/.test(bg) && /"teaching " \+ fp \+ " mem=" \+ mem/.test(bg) && /teachSeen: \{ fp, mem, at: Date\.now\(\) \}/.test(bg), "a login change re-reports even with the same teaching code; the row reads 'teaching <fp> mem=on|off'");
 const fpWord = /teaching ([0-9a-f]{8})/;
 ok(fpWord.test("teaching abcd1234 mem=off"), "the dashboard's fingerprint word still matches a row that carries the flag");
