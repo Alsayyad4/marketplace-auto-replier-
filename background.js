@@ -3712,6 +3712,12 @@ async function videoForeground(tab, on, holdMs, retry) {
   const wupd = (id, info) => new Promise((r) => chrome.windows.update(id, info, () => { void chrome.runtime.lastError; r(); }));
   try {
     if (on) {
+      // (v0.21.80) never take the screen from a person who is using the computer
+      if (humanActive()) {
+        fgRefused++;
+        return { ok: false, error: "a person is using this computer (seen " + Math.max(0, Math.round((Date.now() - humanAt) / 60000)) + " min ago) — the window stays where it is" };
+      }
+      botActing(5000); // the focus change below is the bot's own
       const last = await new Promise((r) => chrome.windows.getLastFocused({}, (w) => { void chrome.runtime.lastError; r(w || null); }));
       if (last && last.id !== tab.windowId && last.focused && fgPrev[tab.id] == null) fgPrev[tab.id] = last.id;
       if (retry) {
@@ -3732,6 +3738,7 @@ async function videoForeground(tab, on, holdMs, retry) {
     if (fgTimers[tab.id]) { clearTimeout(fgTimers[tab.id]); delete fgTimers[tab.id]; }
     const prev = fgPrev[tab.id];
     delete fgPrev[tab.id];
+    botActing(3000);
     if (prev != null && prev !== tab.windowId && (await wget(prev))) await wupd(prev, { focused: true });
     return { ok: true };
   } catch (e) {
@@ -4506,6 +4513,7 @@ async function buildDiagnostic() {
       [
         "enabledLocal", "remoteConfig", "remoteConfigAt", "remoteConfigUrl", "configKey",
         "configKeyDead", "configKeyDeadAt", "cloudKeyDoor", // (v0.21.79) the dead key and the second door
+        "tabClosed", "humanAt", "humanWhy", "keepWindowsRestored", // (v0.21.80) the calm computer
         "cloudConfig", "cloudConfigAt", "cloudAuth", "cloudStale", "lastMirror", "debugTick", AUTH_HOLD_KEY,
         "supabaseAnonKey", "supabaseUrl", "credsFallback",
         "videoSentThreads", "videoAttempts", "videoUrlFails", "waitingSince", "videoPending",
@@ -4751,6 +4759,13 @@ async function buildDiagnostic() {
     " | sud: base=" + (st.sudBase ? "set" : "-") + " dir=" + cut(st.sudDirName, 24) + " lastCheck=" + ageM(st.sudLastCheck) + (st.sudBase ? "" : " why=\"" + cut(st.sudStatus, 110) + "\"") +
     " | winRestored=" + (st.winRestoreN || 0) + (st.winRestoreN ? "(" + ageM(st.winRestoreAt) + ")" : "")
   );
+  // (v0.21.80) the calm computer: when a person was last seen, a close being respected,
+  // the un-minimize habit (opt-in), window-to-front requests refused for a person
+  L.push(
+    "calm: human=" + (st.humanAt ? ageM(st.humanAt) + "(" + cut(st.humanWhy, 16) + ")" : "never") +
+    " closedTab=" + (st.tabClosed && st.tabClosed.at ? ageM(st.tabClosed.at) + "/n" + (st.tabClosed.n || 1) + (st.tabClosed.until > now ? " reopen+" + Math.round((st.tabClosed.until - now) / 60000) + "m" : " expired") : "-") +
+    " restore=" + (st.keepWindowsRestored === true ? "ON(local)" : "off") + " fgRefused=" + fgRefused
+  );
   const trA = Array.isArray(st.videoAttachTrace) ? st.videoAttachTrace : [];
   L.push("attach-trace: " + (trA.length
     ? trA.map((t) => "clip" + t.clip + "/" + t.of + " " + t.res + " tray" + t.tray + (t.up ? " up" + t.up : "") + " " + ageM(t.at)).join("; ")
@@ -4913,13 +4928,14 @@ chrome.runtime.onMessage.addListener((msg, _sender, sendResponse) => {
           const lastMirror = await new Promise((r) => chrome.storage.local.get(["lastMirror"], (x) => r((x && x.lastMirror) || null)));
           const cloudStale = await new Promise((r) => chrome.storage.local.get(["cloudStale"], (x) => r((x && x.cloudStale) || null)));
           const cloudHold = await getAuthHold(); // (v0.21.78) why it is frozen, and whether waiting fixes it
-          const door = await new Promise((r) => chrome.storage.local.get(["cloudKeyDoor", "memStats"], (x) => r(x || {}))); // (v0.21.79) what still arrives through the account key
+          const door = await new Promise((r) => chrome.storage.local.get(["cloudKeyDoor", "memStats", "tabClosed", "keepWindowsRestored"], (x) => r(x || {}))); // (v0.21.79) what still arrives through the account key; (v0.21.80) the calm computer
           sendResponse({
             ok: true,
             cloudStale, // non-null = cloud sync frozen (auth dead) — settings/videos no longer updating
             cloudHold,
             cloudKeyDoor: door.cloudKeyDoor || null,
             memKeyAt: (door.memStats && door.memStats.keyAt) || 0,
+            calm: { humanAt, humanActive: humanActive(), tabClosed: door.tabClosed || null, restore: door.keepWindowsRestored === true, fgRefused }, // (v0.21.80)
             cloudHoldLine: authHoldLine(cloudHold),
             enabled: settings.enabled,
             apiKeySet: !!settings.apiKey,
@@ -5187,6 +5203,12 @@ chrome.runtime.onMessage.addListener((msg, _sender, sendResponse) => {
           sendResponse(await cdpSend(tabId, msg.mode === "click" ? "click" : "enter"));
           break;
         }
+        case "HUMAN_SEEN": {
+          // (v0.21.80) a person is using the Messenger page (trusted input while the engine is idle)
+          noteHuman(msg.what || "input");
+          sendResponse({ ok: true });
+          break;
+        }
         case "VIDEO_FOREGROUND": {
           // (v0.21.48) bring the sender's window/tab to the front (on) or hand focus back (off)
           sendResponse(await videoForeground(_sender && _sender.tab, !!msg.on, msg.hold, !!msg.retry));
@@ -5393,7 +5415,86 @@ cloudPull(false);
  *      updating even though the script answers). Every ~6h per tab, when the bot is
  *      NOT mid-task (PING says busy=false) and the tab isn't focused, reload it —
  *      like a human starting fresh. At most one tab per cycle, staggered. */
+/* ===== (v0.21.80) THE CALM COMPUTER (pure) =====
+ * Oct 8 2026, operator: "the system crashing opening tabs to upload the videos and
+ * keep doing that, we can't even use the computer, we can't even close the tabs that
+ * is opening". Two keep-it-running habits from September did that: the heartbeat
+ * un-minimized every Chrome window holding Messenger within a minute of a person
+ * minimizing it (.44), and reopened a Messenger tab ten minutes after a person
+ * closed it (.18). The window-to-front, picture-in-picture and tab-switch helpers
+ * were already off by default (.51). Now a person's minimize and close are
+ * respected, and nothing that shows on the screen happens while a person is using
+ * the computer. The bot keeps replying from a minimized or background tab: the
+ * minute heartbeat (TICK_NOW) drives the scan and the .67 media gate loads clips
+ * on a hidden page. The decisions are pure functions; store/smoke-calm.js locks them. */
 const AUTO_OPEN_COOLDOWN_MS = 10 * 60 * 1000; // auto-open at most once/10min
+const HUMAN_ACTIVE_MS = 15 * 60 * 1000;      // a person seen this recently = the computer is in use
+const CLOSE_RESPECT_MS = 3 * 60 * 60 * 1000; // a Messenger tab a person closed stays closed this long…
+const CLOSE_MORNING_HOUR = 7;                // …and until the next morning after a second close the same day
+const dayOf = (t) => new Date(t).toDateString();
+function untilNextMorning(t) {
+  const d = new Date(t);
+  d.setHours(CLOSE_MORNING_HOUR, 0, 0, 0);
+  if (d.getTime() <= t) d.setDate(d.getDate() + 1);
+  return d.getTime();
+}
+// What a removed Messenger tab means: a person closed it (a closing window counts —
+// the bot cannot tell a person's close from Chrome's, and respecting both is the safe
+// reading). `prev` = the earlier record; closes on the same day add up.
+function noteTabClosed(prev, now) {
+  const sameDay = !!(prev && prev.at && dayOf(prev.at) === dayOf(now));
+  const n = (sameDay ? Number(prev.n) || 0 : 0) + 1;
+  return { at: now, n, until: n >= 2 ? untilNextMorning(now) : now + CLOSE_RESPECT_MS };
+}
+// Should the bot open a Messenger tab now (none exists)? Not while a person's close is
+// respected, not while a person is using the computer, and at most once per cooldown.
+function calmReopenDecision(tabClosed, humanAt, lastAutoOpenAt, now) {
+  if (tabClosed && tabClosed.until && now < tabClosed.until) return { open: false, why: "closed by a person", reopenAt: tabClosed.until };
+  if (humanAt && now - humanAt < HUMAN_ACTIVE_MS) return { open: false, why: "a person is using the computer", reopenAt: humanAt + HUMAN_ACTIVE_MS };
+  if (lastAutoOpenAt && now - lastAutoOpenAt < AUTO_OPEN_COOLDOWN_MS) return { open: false, why: "cooldown", reopenAt: lastAutoOpenAt + AUTO_OPEN_COOLDOWN_MS };
+  return { open: true, why: "", reopenAt: 0 };
+}
+// Should the heartbeat un-minimize Messenger windows? Only where this computer opted
+// in (local keepWindowsRestored:true — the .44 habit), and never while a person is here.
+function calmRestoreDecision(kw, humanAt, now) {
+  if (!kw || kw.keepWindowsRestored !== true) return false;
+  if (humanAt && now - humanAt < HUMAN_ACTIVE_MS) return false;
+  return true;
+}
+/* ===== end calm (pure) ===== */
+let humanAt = 0;      // the last moment a person was seen using this Chrome profile
+let botActUntil = 0;  // focus / tab events inside this window are the bot's own
+let fgRefused = 0;    // window-to-front requests refused because a person was here
+const botTabs = new Set(); // Messenger tab ids the heartbeat has seen (so a close can be read as a person's)
+function botActing(ms) { botActUntil = Math.max(botActUntil, Date.now() + (ms || 3000)); }
+function noteHuman(why) {
+  const now = Date.now();
+  if (now < botActUntil) return;
+  const write = now - humanAt > 60 * 1000; // once a minute at most
+  humanAt = now;
+  if (write) chrome.storage.local.set({ humanAt: now, humanWhy: String(why || "").slice(0, 40) }, () => void chrome.runtime.lastError);
+}
+const humanActive = () => Date.now() - humanAt < HUMAN_ACTIVE_MS;
+try { chrome.storage.local.get(["humanAt"], (x) => { if (!chrome.runtime.lastError && x && x.humanAt > humanAt) humanAt = x.humanAt; }); } catch (e) { /* no storage yet */ }
+try { chrome.windows.onFocusChanged.addListener(() => noteHuman("window focus")); } catch (e) { /* no windows API */ }
+try { chrome.tabs.onActivated.addListener(() => noteHuman("tab switch")); } catch (e) { /* ignore */ }
+try { chrome.tabs.onCreated.addListener(() => noteHuman("tab opened")); } catch (e) { /* ignore */ }
+try { chrome.windows.onCreated.addListener(() => noteHuman("window opened")); } catch (e) { /* ignore */ }
+try {
+  chrome.tabs.onRemoved.addListener((tabId, info) => {
+    if (!botTabs.has(tabId)) return;
+    botTabs.delete(tabId);
+    noteHuman("tab closed");
+    chrome.storage.local.get(["tabClosed"], (x) => {
+      if (chrome.runtime.lastError) return;
+      const rec = noteTabClosed((x && x.tabClosed) || null, Date.now());
+      rec.windowClosing = !!(info && info.isWindowClosing);
+      chrome.storage.local.set({ tabClosed: rec }, () => void chrome.runtime.lastError);
+      LOG("the Messenger tab was closed by a person — not reopening before", new Date(rec.until).toLocaleTimeString());
+    });
+  });
+} catch (e) { /* ignore */ }
+
 async function ensureMarketplaceTab() {
   // Broad guard: ANY messenger.com or facebook.com tab (incl. a login page) counts
   // as open — we only step in when there is truly nothing for the bot to live in.
@@ -5401,10 +5502,13 @@ async function ensureMarketplaceTab() {
     chrome.tabs.query({ url: ["https://*.messenger.com/*", "https://*.facebook.com/*"] }, (t) => r(t || []))
   );
   if (any.length) return;
-  const last = await new Promise((r) => chrome.storage.local.get(["lastAutoOpenAt"], (x) => r((x && x.lastAutoOpenAt) || 0)));
-  if (Date.now() - last < AUTO_OPEN_COOLDOWN_MS) return;
+  const st = await new Promise((r) => chrome.storage.local.get(["lastAutoOpenAt", "tabClosed"], (x) => r(x || {})));
+  // (v0.21.80) a person's close is respected; a person at the computer is left alone
+  const d = calmReopenDecision(st.tabClosed || null, humanAt, st.lastAutoOpenAt || 0, Date.now());
+  if (!d.open) return;
   chrome.storage.local.set({ lastAutoOpenAt: Date.now() }, () => void chrome.runtime.lastError);
-  LOG("no Messenger tab open — auto-opening Marketplace (keep-forced-open)");
+  LOG("no Messenger tab open — auto-opening Marketplace in the background (keep-forced-open)");
+  botActing(5000); // the tab the bot opens is not a person's
   try {
     chrome.tabs.create(
       { url: "https://www.messenger.com/marketplace/", active: false, pinned: true },
@@ -5497,15 +5601,22 @@ async function heartbeat() {
   // minute, no rendering, media deferred — the root of the late replies and the
   // clips left attached-but-unsent. The operator keeps the windows open; if one
   // gets minimized anyway, restore it here every minute (never focused, so the
-  // desktop is not stolen). Local `keepWindowsRestored:false` turns this off.
+  // desktop is not stolen).
+  // (v0.21.80) …and a person who minimized Chrome to use the computer got it back on
+  // the screen within a minute, every minute ("we can't even use the computer"). The
+  // un-minimize is OPT-IN per computer now (local keepWindowsRestored:true) and never
+  // runs while a person is using the computer; a minimized window keeps replying on
+  // this heartbeat (TICK_NOW) and the .67 media gate loads clips on the hidden page.
+  for (const t of tabs) botTabs.add(t.id); // so a close of one of these reads as a person's
   try {
     const kw = await new Promise((r) => chrome.storage.local.get(["keepWindowsRestored", "winRestoreN", "tabActivateN", "keepWindowsCascaded", "winSlot", "videoActivateTab"], (x) => r(x || {})));
-    if (kw.keepWindowsRestored !== false && chrome.windows) {
+    if (chrome.windows) {
       const wids = Array.from(new Set(tabs.map((t) => t.windowId).filter((w) => w != null)));
       let n = 0;
-      for (const wid of wids) {
+      if (calmRestoreDecision(kw, humanAt, Date.now())) for (const wid of wids) {
         const w = await new Promise((r) => chrome.windows.get(wid, (x) => { void chrome.runtime.lastError; r(x || null); }));
         if (w && w.state === "minimized") {
+          botActing(3000); // the bot's own change, not a person's
           await new Promise((r) => chrome.windows.update(wid, { state: "normal", focused: false }, () => { void chrome.runtime.lastError; r(); }));
           n++;
         }
@@ -5521,11 +5632,12 @@ async function heartbeat() {
       // focused window; never flips between two Messenger tabs in one window.
       let act = 0;
       for (const t of tabs) {
-        if (kw.videoActivateTab !== true) break; // (v0.21.53) per-machine local flag only — never the shared cloud row
+        if (kw.videoActivateTab !== true || humanActive()) break; // (v0.21.53) per-machine local flag only — never the shared cloud row; (v0.21.80) never while a person is here
         if (t.active) continue;
         if (tabs.some((o) => o.windowId === t.windowId && o.active)) continue;
         const w = await new Promise((r) => chrome.windows.get(t.windowId, (x) => { void chrome.runtime.lastError; r(x || null); }));
         if (!w || w.focused) continue;
+        botActing(3000);
         await new Promise((r) => chrome.tabs.update(t.id, { active: true }, () => { void chrome.runtime.lastError; r(); }));
         act++;
       }
@@ -5539,7 +5651,7 @@ async function heartbeat() {
       // slot so a strip of each stays exposed — no throttling, no deferred
       // media, even when the bot is not in front. A window the operator moved
       // (left/top > 60) is left where it is. Local keepWindowsCascaded:false disables.
-      if (kw.keepWindowsCascaded === true) { // (v0.21.51) opt-in only — moving windows looked like "crazy stuff"
+      if (kw.keepWindowsCascaded === true && !humanActive()) { // (v0.21.51) opt-in only — moving windows looked like "crazy stuff"; (v0.21.80) never while a person is here
         let slot = kw.winSlot;
         if (typeof slot !== "number") { slot = Math.floor(Math.random() * 10); chrome.storage.local.set({ winSlot: slot }, () => void chrome.runtime.lastError); }
         let k = 0;
@@ -5551,6 +5663,7 @@ async function heartbeat() {
           const L = w.left || 0, T = w.top || 0;
           if (Math.abs(L - wantL) < 4 && Math.abs(T - wantT) < 4) continue;
           if (L > 60 || T > 60) continue; // placed by the operator
+          botActing(3000);
           await new Promise((r) => chrome.windows.update(wid, { left: wantL, top: wantT }, () => { void chrome.runtime.lastError; r(); }));
         }
       }
@@ -5626,6 +5739,12 @@ const SUD_BASES = [
   "subsell-installer",
   "subsell-extension (1)/subsell-extension",
   "subsell-installer (1)/subsell-extension",
+  // (v0.21.80) the zip has been FLAT since .67 (no inner folder): a re-downloaded
+  // "subsell-installer (1).zip" extracts to "subsell-installer (1)\" itself
+  "subsell-installer (1)",
+  "subsell-extension (1)",
+  "subsell-installer (2)",
+  "subsell-extension (2)",
 ];
 let sudLastDlErr = "";   // why the most recent probe/file download failed
 let sudProbeWrites = 0;  // probes whose test file actually reached disk

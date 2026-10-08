@@ -9,7 +9,22 @@ all chrome.debugger/CDP work) + Supabase dashboard in docs/. Live branch:
   permissions ships OFF by default behind a cloud setting and goes to ONE machine first.
 - The operator wants zero manual steps in normal operation.
 
-## Known state (v0.21.79)
+## Known state (v0.21.80)
+- THE CALM COMPUTER (.80, Oct 8 2026: "opening tabs to upload the videos … we can't even
+  use the computer … we can't even close the tabs"): the heartbeat's un-minimize (.44) and
+  the tab reopen (.18) were the on-screen habits. Now `ensureMarketplaceTab` asks
+  `calmReopenDecision` (a tab a person closed stays closed 3 h, until 07:00 after a second
+  close the same day — `tabs.onRemoved` on a known Messenger tab → `tabClosed`; never while
+  a person was seen in 15 min), the un-minimize is OPT-IN (local `keepWindowsRestored ===
+  true`, Options → Power features) via `calmRestoreDecision`, `videoForeground` is refused
+  for a person, the tab-switch/cascade helpers stop for a person. A person = focus / tab
+  events the bot did not make (`noteHuman`, `botActing(ms)` before every own
+  windows/tabs update) + trusted input on the Messenger page (content `HUMAN_SEEN`, never
+  while `busy`). A minimized window keeps replying on TICK_NOW + the .67 gate. Popup row
+  "Computer"; 🩺 `calm:` line. `store/smoke-calm.js`. Never bring back a default-on
+  window/tab habit. RETENTION: `supabase/retention.sql` (pg_cron hourly: feed 5 days,
+  teach/usage 35, video 60) applied Oct 8; `deploy/supabase-heal.mjs --retention --purge`.
+  COMPUTE: Micro since Oct 8 12:20 Z (`--upgrade`, PATCH not POST).
 - THE DEAD KEY + THE SECOND DOOR (.79, Oct 7 2026: "Activity log ✗ HTTP 404 {"error":"not
   found"}", "API key NOT set", "cloud sync frozen"): the 404 is subsell-log's — the cached
   `configKey` matched no row (dashboard "Regenerate key" / a changed account) and was never

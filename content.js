@@ -156,6 +156,19 @@
     }));
   }
   refreshPowerFlags();
+  // (v0.21.80) THE CALM COMPUTER: tell the background when a PERSON uses this page —
+  // trusted input only, never while the engine itself is pressing keys (busy), at most
+  // once a minute. The background then keeps every on-screen habit (un-minimize,
+  // reopen, window-to-front) away from the computer for a while.
+  let humanSeenAt = 0;
+  function humanSeen(ev) {
+    if (!ev || !ev.isTrusted || busy) return;
+    const now = Date.now();
+    if (now - humanSeenAt < 60000) return;
+    humanSeenAt = now;
+    safe(() => chrome.runtime.sendMessage({ type: "HUMAN_SEEN", what: ev.type }, () => void chrome.runtime.lastError));
+  }
+  for (const t of ["pointerdown", "keydown", "wheel", "mousemove"]) document.addEventListener(t, humanSeen, { capture: true, passive: true });
   const VIDEO_BLIND_RETRIES_DEFAULT = 2; // extra native attach tries per chat when nothing could be confirmed staged (setting videoRetryMax). There is NO link fallback: the demo is a video file or nothing (v0.21.60/.66).
   let lastHandled = {}; // threadId -> the buyer message we last replied to (persisted)
   // threadId -> how many TEXT replies the bot has sent in this whole conversation.

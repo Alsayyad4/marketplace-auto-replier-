@@ -1082,7 +1082,42 @@
       const s = await messagesOnly(client.from("subsell_messages").select("created_at, machine"))
         .gte("created_at", since).order("created_at", { ascending: false }).limit(300);
       renderFleet(fleetStatus(t.data || [], s.error ? [] : s.data || [], cur, Date.now(), Date.parse(row.data.updated_at || "") || 0), cur);
+      loadStuck(); // (v0.21.80) the computers whose self-update cannot run
     } catch (e) { /* a status line must never break the page */ }
+  }
+  /* (v0.21.80) STUCK COMPUTERS. A computer whose updater cannot find its own folder, or
+   * whose Chrome refuses to write the update file, writes one "STALE BUILD: …" row a day
+   * (kind video-status, since .37) — and nobody read them: on Oct 8 2026 twelve computers
+   * had been saying so for days while the owner believed the fleet updated itself. Named
+   * here, each with its one-time cure. */
+  async function loadStuck() {
+    const el = $("fleetStuck");
+    if (!el || !client) return;
+    try {
+      const since = new Date(Date.now() - 7 * 24 * 3600 * 1000).toISOString();
+      const r = await client.from("subsell_messages").select("created_at, machine, bot_text")
+        .eq("kind", "video-status").like("bot_text", "STALE BUILD:%").gte("created_at", since)
+        .order("created_at", { ascending: false }).limit(200);
+      if (r.error) return;
+      const byKey = {};
+      for (const row of r.data || []) { const k = machineKey(row.machine); if (!k || byKey[k]) continue; byKey[k] = row; }
+      const rows = Object.values(byKey);
+      if (!rows.length) { el.textContent = ""; el.className = "hint"; return; }
+      const cure = (t) => /refused to write/.test(t)
+        ? "on that computer: Chrome ⋮ → Settings → Downloads → turn OFF \"Ask where to save each file\", then popup → Update now"
+        : /folder not found/.test(t)
+        ? "on that computer: download the installer zip again, right-click → Extract All into Downloads, chrome://extensions → Load unpacked → the new Downloads\\subsell-installer folder, and remove the old entry"
+        : "see its message in the Activity feed";
+      const lines = ["⚠ " + rows.length + " computer(s) cannot update themselves — every fix stops before them until this is done once:"];
+      for (const row of rows) {
+        const m = String(row.bot_text || "").match(/runs (v[\d.]+) but (v[\d.]+) is available/);
+        lines.push("• " + machineShow(row.machine) + (m ? " is on " + m[1] + " (" + m[2] + " available)" : "") + " — " + cure(String(row.bot_text || "")) + " (reported " + new Date(row.created_at).toLocaleString() + ")");
+      }
+      lines.push("The lasting fix is a Chrome Web Store build (store/STORE-SUBMISSION.md): then every computer updates by itself, whatever folder it was installed from.");
+      el.style.whiteSpace = "pre-line";
+      el.className = "err";
+      el.textContent = lines.join("\n");
+    } catch (e) { /* never break the page */ }
   }
 
   /* ---- (v0.21.74) LEARNING WITHOUT CODE: three things the owner can do here ----
@@ -1526,7 +1561,8 @@
       if (td.count != null) today = td.count;
     } catch (e) { /* counts are best-effort */ }
 
-    totalsEl.innerHTML = `<b>${total}</b> messages all-time &nbsp;·&nbsp; <b>${today}</b> today &nbsp;·&nbsp; showing latest ${rows.length}`;
+    // (v0.21.80) the log keeps 5 days (videos 60 days for the "never send it twice" memory); older rows are deleted every hour by the database itself
+    totalsEl.innerHTML = `<b>${total}</b> messages in the last 5 days &nbsp;·&nbsp; <b>${today}</b> today &nbsp;·&nbsp; showing latest ${rows.length} &nbsp;·&nbsp; older messages are deleted automatically`;
     loadFleet(); // (v0.21.73) which computers answer with the teaching saved here
     loadGaps(); // (v0.21.74) what the bots could not answer — one box each to teach it
     loadVideoReport(); // (v0.21.75) which chats got the demo twice, which still miss a clip

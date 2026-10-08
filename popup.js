@@ -70,6 +70,17 @@
           }
         }
       }
+      // (v0.21.80) the calm computer: a person at the keyboard, a closed tab being respected
+      const cm = $("calm");
+      if (cm && s.calm) {
+        const c = s.calm;
+        const now = Date.now();
+        const at = (t) => { try { return new Date(t).toLocaleTimeString([], { hour: "2-digit", minute: "2-digit" }); } catch (e) { return "?"; } };
+        const tc = c.tabClosed && c.tabClosed.until > now ? c.tabClosed : null;
+        if (tc) { cm.textContent = "Messenger tab closed by hand at " + at(tc.at) + " — the bot waits on this computer until " + at(tc.until) + " (📨 Open Marketplace brings it back now)"; cm.className = "warn"; }
+        else if (c.humanActive) { cm.textContent = "someone is using it (" + Math.max(0, Math.round((now - c.humanAt) / 60000)) + " min ago) — the bot stays out of the way, replies continue in the background" + (c.restore ? "; un-minimize is ON on this computer" : ""); cm.className = "muted"; }
+        else { cm.textContent = "free — the bot works in the background" + (c.restore ? " (un-minimize ON on this computer)" : ""); cm.className = "ok"; }
+      }
     });
   }
 

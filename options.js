@@ -908,7 +908,7 @@
    * cloud row by the v0.21.48-.50 dashboard armed the whole fleet at once and gave
    * the operator "crazy stuff on the computer" (PC-1zysp: fg=60 in 7 minutes). They
    * are per-machine local storage now, so arming one machine can never arm the rest. */
-  const POWER_KEYS = ["videoForeground", "videoPip", "videoTrustedChannels", "videoActivateTab", "videoActivationPulse"];
+  const POWER_KEYS = ["videoForeground", "videoPip", "videoTrustedChannels", "videoActivateTab", "videoActivationPulse", "keepWindowsRestored"]; // (v0.21.80) the un-minimize habit is a power switch too
   chrome.storage.local.get(POWER_KEYS, (r) => {
     for (const k of POWER_KEYS) if ($(k)) $(k).checked = !!(r && r[k]);
   });
