@@ -30,11 +30,17 @@ const m = storeManifest(fleet);
 ok(!("key" in m) && typeof fleet.key === "string" && fleet.key.length > 100, "the store manifest has no key; the fleet manifest keeps its key");
 ok(JSON.stringify(m.host_permissions) === JSON.stringify(STORE_HOSTS) && m.host_permissions.length === 4 && !m.host_permissions.includes("<all_urls>"), "the store manifest asks for the four hosts only — " + m.host_permissions.join(", "));
 ok(fleet.host_permissions.includes("<all_urls>"), "the fleet manifest keeps <all_urls>");
-const same = ["manifest_version", "name", "version", "description", "permissions", "storage", "background", "icons", "action", "content_scripts", "options_page", "options_ui", "web_accessible_resources", "minimum_chrome_version"];
+const same = ["manifest_version", "name", "version", "description", "storage", "background", "icons", "action", "content_scripts", "options_page", "options_ui", "web_accessible_resources", "minimum_chrome_version"];
 ok(same.every((k) => JSON.stringify(m[k]) === JSON.stringify(fleet[k])), "everything else is byte for byte the fleet manifest");
 ok(m.version === fleet.version && /^\d+\.\d+\.\d+$/.test(m.version), "same version as the fleet build — v" + m.version);
 ok(!("update_url" in m), "no update_url is written by hand (Chrome adds it to a store install; that is how STORE_BUILD knows)");
-ok(fleet.permissions.includes("debugger") && fleet.permissions.includes("downloads") && m.permissions.includes("debugger"), "the permissions the single purpose needs stay (debugger attaches the video file, downloads keeps the clips on disk)");
+ok(fleet.permissions.includes("debugger") && fleet.permissions.includes("activeTab"), "the fleet manifest keeps debugger (file-API channels) and activeTab");
+ok(!m.permissions.includes("debugger") && !m.permissions.includes("activeTab"), "the store manifest drops debugger and activeTab — " + m.permissions.join(", "));
+ok(["storage", "unlimitedStorage", "alarms", "notifications", "tabs", "scripting", "downloads"].every((p) => m.permissions.includes(p)) && m.permissions.length === 7, "…and keeps exactly the seven the single purpose needs");
+const ct = fs.readFileSync(path.join(__dirname, "..", "content.js"), "utf8");
+ok(/const HAS_DEBUGGER = safe\(\(\) => \(chrome\.runtime\.getManifest\(\)\.permissions \|\| \[\]\)\.indexOf\("debugger"\) >= 0, true\);\s*\n\s*if \(!HAS_DEBUGGER\) cdpDisabledUntil = Number\.MAX_SAFE_INTEGER;/.test(ct), "content.js parks the file-API channels for good when the permission is absent (btn / dom / paste carry the videos)");
+ok(/if \(!canCdp\) order = order\.filter\(\(c\) => c === "paste" \|\| c === "dom" \|\| c === "btn"\);/.test(ct), "…which is the existing no-debugger order: btn, dom, paste");
+ok(/async function cdpSetFiles\(tabId, paths, channel\) \{\s*if \(!chrome\.debugger\)/.test(bg) && /async function cdpSend\(tabId, mode\) \{\s*if \(!chrome\.debugger\)/.test(bg) && /async function cdpActivate\(tabId, opts\) \{\s*if \(!chrome\.debugger\)/.test(bg) && /async function cdpDoctor\(tabId\) \{\s*if \(!chrome\.debugger\)/.test(bg), "every debugger entry point in the worker answers 'unavailable' instead of throwing");
 
 /* 2 — the runtime guard */
 ok(/const STORE_BUILD = \(\(\) => \{ try \{ return !!chrome\.runtime\.getManifest\(\)\.update_url; \} catch \(e\) \{ return false; \} \}\)\(\);/.test(bg), "STORE_BUILD reads the manifest's update_url");

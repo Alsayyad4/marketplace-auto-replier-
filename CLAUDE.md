@@ -9,10 +9,11 @@ all chrome.debugger/CDP work) + Supabase dashboard in docs/. Live branch:
   permissions ships OFF by default behind a cloud setting and goes to ONE machine first.
 - The operator wants zero manual steps in normal operation.
 
-## Known state (v0.21.81)
-- THE STORE BUILD (.81, Oct 8 2026): `dist/subsell-webstore.zip` from
-  `store/build-webstore-zip.ps1` + `store/webstore-manifest.js` (no `key`, four hosts,
-  same version); `STORE_BUILD` (background.js) = the manifest has an `update_url` (a store
+## Known state (v0.21.82)
+- THE STORE BUILD (.81/.82, Oct 8 2026): `dist/subsell-webstore.zip` from
+  `store/build-webstore-zip.ps1` + `store/webstore-manifest.js` (no `key`, four hosts, NO
+  `debugger`/`activeTab` — content.js `HAS_DEBUGGER` parks the file-API channels for good,
+  btn/dom/paste carry the videos; same version); `STORE_BUILD` (background.js) = the manifest has an `update_url` (a store
   install) → the folder updater stands down (`cloudSelfUpdate` → `{store:true}`,
   `selfUpdateCheck` no-op), popup/🩺 say so. Unlisted item; per computer: install from the
   link → Options → Log in → remove the old unpacked entry. `store/STORE-SUBMISSION.md` is

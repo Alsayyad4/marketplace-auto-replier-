@@ -2653,6 +2653,13 @@
   // See background.js cdpSetFiles(). A hard failure parks the path for a while so a
   // machine without the permission/file access doesn't burn seconds on every clip.
   let cdpDisabledUntil = 0;
+  // (v0.21.82) The Chrome Web Store build ships WITHOUT the debugger permission (the
+  // permission reviewers refuse most): the file-API channels (input / chooser / drop,
+  // trusted presses) are off for good there — no probe, no 2-minute park cycle — and
+  // btn / dom / paste carry the videos (btn has led the order since .57). The unpacked
+  // fleet build keeps the permission and is unchanged.
+  const HAS_DEBUGGER = safe(() => (chrome.runtime.getManifest().permissions || []).indexOf("debugger") >= 0, true);
+  if (!HAS_DEBUGGER) cdpDisabledUntil = Number.MAX_SAFE_INTEGER;
   let cdpStrikes = 0; // consecutive TRANSIENT misses (input not found / no preview)
   let cdpInputMissRounds = 0; // (v0.21.53) escalating park while the composer input stays missing; any verified attach resets it
   let cdpSetToken = 0; // bumped per video set; a miss skips the file API for the REST of that set only

@@ -20,11 +20,18 @@ powershell -ExecutionPolicy Bypass -File store\build-webstore-zip.ps1
 
 → **`dist/subsell-webstore.zip`**: the extension's runtime files only, flat, with
 the store manifest (`store/webstore-manifest.js`): **no `key`** (the Store issues
-its own extension ID) and host permissions narrowed to the four hosts the single
+its own extension ID), host permissions narrowed to the four hosts the single
 purpose needs (`*.messenger.com`, `*.facebook.com`, `api.anthropic.com`,
-`*.supabase.co`). Same version as the fleet build. The fleet zips
-(`dist/subsell-extension.zip`, `dist/subsell-installer.zip`) keep the key and are
-untouched.
+`*.supabase.co`), and **no `debugger` and no `activeTab`** permission. Same version
+as the fleet build. The fleet zips (`dist/subsell-extension.zip`,
+`dist/subsell-installer.zip`) keep the key and every permission and are untouched.
+
+What the store build gives up by dropping `debugger`: the file-API video channels
+(`input`, and the opt-in `chooser` / `drop` / trusted Enter) and the diagnostic's
+CDP lines. The production channel (`btn`, Messenger's own picker caught in the
+page, the one fixed in v0.21.77) and the `dom` / `paste` channels need no debugger;
+`content.js` parks the file-API channels for good when the permission is absent, so
+nothing probes or parks in cycles. No "SubSell is debugging this browser" bar, ever.
 
 The code tells the two installs apart at run time: a store install carries an
 `update_url` in its manifest (Chrome adds it), and then `STORE_BUILD` is true in
@@ -77,10 +84,9 @@ already filled in.)
 | `storage`, `unlimitedStorage` | The operator's settings, API key, per-chat memory and the demo videos kept on disk. |
 | `alarms` | The minute heartbeat (scan, cloud sync), follow-ups and the remote-config refresh. |
 | `notifications` | Tells the operator when a conversation needs a human. |
-| `tabs`, `activeTab` | Finds the operator's open Messenger tab to work in it and keeps it from being discarded. |
-| `scripting` | Re-injects the content script into an already-open Messenger tab after an update, so the operator never has to reload pages. |
-| `downloads` | Keeps the operator's own demo video clips on disk (Downloads/SubSell-videos) so they can be attached to a chat. |
-| `debugger` | Attaches the demo video FILE to Messenger's composer (`DOM.setFileInputFiles`): a web page cannot set a file input from script, and the Chrome DevTools protocol is the only way an extension can hand a local file to the page. Used only in the operator's own Messenger tab, only when a demo video is being sent. |
+| `tabs` | Finds the operator's open Messenger tab to work in it and keeps it from being discarded. |
+| `scripting` | Injects the page-side helper that hands the demo video to Messenger's own file picker, and re-injects the content script into an already-open Messenger tab after an update, so the operator never has to reload pages. |
+| `downloads` | Keeps the operator's own demo video clips on disk (Downloads/SubSell-videos). |
 | Host `*.messenger.com`, `*.facebook.com` | The extension only works inside the operator's own Marketplace/Messenger chats. |
 | Host `api.anthropic.com` | Generates the replies with the operator's own API key. |
 | Host `*.supabase.co` | The operator's own settings/cloud sync project (configured by the operator). |
@@ -110,11 +116,33 @@ The old computers that could not self-update get this instead of a folder reinst
 
 ---
 
-## If the review rejects
-- **`debugger`**: reply with the justification above (video file hand-over); point
-  at the single purpose and the operator-only use.
-- **Host permissions**: already the minimum; the fleet build's `<all_urls>` is not
-  in the store package.
-- **Remote code**: none — every line ships in the package; the "Try it" box of the
-  dashboard fetches `background.js` from the dashboard's own site, not the other way
-  round.
+## The review: what to write so it passes (a first submission was rejected once)
+Reviewers cannot log into Messenger, so a Facebook-dependent extension is rejected
+as "functionality could not be verified" unless they can see it work. In the item's
+**Test instructions / notes for the reviewer** field (Privacy practices tab or the
+upload page, depending on the dashboard version) paste:
+
+> SubSell replies to the developer's OWN Facebook Marketplace buyer messages. It
+> only runs on messenger.com / facebook.com and only acts in the account of the
+> person who installed it. To see it work: install, open Options, enter an
+> Anthropic API key, switch it ON in the popup and open messenger.com/marketplace
+> with an account that has Marketplace conversations. Demo video: <link>.
+> A test Messenger account can be provided on request.
+
+Record a 60-second screen video (the popup ON, a buyer message arriving, the reply
+being typed, the Options page) and upload it unlisted to YouTube or Drive; put the
+link in that field. This is the single most effective thing against a rejection.
+
+Typical rejection names and the answer:
+- **Blue Argon** (functionality not working / cannot be verified): the note and the
+  video above; offer a test account.
+- **Purple Potassium** (unused or excessive permissions): the store build carries only
+  the seven permissions in the table; `debugger`, `activeTab` and `<all_urls>` are not
+  in it. Paste the table.
+- **Yellow Magnesium / Purple Lithium** (privacy): the policy URL above is live and
+  names the data handled (message content, API key, cloud login) and that nothing is
+  sold or shared.
+- **Red Nickel / spam & placement**: the listing describes exactly what it does; the
+  item is Unlisted and used by one business.
+- **Remote code**: none — every line ships in the package; the dashboard's "Try it"
+  box fetches `background.js` from the dashboard's own site, not the other way round.
