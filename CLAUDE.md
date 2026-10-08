@@ -28,12 +28,15 @@ all chrome.debugger/CDP work) + Supabase dashboard in docs/. Live branch:
   (`memFetch({q, read})` / `memKeyDoor`: same owner rule, 2-min back-off after a
   timeout/5xx; needs the .79 function, else `memStats.keyUnsupportedAt`, asked again
   hourly). Both functions rewritten with NO imports (plain REST + service role, 10-s db
-  timeout → 504 "db timeout") + key-first + `read` — **NOT deployed by the session**:
-  `supabase functions deploy subsell-log --no-verify-jwt` and `… subsell-config
-  --no-verify-jwt`. Mirror POST 25-s abort. Oct 7 ~21:30 Z the PROJECT's data layer
-  (PostgREST, GoTrue, Storage) stopped answering — an outage looks like "offline" waits +
-  "✗ no answer from subsell-log in 25 s" on every computer; probe with the public key
-  before blaming the code. `store/smoke-keydoor.js`, `store/smoke-edgefns.js`. Never add a
+  timeout → 504 "db timeout") + key-first + `read` — DEPLOYED Oct 7 23:58 Z
+  (`npx --yes supabase functions deploy <fn> --project-ref tcqunihripihroseswgy --no-verify-jwt`,
+  the owner's access token, chat switched out of Auto mode first — the classifier refuses
+  production actions in Auto). Mirror POST 25-s abort. Oct 7 21:30–23:56 Z the PROJECT (Nano
+  compute) went Unhealthy, every service down, the fleet on local copies;
+  `deploy/supabase-heal.mjs --restart` (Management API) healed it in ~4.5 min; such an outage
+  looks like "offline" waits + "✗ no answer from subsell-log in 25 s" on every computer —
+  probe PostgREST WITH the public key before blaming the code; Micro compute is the standing
+  recommendation (`--upgrade`, the owner's money). `store/smoke-keydoor.js`, `store/smoke-edgefns.js`. Never add a
   third door: every /token call still goes through `cloudValidAuth` / `cloudLogin`.
 - LOGIN STORM (.78, Oct 7 2026: "cloud sync frozen" + "Request rate limit reached"):
   Supabase Auth's /token budget is per INTERNET ADDRESS (150 / 5 min) and shared by
