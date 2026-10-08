@@ -4756,7 +4756,7 @@ async function buildDiagnostic() {
     " urlStrikesActive=" + strikes +
     " catchUp=" + (cu.armed ? "ARMED(" + ageM(cu.at) + ")" : "off") +
     " auto13=" + (st.autoCatchUp01213 ? "done" : "-") + " auto17=" + (st.autoCatchUp01217 ? "done" : "-") +
-    " | sud: base=" + (st.sudBase ? "set" : "-") + " dir=" + cut(st.sudDirName, 24) + " lastCheck=" + ageM(st.sudLastCheck) + (st.sudBase ? "" : " why=\"" + cut(st.sudStatus, 110) + "\"") +
+    " | sud: " + (STORE_BUILD ? "STORE(Chrome updates it) " : "") + "base=" + (st.sudBase ? "set" : "-") + " dir=" + cut(st.sudDirName, 24) + " lastCheck=" + ageM(st.sudLastCheck) + (st.sudBase || STORE_BUILD ? "" : " why=\"" + cut(st.sudStatus, 110) + "\"") +
     " | winRestored=" + (st.winRestoreN || 0) + (st.winRestoreN ? "(" + ageM(st.winRestoreAt) + ")" : "")
   );
   // (v0.21.80) the calm computer: when a person was last seen, a close being respected,
@@ -5724,6 +5724,11 @@ chrome.alarms.onAlarm.addListener((alarm) => {
  * verified with a data-URL probe file, never guessed. Everything is plain Chrome
  * API: nothing for Defender to object to. */
 const SUD_RAW = "https://raw.githubusercontent.com/alsayyad4/marketplace-auto-replier-/claude/wizardly-noether-Oi6vP/";
+// (v0.21.81) THE STORE BUILD. An extension installed from the Chrome Web Store carries
+// an `update_url` in its manifest (Chrome adds it); an unpacked folder never does. The
+// store install is updated by Chrome itself, so the folder-based updater below must
+// not run there: no probes into Downloads, no junk folders, no "cannot self-update".
+const STORE_BUILD = (() => { try { return !!chrome.runtime.getManifest().update_url; } catch (e) { return false; } })();
 const SUD_FILES = [
   "background.js", "content.js", "options.html", "options.js", "popup.html",
   "popup.js", "managed_schema.json", "icon16.png", "icon48.png", "icon128.png",
@@ -5864,6 +5869,11 @@ async function sudCandidates() {
 }
 let sudBusy = false;
 async function cloudSelfUpdate(force) {
+  if (STORE_BUILD) { // (v0.21.81) Chrome updates a store install by itself
+    let v = "?"; try { v = chrome.runtime.getManifest().version; } catch (e) { /* keep ? */ }
+    chrome.storage.local.set({ sudStatus: "Chrome Web Store build v" + v + " — Chrome updates it by itself" }, () => void chrome.runtime.lastError);
+    return { ok: true, upToDate: true, store: true, version: v, reason: "store build" };
+  }
   if (sudBusy) return { ok: false, reason: "already running" };
   sudBusy = true;
   try {
@@ -5987,6 +5997,7 @@ chrome.alarms.onAlarm.addListener((alarm) => {
   if (alarm && alarm.name === UPDATE_RETRY_ALARM) selfUpdateCheck();
 });
 async function selfUpdateCheck() {
+  if (STORE_BUILD) return; // (v0.21.81) nothing lands on disk by hand in a store install
   try {
     const resp = await fetch(chrome.runtime.getURL("manifest.json"), { cache: "no-store" });
     const disk = await resp.json();

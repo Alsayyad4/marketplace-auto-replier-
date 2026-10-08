@@ -9,7 +9,17 @@ all chrome.debugger/CDP work) + Supabase dashboard in docs/. Live branch:
   permissions ships OFF by default behind a cloud setting and goes to ONE machine first.
 - The operator wants zero manual steps in normal operation.
 
-## Known state (v0.21.80)
+## Known state (v0.21.81)
+- THE STORE BUILD (.81, Oct 8 2026): `dist/subsell-webstore.zip` from
+  `store/build-webstore-zip.ps1` + `store/webstore-manifest.js` (no `key`, four hosts,
+  same version); `STORE_BUILD` (background.js) = the manifest has an `update_url` (a store
+  install) → the folder updater stands down (`cloudSelfUpdate` → `{store:true}`,
+  `selfUpdateCheck` no-op), popup/🩺 say so. Unlisted item; per computer: install from the
+  link → Options → Log in → remove the old unpacked entry. `store/STORE-SUBMISSION.md` is
+  the walkthrough; the upload needs the owner's Google account ($5 once) — NOT done yet.
+  The teaching was never erased (verified in the row + history, Oct 8): "erased" = the
+  5-day Activity feed or a computer's own Settings page; "ignores the teaching / double
+  videos" = the computers stuck on builds older than .73/.77. `store/smoke-store.js`.
 - THE CALM COMPUTER (.80, Oct 8 2026: "opening tabs to upload the videos … we can't even
   use the computer … we can't even close the tabs"): the heartbeat's un-minimize (.44) and
   the tab reopen (.18) were the on-screen habits. Now `ensureMarketplaceTab` asks

@@ -361,7 +361,8 @@
       $("updStatus").textContent = "Checking…";
       chrome.runtime.sendMessage({ type: "CHECK_UPDATE" }, (r) => {
         if (chrome.runtime.lastError || !r) { $("updStatus").textContent = "error"; return; }
-        if (r.upToDate) $("updStatus").textContent = "Up to date ✓ (v" + r.version + ")";
+        if (r.store) $("updStatus").textContent = "v" + r.version + " — the Chrome Web Store updates it by itself"; // (v0.21.81)
+        else if (r.upToDate) $("updStatus").textContent = "Up to date ✓ (v" + r.version + ")";
         else if (r.updated) $("updStatus").textContent = "v" + r.version + " downloaded — reloading…";
         else $("updStatus").textContent = r.reason || "failed";
       });
