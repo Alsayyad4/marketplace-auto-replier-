@@ -17,7 +17,7 @@ all chrome.debugger/CDP work) + Supabase dashboard in docs/. Live branch:
   install) → the folder updater stands down (`cloudSelfUpdate` → `{store:true}`,
   `selfUpdateCheck` no-op), popup/🩺 say so. Unlisted item; per computer: install from the
   link → Options → Log in → remove the old unpacked entry. `store/STORE-SUBMISSION.md` is
-  the walkthrough; the upload needs the owner's Google account ($5 once) — NOT done yet.
+  the walkthrough; SUBMITTED Oct 9 2026 (item imhlnnlfpphelledfiiponhoeaebapmm, Unlisted, pending review; June rejection = broken privacy link) — HANDOFF has the dashboard link.
   The teaching was never erased (verified in the row + history, Oct 8): "erased" = the
   5-day Activity feed or a computer's own Settings page; "ignores the teaching / double
   videos" = the computers stuck on builds older than .73/.77. `store/smoke-store.js`.
