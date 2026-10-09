@@ -19,16 +19,19 @@ const STORE_HOSTS = [
   "https://*.supabase.co/*",
 ];
 const STORE_DROP_PERMISSIONS = ["debugger", "activeTab"];
+// The Web Store refuses a manifest description over 132 characters (the fleet one is 177).
+const STORE_DESCRIPTION = "Auto-replies to your own Facebook Marketplace buyers with the Claude API, in French or English, with your own key and settings.";
 
 function storeManifest(fleet) {
   const m = JSON.parse(JSON.stringify(fleet));
   delete m.key;
   m.host_permissions = STORE_HOSTS.slice();
   m.permissions = (m.permissions || []).filter((p) => STORE_DROP_PERMISSIONS.indexOf(p) < 0);
+  m.description = STORE_DESCRIPTION;
   return m;
 }
 
-module.exports = { storeManifest, STORE_HOSTS, STORE_DROP_PERMISSIONS };
+module.exports = { storeManifest, STORE_HOSTS, STORE_DROP_PERMISSIONS, STORE_DESCRIPTION };
 
 if (require.main === module) {
   // node store/webstore-manifest.js <fleet manifest.json> <out manifest.json>
