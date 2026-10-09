@@ -40,6 +40,12 @@
       <span class="spacer"></span>
       <a href="#" id="openOptions">Settings ▸</a>
     </div>
+    <!-- (v0.21.83) one-time consent before the first Turn ON on this computer -->
+    <div id="consent" class="panel" style="display:none;border:1px solid #c47f00;">
+      <b>Before turning SubSell on</b>
+      <p style="margin:6px 0;">While ON, SubSell sends replies for you automatically in your own Messenger conversations: Claude writes each reply from your own settings, and sends your demo video if you set one. To write a reply, the buyer's message is sent to Anthropic and, if you use cloud sync, saved in your own cloud project (kept 5 days). You can turn it off here at any time.</p>
+      <button id="consentYes" class="primary">I agree — turn it on</button> <button id="consentNo">Cancel</button>
+    </div>
 
     <div class="row">
       <button id="wake">⚡ Wake scanner (all tabs)</button>

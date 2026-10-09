@@ -8,8 +8,11 @@ $ErrorActionPreference = "Stop"
 $repo = Split-Path -Parent (Split-Path -Parent $MyInvocation.MyCommand.Path)
 $stage = Join-Path $env:TEMP ("subsell-webstore-" + [guid]::NewGuid().ToString("N"))
 New-Item -ItemType Directory -Path $stage | Out-Null
-$files = @("background.js", "content.js", "options.html", "options.js", "popup.html", "popup.js", "managed_schema.json", "icon16.png", "icon48.png", "icon128.png")
+$files = @("content.js", "options.html", "options.js", "popup.html", "popup.js", "managed_schema.json", "icon16.png", "icon48.png", "icon128.png")
 foreach ($f in $files) { Copy-Item (Join-Path $repo $f) (Join-Path $stage $f) }
+# (v0.21.83) background.js without the folder self-updater (store/webstore-background.js)
+& node (Join-Path $repo "store\webstore-background.js") (Join-Path $repo "background.js") (Join-Path $stage "background.js")
+if ($LASTEXITCODE -ne 0) { throw "store background failed" }
 & node (Join-Path $repo "store\webstore-manifest.js") (Join-Path $repo "manifest.json") (Join-Path $stage "manifest.json")
 if ($LASTEXITCODE -ne 0) { throw "store manifest failed" }
 $out = Join-Path $repo "dist\subsell-webstore.zip"

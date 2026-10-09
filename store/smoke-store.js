@@ -52,5 +52,23 @@ ok(/" \| sud: " \+ \(STORE_BUILD \? "STORE\(Chrome updates it\) " : ""\)/.test(b
 /* 3 — the popup */
 ok(/if \(r\.store\) \$\("updStatus"\)\.textContent = "v" \+ r\.version \+ " — the Chrome Web Store updates it by itself";/.test(popupSrc), "the popup's Update now says the Store updates it");
 
+/* 4 — (v0.21.83) the store background.js carries no self-updater */
+const { storeBackground } = require("./webstore-background.js");
+const sb = storeBackground(bg);
+ok(!/raw\.githubusercontent|SUD_RAW|SUD_FILES|sudDownload|chrome\.runtime\.reload\(/.test(sb), "the store background.js has no remote-file download and no self-reload");
+ok(/const STORE_BUILD = true;/.test(sb) && /async function cloudSelfUpdate\(\) \{/.test(sb) && /async function selfUpdateCheck\(\) \{/.test(sb), "…and keeps the three stubs the rest of the file calls");
+let parses = true;
+try { new Function(sb); } catch (e) { parses = String(e.message); } // a syntax check only: the function is never called
+ok(parses === true, "the store background.js parses — " + parses);
+ok(/raw\.githubusercontent/.test(bg) && /chrome\.runtime\.reload\(/.test(bg), "the fleet background.js keeps its updater");
+ok(sb.length < bg.length && sb.slice(0, 2000) === bg.slice(0, 2000) && sb.slice(-2000) === bg.slice(-2000), "everything outside the markers is the fleet file byte for byte");
+const ps1 = fs.readFileSync(path.join(__dirname, "build-webstore-zip.ps1"), "utf8");
+ok(/webstore-background\.js/.test(ps1) && !/\$files = @\("background\.js"/.test(ps1), "the store zip builder writes the stripped background.js, never the fleet one");
+
+/* 5 — (v0.21.83) prominent disclosure and consent before the first Turn ON */
+const popupHtml = fs.readFileSync(path.join(__dirname, "..", "popup.html"), "utf8");
+ok(/id="consent"/.test(popupHtml) && /sends replies for you automatically/.test(popupHtml) && /sent to Anthropic/.test(popupHtml) && /id="consentYes"/.test(popupHtml), "the popup has the consent panel saying what is sent and where");
+ok(/if \(!settings\.enabled && !\(await askConsent\(\)\)\) return;/.test(popupSrc) && /sendConsent: \{ at: Date\.now\(\) \}/.test(popupSrc), "turning ON waits for the consent, once per computer");
+
 console.log(failed ? "\n" + failed + " check(s) FAILED" : "\nall checks passed");
 process.exit(failed ? 1 : 0);

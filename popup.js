@@ -162,8 +162,31 @@
     });
   }
 
+  // (v0.21.83) PROMINENT DISCLOSURE AND CONSENT (Chrome Web Store user-data policy): the
+  // first Turn ON on a computer says plainly that replies are sent automatically and where
+  // the messages go, and turns on only after "I agree". Once per computer (local
+  // sendConsent); a computer already ON is never interrupted.
+  function askConsent() {
+    return new Promise((resolve) => {
+      chrome.storage.local.get(["sendConsent"], (x) => {
+        if (x && x.sendConsent && x.sendConsent.at) return resolve(true);
+        const box = $("consent");
+        if (!box) return resolve(true);
+        box.style.display = "";
+        const done = (ok) => {
+          box.style.display = "none";
+          $("consentYes").onclick = null; $("consentNo").onclick = null;
+          if (ok) chrome.storage.local.set({ sendConsent: { at: Date.now() } }, () => resolve(true));
+          else resolve(false);
+        };
+        $("consentYes").onclick = () => done(true);
+        $("consentNo").onclick = () => done(false);
+      });
+    });
+  }
   async function toggle() {
     settings = await getSettings();
+    if (!settings.enabled && !(await askConsent())) return; // turning ON needs the one-time consent
     settings.enabled = !settings.enabled;
     // On/off is PER-MACHINE — cheap local write, not a full config sync.
     await new Promise((r) => chrome.runtime.sendMessage({ type: "SET_ENABLED", enabled: settings.enabled }, r));

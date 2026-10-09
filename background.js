@@ -5714,6 +5714,9 @@ chrome.alarms.onAlarm.addListener((alarm) => {
   if (alarm && alarm.name === HEARTBEAT_ALARM) heartbeat();
 });
 
+/* ===== STORE-STRIP:BEGIN — (v0.21.83) the folder self-updater below downloads the extension's own
+ * files from GitHub into its unpacked folder. The Chrome Web Store build (store/webstore-background.js)
+ * removes everything down to STORE-STRIP:END and keeps three stubs: Chrome updates a store install. */
 /* ---------------- BUILT-IN cloud self-update (no scripts, no AV flags) ----------------
  * The .bat/schtasks pipeline tripped antivirus (download+hidden persistence IS the
  * malware pattern), so the updater now lives INSIDE the extension: every hour it
@@ -6029,6 +6032,8 @@ async function selfUpdateCheck() {
     /* an update check must never break anything */
   }
 }
+
+/* ===== STORE-STRIP:END ===== */
 
 /* ---------------- auto-recover open tabs after an extension reload ----------------
  * MV3: when the extension is updated/reloaded, every already-open Messenger tab is
