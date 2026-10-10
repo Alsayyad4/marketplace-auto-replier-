@@ -24,7 +24,8 @@ all chrome.debugger/CDP work) + Supabase dashboard in docs/. Live branch:
   greeting / repeated opener, one habit per chat seeded by thread id), idempotent. Switches
   `replyGuard`, `humanTouch` (default on, both UIs). 🩺 `guard:` line. `store/smoke-guard.js`.
   It all sits inside the Try-it slice: keep it free of `chrome.*`. Reaches the fleet only
-  through the Web Store item (.82 cannot update) — HANDOFF "Open after .85".
+  through the Web Store item (.82 cannot update): .85 SUBMITTED Oct 10 (the .84 review was
+  cancelled for it), Pending review — HANDOFF "Open after .85".
 - FOLDER INSTALLS CANNOT SELF-UPDATE ANY MORE (Oct 10 2026): Chrome 154 renames downloads to
   match the served type (GitHub raw = text/plain → background.txt, manifest.txt) and blocks
   typed .js as dangerous. The fleet is frozen on v0.21.82 (works; every fix to Oct 8); only
@@ -37,7 +38,7 @@ all chrome.debugger/CDP work) + Supabase dashboard in docs/. Live branch:
   install) → the folder updater stands down (`cloudSelfUpdate` → `{store:true}`,
   `selfUpdateCheck` no-op), popup/🩺 say so. Unlisted item; per computer: install from the
   link → Options → Log in → remove the old unpacked entry. `store/STORE-SUBMISSION.md` is
-  the walkthrough; Oct 10 2026: NEW item ipompokpmlhgaioihnlbnmnhendcnejo (v0.21.84, Unlisted, pending review); the old item imhlnnlfpphelledfiiponhoeaebapmm is ARCHIVED (keep it archived — duplicates break policy). A new item's remote-code radio defaults to YES — always set No. HANDOFF has the details.
+  the walkthrough; Oct 10 2026: NEW item ipompokpmlhgaioihnlbnmnhendcnejo (v0.21.85 since the evening, Unlisted, pending review); the old item imhlnnlfpphelledfiiponhoeaebapmm is ARCHIVED (keep it archived — duplicates break policy). A new item's remote-code radio defaults to YES — always set No. HANDOFF has the details.
   The teaching was never erased (verified in the row + history, Oct 8): "erased" = the
   5-day Activity feed or a computer's own Settings page; "ignores the teaching / double
   videos" = the computers stuck on builds older than .73/.77. `store/smoke-store.js`.
