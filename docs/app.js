@@ -424,6 +424,17 @@
   }
 
   /* ---------------- Supabase data ---------------- */
+  // (v0.21.84) once the Chrome Web Store item is approved (config.js SUBSELL_WEBSTORE_URL), the
+  // install banner points there instead of the zip: a store install updates itself.
+  (function storeBanner() {
+    const u = String(window.SUBSELL_WEBSTORE_URL || "").trim();
+    if (u.indexOf("https://chromewebstore.google.com/") !== 0) return;
+    const sb = $("storeBanner"), zb = $("zipBanner"), a = $("storeLink");
+    if (a) a.href = u;
+    if (sb) sb.style.display = "";
+    if (zb) zb.style.display = "none";
+  })();
+
   async function loadConfig() {
     let { data, error } = await client.from("subsell_configs").select("config, config_key, updated_at").maybeSingle();
     if (error) { flash("Load failed: " + error.message, true); return; }

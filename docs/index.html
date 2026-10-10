@@ -81,7 +81,14 @@
         <div class="who"><span id="whoami"></span><button id="logoutBtn">Log out</button></div>
       </header>
 
-      <div class="banner">
+      <div class="banner" id="storeBanner" style="display:none;">
+        <b>⬇️ Install SubSell from the Chrome Web Store</b> — it updates itself on every computer.
+        On each computer: <a id="storeLink" href="#" target="_blank" rel="noopener">open this link → Add to Chrome</a>,
+        then the extension's <b>Options → Cloud sync → Log in</b> (the teaching, videos and API key arrive in a minute),
+        then in <code>chrome://extensions</code> switch <b>off</b> the old SubSell card (the one with a folder path) so only one copy answers.
+      </div>
+
+      <div class="banner" id="zipBanner">
         <b>⬇️ Install SubSell on a computer</b> —
         <a id="dlExt" href="https://github.com/alsayyad4/marketplace-auto-replier-/raw/refs/heads/claude/wizardly-noether-Oi6vP/dist/subsell-installer.zip">download the extension</a>,
         unzip it into a folder <b>inside Downloads</b>, then <code>chrome://extensions</code> →
@@ -360,9 +367,9 @@
       </div>
     </div>
 
-    <script src="config.js?v=20260918"></script>
+    <script src="config.js?v=20261010"></script>
     <script src="seed.js?v=20260921"></script>
     <script src="https://cdn.jsdelivr.net/npm/@supabase/supabase-js@2"></script>
-    <script src="app.js?v=20261010"></script>
+    <script src="app.js?v=20261010b"></script>
   </body>
 </html>
