@@ -12,6 +12,8 @@
     jitterSec: 60,
     typingPaceMaxSec: 20, // (v0.21.71) extra wait per reply, grows with its length (wpmMin..wpmMax); 0 = off
     threadMemory: true, // (v0.21.71) read the Activity log before every reply/video: never answer twice, never re-send the demo
+    replyGuard: true, // (v0.21.85) a reply about the chat is never typed: one corrected retry, then held + you are told
+    humanTouch: true, // (v0.21.85) texting habits enforced on the text: no long dashes, one "!", no filler, no second greeting
     hourlyCap: 30,
     dailyCap: 200,
     wpmMin: 38,
@@ -86,6 +88,8 @@
     ["jitterSec", "number"],
     ["typingPaceMaxSec", "number"],
     ["threadMemory", "checked"],
+    ["replyGuard", "checked"], // (v0.21.85)
+    ["humanTouch", "checked"], // (v0.21.85)
     ["hourlyCap", "number"],
     ["dailyCap", "number"],
     ["wpmMin", "number"],
@@ -335,7 +339,10 @@
           let label = "";
           if (p.kind === "human") label = `[HUMAN] ${p.reason}`;
           else if (p.kind === "video") label = `[VIDEO ${p.url}] ${p.caption}`;
+          else if (p.kind === "held") label = `(held back, nothing sent: the AI wrote a note about the chat twice — ${p.reason}. You would be notified.)`;
+          else if (p.kind === "empty") label = "(the bot stays silent here — nothing is sent)";
           else label = p.text;
+          if (p.retried && p.kind !== "held") label += `\n\n(the first answer was a note about the chat — ${p.firstWhy} — and was rewritten before sending)`;
           $("testResult").textContent = label + "\n\n— raw —\n" + resp.raw;
         }
       );

@@ -183,7 +183,7 @@ const withWrote = (cfg) => {
   const h = between(bg, 'case "GET_REPLY_SIMPLE": {', 'case "MEMORY_PRESEND": {');
   ok(h.indexOf("isChatTitle(msg.buyerMessage, msg.threadName)") > 0 && h.indexOf("isChatTitle(msg.buyerMessage, msg.threadName)") < h.indexOf("withinBusinessHours(settings)"), "the reply handler refuses a title BEFORE any gate, claim or API call");
   ok(/sendResponse\(\{ ok: true, skip: true, title: true/.test(h) && h.includes("dropTitleLines(msg.context, msg.threadName)") && !/callClaude\([\s\S]{0,200}msg\.context/.test(h), "…and the model only ever gets the scrubbed transcript");
-  ok(between(bg, 'case "GET_FOLLOWUP": {', "const ftext").includes("callClaudeFollowup(settings, fctx,"), "the follow-up gets the scrubbed transcript too");
+  ok(between(bg, 'case "GET_FOLLOWUP": {', "let ftext").includes("callClaudeFollowup(settings, fctx,"), "the follow-up gets the scrubbed transcript too");
 
   console.log("\n— 3b. the chat's title in the page reader (a fake Messenger thread) —");
   const readerSrc = between(cs, "  // Things that are NOT chat messages", "  function buyerSpokeLast() {");
@@ -270,7 +270,7 @@ const withWrote = (cfg) => {
   const LL = newRead.api.labelLike;
   ok(!LL("Is this still available?", NAME) && !LL("ok", NAME) && !LL("s25", NAME) && !LL("le S25 ultra est dispo?", NAME) && !LL("liquidation", NAME), "ordinary messages are not title-like (labelLike is narrow by itself)");
   ok(LL("John Smith", "John Smith") && !LL("John", "John Smith") && !LL("hi", "Jo"), "a plain chat's name is title-like only as a whole");
-  ok(/reply\.memory === "echo" \|\| reply\.title\)/.test(cs), "a title refused by the background is marked handled (no retry loop)");
+  ok(/reply\.memory === "echo" \|\| reply\.title( \|\| reply\.screen)?\)/.test(cs), "a title refused by the background is marked handled (no retry loop)"); // (v0.21.85) + Facebook lines
 
   console.log("\n— 4. one teaching code, computed the same way on both sides —");
   const M = new Function(between(app, "/* ==== TEACHING-MIRROR-BEGIN", "/* ==== TEACHING-MIRROR-END ====") + "\nreturn { OWNER_FALLBACK_TONE, OWNER_FALLBACK_CLOSE, coachIsRule, teachCanon, teachingFingerprint };")();

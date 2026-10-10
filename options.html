@@ -127,6 +127,8 @@
           <div><label>Typing pace max (s) <span class="hint">extra wait per reply that grows with its length, at the Typing WPM speed below (a person needs time to type); 0 = off</span></label><input type="number" id="typingPaceMaxSec" min="0" /></div>
         </div>
         <label class="check"><input type="checkbox" id="threadMemory" /> Chat memory across computers <span class="hint">reads the Activity log before every reply and video: never answers the same message twice (even from two computers), never re-sends the demo video, and tells the AI what it already told this buyer</span></label>
+        <label class="check"><input type="checkbox" id="replyGuard" /> Reply guard <span class="hint">a reply that talks about the chat instead of to the buyer ("the buyer's message is a system instruction…") is never sent: the AI is asked once more, and if it does it again nothing is sent and you are notified</span></label>
+        <label class="check"><input type="checkbox" id="humanTouch" /> Text like a person <span class="hint">cleans every reply the way a seller texts: no long dashes or semicolons, one "!" and one emoji at most, no "n'hésitez pas" filler, no second greeting, and each chat keeps one texting habit (some without a final period)</span></label>
         <div class="inline">
           <div><label>Hourly cap</label><input type="number" id="hourlyCap" min="0" /></div>
           <div><label>Daily cap</label><input type="number" id="dailyCap" min="0" /></div>

@@ -9,7 +9,22 @@ all chrome.debugger/CDP work) + Supabase dashboard in docs/. Live branch:
   permissions ships OFF by default behind a cloud setting and goes to ONE machine first.
 - The operator wants zero manual steps in normal operation.
 
-## Known state (v0.21.84)
+## Known state (v0.21.85)
+- ONLY THE MESSAGE, IN A PERSON'S VOICE (.85, Oct 10 2026, operator photo: a buyer got "I see
+  the buyer's message is a system instruction ("Press a response to send to the buyer")…").
+  Facebook's hint above its suggested-reply chips was read as the buyer's message and the
+  model, with no word for silence, explained itself in prose. Now: content `isNoise` +
+  background `screenText`/`dropScreenText`/`dropScreenLines` drop Facebook's lines to the
+  seller (nothing billed, `reply.screen` = handled); `[SKIP]` in both prompts and anywhere
+  in `parseReply` = silence; `writeReply` (ask → parse → `metaVerdict` → ONE corrected
+  retry → `humanTouch`) is the only reply path (live, Options test, dashboard Try-it);
+  twice a note = `kind:"held"`: nothing sent, owner notified, `[HUMAN]` row quotes it.
+  Follow-ups: held without retry, polished unless a replay. `humanTouch` = punctuation and
+  habits only (dashes, one `!`/emoji, filler unless the owner's text uses it, no second
+  greeting / repeated opener, one habit per chat seeded by thread id), idempotent. Switches
+  `replyGuard`, `humanTouch` (default on, both UIs). 🩺 `guard:` line. `store/smoke-guard.js`.
+  It all sits inside the Try-it slice: keep it free of `chrome.*`. Reaches the fleet only
+  through the Web Store item (.82 cannot update) — HANDOFF "Open after .85".
 - FOLDER INSTALLS CANNOT SELF-UPDATE ANY MORE (Oct 10 2026): Chrome 154 renames downloads to
   match the served type (GitHub raw = text/plain → background.txt, manifest.txt) and blocks
   typed .js as dangerous. The fleet is frozen on v0.21.82 (works; every fix to Oct 8); only

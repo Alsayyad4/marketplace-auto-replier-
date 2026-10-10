@@ -217,7 +217,7 @@ const V = (rows, buyerMessage, transcript, phase) => memVerdict(rows, { buyerMes
   ok(/action: "text", reply: reply\.text/.test(ct), "the text Activity row is written by the content script on delivery");
   const grs = slice(bg, 'case "GET_REPLY_SIMPLE"', 'case "MEMORY_PRESEND"');
   ok(!/appendLog\(\{[^}]*action: "text"/.test(grs), "…and no longer by the background at generation time");
-  ok(/if \(claimed\) await memClaim\(msg\.threadId/.test(grs) && grs.indexOf("await memClaim(") < grs.indexOf("await callClaude("), "the claim is AWAITED before the model is asked");
+  ok(/if \(claimed\) await memClaim\(msg\.threadId/.test(grs) && grs.indexOf("await memClaim(") < grs.indexOf("await writeReply("), "the claim is AWAITED before the model is asked"); // (v0.21.85) the model is asked through writeReply
   ok(/const claimed = memOn && \(replay \|\| !claudeFailedAt\)/.test(grs), "…never from a machine whose last Anthropic call failed (a replay may claim)");
   ok(/claudeFailedAt = Date\.now\(\);\s*\n\s*if \(claimed\) memUnclaim\(/.test(grs) && /claudeFailedAt = 0;/.test(grs), "a failed call withdraws the claim and marks the machine unhealthy; success clears it");
   const pre = slice(bg, 'case "MEMORY_PRESEND"', 'case "MEMORY_VIDEO"');

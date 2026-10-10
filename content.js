@@ -644,6 +644,15 @@
     // Facebook "Send a quick response" card + its preset reply buttons (seller options,
     // NOT buyer messages).
     if (/send a quick response|tap a response|réponse rapide|envoyer une réponse/.test(t)) return true;
+    // (v0.21.85) the hint above the suggested-reply chips, read as the buyer's message,
+    // made the model write "I see the buyer's message is a system instruction…" to a
+    // real buyer (operator photo, Oct 10 2026). Words written TO the seller about "the
+    // buyer" — no buyer types them. background.js `screenText` is the second wall.
+    if (/\b(press|tap|click|select|choose)\s+(on\s+)?(a|one|the)\s+(suggested\s+)?(response|reply)\b/.test(t)) return true;
+    if (/\b(send|sent|reply|respond)(\s+it)?\s+to\s+(the|this)\s+buyer\b/.test(t)) return true;
+    if (/\b(appuie[zr]?|appuyez|touche[zr]?|clique[zr]?|s[ée]lectionne[zr]?|choisi(s|ssez)?)\s+(sur\s+)?(une|la)\s+r[ée]ponse\b/.test(t)) return true;
+    if (/\b(envoyer|r[ée]pondre)\s+[àa]\s+l['’]acheteu/.test(t)) return true;
+    if (/autorise[zr]? d['’]autres acheteu|dans le cadre de votre annonce/.test(t)) return true; // FR "add a video" card body
     // NOTE: "is this (still) available" is deliberately NOT in this list — that
     // exact text is also the buyer's REAL standard opener (Facebook sends it as
     // their first message); filtering it meant those chats never got a reply.
@@ -5304,7 +5313,7 @@
         return;
       }
       if (reply.skip) {
-        if (reply.reason === "empty reply" || reply.memory === "answered" || reply.memory === "echo" || reply.title) {
+        if (reply.reason === "empty reply" || reply.memory === "answered" || reply.memory === "echo" || reply.title || reply.screen) { // (v0.21.85) screen = Facebook's own line, never a buyer's
           // Claude DELIBERATELY chose silence (system/meta message, nothing to answer).
           // Mark handled so the same unanswerable message isn't re-billed every
           // cooldown; a NEW buyer message (different text) still gets handled fresh.

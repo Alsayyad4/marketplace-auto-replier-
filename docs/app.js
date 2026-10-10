@@ -17,6 +17,8 @@
     jitterSec: 60,
     typingPaceMaxSec: 20, // (v0.21.71) MUST match background.js DEFAULTS
     threadMemory: true, // (v0.21.71) MUST match background.js DEFAULTS
+    replyGuard: true, // (v0.21.85) MUST match background.js DEFAULTS
+    humanTouch: true, // (v0.21.85) MUST match background.js DEFAULTS
     hourlyCap: 30,
     dailyCap: 200,
     maxRepliesPerConvo: 5,
@@ -81,6 +83,7 @@
     ["apiKey", "value"], ["model", "value"],
     ["responseDelaySec", "number"], ["jitterSec", "number"],
     ["typingPaceMaxSec", "number"], ["threadMemory", "checked"], // (v0.21.71)
+    ["replyGuard", "checked"], ["humanTouch", "checked"], // (v0.21.85)
     ["hourlyCap", "number"], ["dailyCap", "number"],
     ["maxRepliesPerConvo", "number"], ["convoCapBehavior", "value"],
     ["wpmMin", "number"], ["wpmMax", "number"],
@@ -1223,7 +1226,7 @@
   // same site). The two markers are comments in that file; store/smoke-teach.js fails if they move.
   const CORE_BEGIN = "/* ===================== (v0.21.73) THE OWNER IS THE ONLY TEACHER";
   const CORE_END = "/* ---------------- video fetch ---------------- */";
-  const CORE_VER = "20261006";
+  const CORE_VER = "20261010c"; // (v0.21.85) writeReply: the guard + humanTouch
   let teachCore = null, teachCoreErr = "";
   async function loadTeachCore() {
     if (teachCore) return teachCore;
@@ -1233,7 +1236,7 @@
       const src = await res.text();
       const a = src.indexOf(CORE_BEGIN), b = a < 0 ? -1 : src.indexOf(CORE_END, a);
       if (a < 0 || b < 0) throw new Error("the bots' prompt code was not found");
-      teachCore = new Function("DEFAULTS", "fetch", src.slice(a, b) + "\nreturn { buildSystemPrompt: buildSystemPrompt, lessonFor: lessonFor, callClaude: callClaude, parseReply: parseReply };")(DEFAULTS, (u, o) => fetch(u, o));
+      teachCore = new Function("DEFAULTS", "fetch", src.slice(a, b) + "\nreturn { buildSystemPrompt: buildSystemPrompt, lessonFor: lessonFor, callClaude: callClaude, parseReply: parseReply, writeReply: typeof writeReply === \"function\" ? writeReply : null };")(DEFAULTS, (u, o) => fetch(u, o));
       return teachCore;
     } catch (e) { teachCoreErr = String((e && e.message) || e); return null; }
   }
@@ -1256,18 +1259,20 @@
     // What the bot would see: the chat so far (its own real replies only), then this message.
     const lines = tryState.turns.filter((t) => t.ctx).concat([{ role: "buyer", text: msg }]).slice(-12).map((t) => (t.role === "buyer" ? "Buyer: " : "You: ") + t.text);
     const s = Object.assign({}, settings);
-    const out = await core.callClaude(s, msg, "Conversation so far (most recent last):\n" + lines.join("\n"), "");
+    // (v0.21.85) the same pipeline as the bots: guard (one corrected retry) + humanTouch
+    const tctx = "Conversation so far (most recent last):\n" + lines.join("\n");
+    const out = core.writeReply ? await core.writeReply(s, msg, tctx, "", { threadId: "try" }) : await core.callClaude(s, msg, tctx, "");
     tryState.busy = false;
     $("tryAsk").disabled = false;
     if (!out || out.error) { tryNote("The AI call failed: " + ((out && out.error) || "no answer"), true); return; }
-    const p = core.parseReply(out.text);
+    const p = core.writeReply ? out : core.parseReply(out.text);
     const isText = p.kind === "text";
-    const shown = isText ? p.text : p.kind === "human" ? "(the bot would hand this chat to you: " + (p.reason || "it needs you") + ")" : "(the bot would stay silent)";
+    const shown = isText ? p.text : p.kind === "human" ? "(the bot would hand this chat to you: " + (p.reason || "it needs you") + ")" : p.kind === "held" ? "(held back, nothing sent: it wrote a note about the chat instead of a message, twice. You would be notified.)" : "(the bot would stay silent)";
     tryState.turns.push({ role: "buyer", text: msg, ctx: true }, { role: "me", text: shown, ctx: isText });
     tryState.last = { buyer: msg, reply: isText ? p.text : "" };
     $("tryText").value = "";
     tryRender();
-    tryNote((core.lessonFor(s, msg) ? "✓ It had a lesson of yours beside this message. " : "") + (p.gap ? "❓ It says your teaching does not answer this. " : "") + "Is the answer right?");
+    tryNote((core.lessonFor(s, msg) ? "✓ It had a lesson of yours beside this message. " : "") + (p.gap ? "❓ It says your teaching does not answer this. " : "") + (p.retried && p.kind !== "held" ? "🛡 Its first answer was a note about the chat; it was rewritten before sending. " : "") + "Is the answer right?");
     $("tryTeach").classList.remove("hidden");
     $("tryFixRow").classList.add("hidden");
     $("tryGood").disabled = !isText;
