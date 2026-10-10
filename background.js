@@ -5810,7 +5810,8 @@ async function sudProbeBase(base) {
   if (id == null) return false;
   sudProbeWrites++;
   let hit = false;
-  for (let attempt = 0; attempt < 3 && !hit; attempt++) {
+  // (v0.21.84) up to ~3 s: Chrome 154 can report a download complete before the file is visible
+  for (let attempt = 0; attempt < 12 && !hit; attempt++) {
     try {
       const r = await fetch(chrome.runtime.getURL("sud-probe.txt"), { cache: "no-store" });
       hit = r.ok && (await r.text()).indexOf(token) !== -1;
@@ -5938,11 +5939,26 @@ async function cloudSelfUpdate(force) {
 
     LOG("built-in update: v" + loaded, "→ v" + remote.version, "downloading", SUD_FILES.length, "files");
     for (const f of SUD_FILES) {
+      // (v0.21.84) THE .TXT TRAP. Chrome 154 (Oct 2026) renames a download whose file
+      // extension does not match the type the server declares, and GitHub serves every
+      // file as text/plain: background.js lands as background.txt, manifest.json as
+      // manifest.txt, so an update "downloaded" every hour and never installed (the
+      // fleet stayed on v0.21.82 while v0.21.83 was live). Declaring the real type does
+      // not help: Chrome then BLOCKS .js as a dangerous file (.json, .html and .mjs pass —
+      // tested in Edge 154). A folder install can no longer update itself; the check
+      // below says so honestly, and the Chrome Web Store build is the way out.
       const id = await sudDownload(SUD_RAW + f + "?t=" + Date.now(), base + "/" + f);
       if (id == null) {
         chrome.storage.local.set({ sudStatus: "update failed on " + f + " — will retry" });
         return { ok: false, reason: "download failed: " + f }; // manifest not yet replaced → no partial reload
       }
+    }
+    // (v0.21.84) proof, not hope: the manifest on disk must now carry the new version
+    let onDisk = "";
+    try { onDisk = ((await (await fetch(chrome.runtime.getURL("manifest.json"), { cache: "no-store" })).json()) || {}).version || ""; } catch (e) { onDisk = ""; }
+    if (onDisk !== remote.version) {
+      chrome.storage.local.set({ sudStatus: "Chrome (since its October 2026 update) saves downloaded code files under .txt names, so this folder install cannot update itself any more (it still reads v" + (onDisk || "?") + ") — install the Chrome Web Store version once" });
+      return { ok: false, reason: "files not replaced on disk (still v" + (onDisk || "?") + ")" };
     }
     chrome.storage.local.set({ sudStatus: "v" + remote.version + " downloaded — restarting as soon as the current send finishes" });
     armUpdateRestart(); // pause new chats + retry the reload every 30s until a quiet moment

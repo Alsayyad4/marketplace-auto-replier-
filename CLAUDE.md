@@ -9,7 +9,12 @@ all chrome.debugger/CDP work) + Supabase dashboard in docs/. Live branch:
   permissions ships OFF by default behind a cloud setting and goes to ONE machine first.
 - The operator wants zero manual steps in normal operation.
 
-## Known state (v0.21.82)
+## Known state (v0.21.84)
+- FOLDER INSTALLS CANNOT SELF-UPDATE ANY MORE (Oct 10 2026): Chrome 154 renames downloads to
+  match the served type (GitHub raw = text/plain → background.txt, manifest.txt) and blocks
+  typed .js as dangerous. The fleet is frozen on v0.21.82 (works; every fix to Oct 8); only
+  the Web Store version (pending) or a reinstall moves a computer. Pushing to the branch no
+  longer reaches the fleet. `cloudSelfUpdate` verifies the manifest on disk (.84). HANDOFF.
 - THE STORE BUILD (.81/.82, Oct 8 2026): `dist/subsell-webstore.zip` from
   `store/build-webstore-zip.ps1` + `store/webstore-manifest.js` (no `key`, four hosts, NO
   `debugger`/`activeTab` — content.js `HAS_DEBUGGER` parks the file-API channels for good,

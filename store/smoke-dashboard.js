@@ -141,7 +141,7 @@ const ok = (cond, msg) => { console.log((cond ? "  PASS  " : "  FAIL  ") + msg);
   ok(/id="draftBanner"[^>]*class="hint hidden"/.test(html), "the draft offer has its own element, so the fix banner cannot replace it");
   ok(/if \(!sql\) \{[\s\S]{0,400}return;\s*\}/.test(src) && !/window\.open\(SQL_FIX_URLS/.test(src),
      "'Copy the fix' never opens or hands over a file that failed the security-definer check");
-  ok(/app\.js\?v=20261008/.test(html), "app.js cache-buster bumped for this release");
+  ok(/app\.js\?v=20261010/.test(html), "app.js cache-buster bumped for this release");
   // (v0.21.78) the dashboard's Log out must never sign the account out of every computer
   ok(/client\.auth\.signOut\(\{ scope: "local" \}\)/.test(src) && !/client\.auth\.signOut\(\)/.test(src),
      "the dashboard's Log out ends only this browser's session (scope local), never the bots' logins");

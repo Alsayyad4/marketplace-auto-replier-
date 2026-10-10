@@ -1103,17 +1103,14 @@
       for (const row of r.data || []) { const k = machineKey(row.machine); if (!k || byKey[k]) continue; byKey[k] = row; }
       const rows = Object.values(byKey);
       if (!rows.length) { el.textContent = ""; el.className = "hint"; return; }
-      const cure = (t) => /refused to write/.test(t)
-        ? "on that computer: Chrome ⋮ → Settings → Downloads → turn OFF \"Ask where to save each file\", then popup → Update now"
-        : /folder not found/.test(t)
-        ? "on that computer: download the installer zip again, right-click → Extract All into Downloads, chrome://extensions → Load unpacked → the new Downloads\\subsell-installer folder, and remove the old entry"
-        : "see its message in the Activity feed";
-      const lines = ["⚠ " + rows.length + " computer(s) cannot update themselves — every fix stops before them until this is done once:"];
+      // (v0.21.84) Since Chrome's October 2026 update no folder install can update itself
+      // (Chrome renames downloaded code files to .txt, or blocks .js as dangerous), so the
+      // per-computer cures of .80 no longer last: the Chrome Web Store version is the way.
+      const lines = ["ℹ " + rows.length + " computer(s) report they cannot update themselves. They keep working on the version they have (v0.21.82 has every fix to Oct 8). Since Chrome's October update, a folder install can no longer update itself on any computer; the Chrome Web Store version (submitted Oct 9, waiting for Google) updates by itself — once it is approved, install it once on each computer and remove the old entry."];
       for (const row of rows) {
-        const m = String(row.bot_text || "").match(/runs (v[\d.]+) but (v[\d.]+) is available/);
-        lines.push("• " + machineShow(row.machine) + (m ? " is on " + m[1] + " (" + m[2] + " available)" : "") + " — " + cure(String(row.bot_text || "")) + " (reported " + new Date(row.created_at).toLocaleString() + ")");
+        const m = String(row.bot_text || "").match(/runs (v[0-9.]+) but (v[0-9.]+) is available/);
+        lines.push("• " + machineShow(row.machine) + (m ? " is on " + m[1] : "") + " (reported " + new Date(row.created_at).toLocaleString() + ")");
       }
-      lines.push("The lasting fix is a Chrome Web Store build (store/STORE-SUBMISSION.md): then every computer updates by itself, whatever folder it was installed from.");
       el.style.whiteSpace = "pre-line";
       el.className = "err";
       el.textContent = lines.join("\n");
