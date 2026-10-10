@@ -1,11 +1,11 @@
-<!DOCTYPE html>
+<!doctype html>
 <html lang="en">
   <head>
     <meta charset="utf-8" />
     <meta name="viewport" content="width=device-width, initial-scale=1" />
     <title>SubSell Auto-Reply — Privacy Policy</title>
     <style>
-      body { font-family: -apple-system, Segoe UI, Roboto, Arial, sans-serif; max-width: 760px; margin: 40px auto; padding: 0 18px; line-height: 1.6; color: #222; }
+      body { font-family: -apple-system, Segoe UI, Roboto, Arial, sans-serif; max-width: 760px; margin: 40px auto; padding: 0 18px; line-height: 1.6; color: #222; background: #fff; }
       h1 { font-size: 24px; } h2 { font-size: 18px; margin-top: 28px; }
       code { background: #f0f0f0; padding: 1px 5px; border-radius: 4px; }
       .note { background: #fff7e0; border: 1px solid #e3c200; padding: 10px 12px; border-radius: 8px; }
@@ -13,65 +13,87 @@
   </head>
   <body>
     <h1>SubSell Auto-Reply — Privacy Policy</h1>
-    <p><em>Last updated: 2026-06-07</em></p>
+    <p><em>Last updated: 2026-10-09</em></p>
 
     <p>
-      SubSell Auto-Reply ("the extension") is a single-operator tool that helps a
-      seller auto-reply to their own Facebook Marketplace / Messenger buyer
-      conversations using the Anthropic Claude API. This policy explains exactly
-      what data it touches and where that data goes.
+      SubSell Auto-Reply ("the extension") is a tool for one business: it answers that
+      business's own Facebook Marketplace buyer messages, inside the business's own
+      Messenger account, with the Anthropic Claude API and the business's own settings.
+      It is used by the business that installs it (the "operator") on the operator's own
+      computers. This policy lists exactly what data it touches, where that data goes and
+      how long it is kept.
     </p>
 
-    <h2>What the extension accesses</h2>
+    <h2>What the extension reads</h2>
     <ul>
-      <li><b>Messenger / Marketplace conversation text</b> — when you turn the bot ON, it
-        reads the latest message in your open conversations so it can generate a reply.
-        Only the relevant recent message text is used.</li>
-      <li><b>Your Anthropic API key</b> — you provide this. It is used to authenticate
-        requests to Anthropic on your behalf.</li>
-      <li><b>Your settings</b> — business info, listings, prompts, follow-ups, and limits
-        that you enter.</li>
+      <li><b>Messenger / Marketplace conversations of the operator's own account</b> — when the
+        operator switches the bot ON, it reads the recent messages of a conversation so it
+        can write a reply, and the conversation list to find buyers waiting for an answer.
+        It runs only on messenger.com and facebook.com.</li>
+      <li><b>The operator's settings</b> — business information, prices, instructions,
+        corrections ("lessons"), follow-up texts, limits, and the operator's Anthropic API key.</li>
+      <li><b>The operator's cloud login</b> (optional) — an email and password for the
+        operator's own cloud project, used to keep all the operator's computers on the same
+        settings.</li>
     </ul>
 
     <h2>Where data is sent</h2>
     <ul>
-      <li><b>Anthropic (api.anthropic.com)</b> — the buyer's latest message and your
-        system prompt are sent to Anthropic's Claude API to generate the reply. See
-        Anthropic's privacy policy at
+      <li><b>Anthropic</b> (api.anthropic.com) — the buyer's recent messages in that
+        conversation and the operator's instructions are sent to Anthropic's Claude API to
+        write the reply, authenticated with the operator's own API key. See
         <a href="https://www.anthropic.com/legal/privacy">anthropic.com/legal/privacy</a>.</li>
-      <li><b>Facebook / Messenger</b> — generated replies are typed into your own
-        Messenger conversations, the same as if you typed them.</li>
-      <li><b>Optional: your own cloud (Supabase)</b> — if you choose to use the cloud
-        dashboard, your settings (including your API key) are stored in a database
-        project <em>you</em> control, protected by row-level security, so the same
-        configuration can apply to all your computers. This is optional and off unless
-        you set it up.</li>
+      <li><b>Facebook / Messenger</b> — the reply (and, if the operator configured one, the
+        operator's demo video) is sent in the operator's own conversation, as if the operator
+        had typed it.</li>
+      <li><b>The operator's own cloud project</b> (Supabase, optional, configured by the
+        operator) — stores the operator's settings so every computer of the operator uses
+        the same ones, the operator's demo videos, and an <b>activity log</b>: the buyer's
+        message and the reply that was sent, which computer sent it, and when. The log lets
+        the operator see what the bot said and stops two of the operator's computers from
+        answering the same buyer twice or sending the same video twice. The extension also
+        records the AI usage counts (number of requests and tokens — no message text) so the
+        operator can see the cost.</li>
     </ul>
+    <p>The extension sends data nowhere else. The developer runs no server of its own that
+      collects data from the extension.</p>
 
-    <h2>Where data is stored</h2>
+    <h2>How long data is kept</h2>
     <ul>
-      <li><b>On your computer</b> — settings and your API key are stored locally via
-        <code>chrome.storage</code>. They may sync across Chrome instances signed into the
-        same Google account (<code>chrome.storage.sync</code>) if you use that feature.</li>
-      <li><b>Demo videos</b> you upload stay on that computer only.</li>
-      <li><b>Activity log</b> (the bot's recent replies) is stored on that computer only.</li>
+      <li>Activity log messages are <b>deleted automatically after 5 days</b>; the record that a
+        demo video was sent to a conversation is kept 60 days (so the same buyer is never sent
+        it twice); AI usage counts 35 days.</li>
+      <li>Settings stay until the operator changes or deletes them.</li>
+      <li>On each computer the extension keeps its settings, its recent state and the
+        downloaded demo video files in Chrome's extension storage and in the Downloads folder
+        (<code>SubSell-videos</code>) until the extension is removed.</li>
     </ul>
 
     <h2>What we do NOT do</h2>
     <ul>
-      <li>We do <b>not</b> run any server that collects your data. The extension talks only
-        to Anthropic, to Facebook/Messenger, and — if you enable it — to your own cloud.</li>
-      <li>We do <b>not</b> sell, share, or use your data for advertising or analytics.</li>
-      <li>We do <b>not</b> collect data from anyone other than the operator running the tool.</li>
+      <li>We do not sell, rent or share any data with third parties.</li>
+      <li>We do not use any data for advertising, profiling, creditworthiness or anything other
+        than answering the operator's own buyers.</li>
+      <li>We do not collect data from people who are not the operator's buyers in the
+        operator's own conversations, and we do not track browsing on any other website.</li>
+    </ul>
+
+    <h2>Security</h2>
+    <ul>
+      <li>All traffic uses HTTPS.</li>
+      <li>The cloud project is protected by row-level security: the operator's login can read
+        and write only the operator's own data.</li>
     </ul>
 
     <h2>Your control</h2>
     <ul>
-      <li>Delete the extension to remove its locally stored data, or clear it from
-        <code>chrome://extensions</code> → the extension → site/storage data.</li>
-      <li>Rotate or remove your Anthropic API key at any time in the settings.</li>
-      <li>If you use the cloud dashboard, you can regenerate your config key or delete your
-        row/account in your Supabase project.</li>
+      <li>Switch the bot OFF at any time from the extension's popup.</li>
+      <li>Remove the extension to delete everything it stored on that computer.</li>
+      <li>Change or remove the Anthropic API key at any time in the settings.</li>
+      <li>Delete the activity log, the settings or the whole cloud account in the operator's
+        own cloud project at any time.</li>
+      <li>A buyer who wants their messages removed can ask the operator, or write to the
+        contact below.</li>
     </ul>
 
     <h2>Contact</h2>

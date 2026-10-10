@@ -3,7 +3,7 @@
 This is the **authoritative list** of every setting the web dashboard edits and the
 extension consumes. It is generated from `DEFAULTS` in `background.js` and the tab
 layout in `options.html`. The web editor (`docs/`) mirrors these tabs/fields exactly,
-stores them all in one **config JSON object**, and the `supabase/functions/config`
+stores them all in one **config JSON object**, and the `supabase/functions/subsell-config`
 endpoint serves that object to the extension.
 
 - The config JSON is the same shape as the extension's "Export config" output.
@@ -15,18 +15,21 @@ endpoint serves that object to the extension.
 | Field | id | Type | Default | What it does |
 |---|---|---|---|---|
 | Anthropic API key | `apiKey` | string | `""` | Key (`sk-ant-…`) the extension calls Claude with. |
-| Model | `model` | enum | `claude-sonnet-4-6` | `claude-sonnet-4-6` / `claude-opus-4-8` / `claude-haiku-4-5-20251001`. |
+| Model | `model` | enum | `claude-haiku-4-5` | `claude-haiku-4-5-20251001` (recommended — 3× cheaper) / `claude-sonnet-4-6` / `claude-opus-4-8`. |
 | Response delay (s) | `responseDelaySec` | number | `30` | Wait before replying (human-like). |
 | Jitter (s) | `jitterSec` | number | `60` | Extra random 0–N s added to the delay. |
+| Typing pace max (s) | `typingPaceMaxSec` | number | `20` | (v0.21.71) Extra wait per reply that grows with its length: `reply chars ÷ typing speed`, speed drawn from `wpmMin`–`wpmMax`, capped at this many seconds. Right after a demo clip it is the floor (the seller sends the clip, then types). `0` = off. |
+| Chat memory across computers | `threadMemory` | bool | `true` | (v0.21.71) Before every reply and every video the extension reads that chat's rows in the Activity log (`subsell_messages`, through the Cloud-sync login): a buyer message another computer already answered is skipped, a message that was ours is never answered, a demo video any computer already sent (or this one before a reinstall) is never re-sent, two computers opening the same chat settle it with a hidden `claim` row, and the model is told what it already said to this buyer (facts, openers, the video). Off = pre-.71 behaviour. Needs Cloud sync (config-link-only machines have no read access, so they simply run without it). |
 | Hourly cap | `hourlyCap` | number | `30` | Max replies/hour. |
 | Daily cap | `dailyCap` | number | `200` | Max replies/day. |
-| Max replies / conversation | `maxRepliesPerConvo` | number | `5` | Total bot replies in one chat (0 = unlimited). |
-| When that cap is hit | `convoCapBehavior` | enum | `stop` | `stop` (go quiet) or `notify` (ping operator). |
-| Typing WPM min | `wpmMin` | number | `38` | Lower bound of human typing speed. |
-| Typing WPM max | `wpmMax` | number | `78` | Upper bound of human typing speed. |
-| Respect business hours | `businessHoursEnabled` | bool | `true` | Only reply between the hours below. |
-| Open hour (0–23) | `businessHoursStart` | number | `9` | Start of business hours. |
-| Close hour (0–23) | `businessHoursEnd` | number | `22` | End of business hours. |
+| Max replies / conversation | `maxRepliesPerConvo` | number | `5` | **Hard cap** on bot **text replies** in one chat, counted across the whole conversation. Once hit, the bot stays silent even if the buyer keeps asking more questions. Demo videos and follow-ups are separate and do **not** count toward it. `0` = unlimited. |
+| When that cap is hit | `convoCapBehavior` | enum | `stop` | `stop` (go quiet) or `notify` (flag the chat as needs-you in the popup). |
+| Typing WPM min | `wpmMin` | number | `38` | Lower bound of human typing speed — drives the typing pace above (v0.21.71). |
+| Typing WPM max | `wpmMax` | number | `78` | Upper bound of human typing speed — drives the typing pace above (v0.21.71). |
+| Reply to buyers only between these hours too | `replyWindowOnly` | bool | `false` | (v0.21.75) Off = buyers are answered at any hour. On = replies keep to the window below as well. |
+| Follow-ups from (0–23) | `businessHoursStart` | number | `9` | Start of the window for messages the bot STARTS (visit checks, timed and smart follow-ups). One due outside it is parked until the window opens. |
+| Follow-ups until (0–23) | `businessHoursEnd` | number | `22` | End of that window (exclusive). |
+| *(legacy, no field)* | `businessHoursEnabled` | bool | `true` | Read only by builds before v0.21.75 (their reply gate). The dashboard writes it `false` on every save and once on open, so those builds stop gating. Nothing in the current build reads it. |
 | Human cadence | `humanCadence` | bool | `true` | Random breaks + occasional skipped cycles. |
 | Skip chance (0–1) | `skipChance` | number | `0.12` | Chance to skip a cycle. |
 | Break chance / cycle (0–1) | `breakChance` | number | `0.05` | Chance per cycle to start a break. |
@@ -37,6 +40,7 @@ endpoint serves that object to the extension.
 | Day-0 daily cap | `warmupStartCap` | number | `10` | Daily cap on day 0. |
 | Off-platform guardrails | `offPlatformGuard` | bool | `true` | Forbid phone/email/links/"contact me elsewhere". |
 | Closer mode | `closerMode` | bool | `true` | Drive buyers to call/visit; trade-in/buyback/liquidation. |
+| Closing style | `closerIntensity` | enum | `medium` | `soft` (one gentle invite) / `medium` (guide toward the visit) / `master` (full sales playbook: micro-commitments, assumptive & two-option closes, reserve technique, honest urgency, objection handling, one advancing question per message, stop-selling-after-yes). Only applies when Closer mode is ON. |
 | Never quote exact prices | `noExactPrices` | bool | `true` | Promise best price in person (ignored if `priceList` set). |
 | Silent visit confirmation | `visitConfirmEnabled` | bool | `true` | After a buyer says they'll come, ask "still coming?" silently. |
 | Ask after (minutes) | `visitConfirmAfterMin` | number | `120` | Delay before the silent visit confirm. |
@@ -45,6 +49,7 @@ endpoint serves that object to the extension.
 
 | Field | id | Type | Default | What it does |
 |---|---|---|---|---|
+| Answer only from what I teach | `ownerTeachingOnly` | bool | `true` | (v0.21.73) On: the prompt is built from what the owner wrote (this tab + the Activity rules/corrections) plus mechanics only: no built-in sales playbook, no phrasebook, no fact the owner never wrote. An empty Instructions / Closer-goals box then means one neutral line (shown in the teaching preview), never the extension's DEFAULTS text. Off: the v0.21.72 prompt with the built-in playbook. |
 | Business name | `businessName` | string | `SubSell` | Used in the system prompt. |
 | Address | `businessAddress` | string | `757 Rue Beaubien E, Montréal` | Shown in prompt. |
 | Hours (text) | `businessHoursText` | string | `9AM–10PM, 7 days` | Human-readable hours in prompt. |
@@ -61,16 +66,122 @@ endpoint serves that object to the extension.
 
 ## Tab: Follow-ups
 
-`followUps` — array of rows. Each: `{ name, afterMinutes (number), message, enabled (bool) }`. After the bot replies it arms a timer; if the buyer stays quiet that long it sends `message` once.
+**Smart follow-up** (proactive; Claude decides per chat, capped so it never spams):
+- `smartFollowupEnabled` — bool (default `false`). Master on/off for proactive follow-ups on quiet chats.
+- `smartFollowupMaxCount` — number (default `1`). Max follow-ups per chat, total (e.g. 1 or 2).
+- `smartFollowupQuietHours` — number (default `6`). Hours a chat must be quiet before the **first** follow-up.
+- `smartFollowupGapHours` — number (default `24`). Hours between follow-ups (2nd, 3rd…).
+- `coaching` — array (default `[]`). Graded real replies from the dashboard's **Activity** tab (👍 = imitate, 👎 + correction = the right answer): `[{kind:"good"|"fix", buyer, reply, bad, better, note, at}]`, capped at 30 (FIFO). Rendered into every bot's system prompt as highest-priority coaching; edited only through the Activity tab's Teach buttons + Coaching list.
 
+**Simple timer follow-up** (fixed message; separate feature — use one or the other):
+- `followUps` — array of `{ name, afterMinutes (number), message, enabled (bool) }`. After the bot replies it arms a timer; if the buyer stays quiet that long it sends `message` once.
+
+## How the Business tab reaches the bot (v0.21.55)
+
+Every field on the Business tab is written into the system prompt `buildSystemPrompt()` builds for
+**every single reply** — `businessName`, `businessAddress`, `businessHoursText`, `businessInfo`,
+`instructions`, `priceList`, `closerGoals`, `examples`, the available `listings`, and the `coaching`
+list. There is no second place to teach the bot.
+
+- **Auto-save**: fields save 1.2 s after you stop typing; the bar shows `Saving…` then the clock.
+- **Propagation**: cloud-sync machines re-pull every **60 s** (`CLOUD_ALARM`); remote-config-URL
+  machines every 10 min (`CONFIG_ALARM`). The Save message used to quote the 10-min figure to
+  everyone, which was wrong for this fleet.
+- **“Show me exactly what the bot is being taught”** renders your fields in the order Claude gets
+  them. It does not reproduce the built-in sales playbook, platform-safety rules or humanization
+  rules — those ship in `background.js` and are not editable from the dashboard.
+- **(v0.21.73) The owner is the only teacher.** With `ownerTeachingOnly` on (the default) the
+  prompt is the owner's sections in this order — business info, instructions, standing rules,
+  corrections, prices, listings, closing goal, examples — then mechanics (reply tokens, platform
+  safety, how to write). The model is told that text is ALL it knows about the shop and that an
+  uncovered question is "best confirmed at the shop", never a guess. A correction or 👍 whose
+  buyer text matches the incoming message (same words, give or take) is also placed beside the
+  message in the user turn (`lessonFor`).
+- **(v0.21.73) Teaching code.** Each extension reports a short code of the teaching it answers
+  with (a hidden Activity row, kind `teach`); the dashboard computes the same code for the saved
+  row and names, under the preview button and on the Activity tab, the computers that are behind.
+- **(v0.21.73) A save that loses the race merges.** A stale-stamp save re-reads the row and
+  re-applies only what was changed on this page (lists merge item by item) instead of being
+  dropped into a browser draft; 👍 / Save lesson / Teach it now report whether the save landed.
+- **(v0.21.74) Learning without code.** Nothing typed here needs a code change. Rules are never
+  evicted (a 61st is refused out loud) and the 120 newest graded answers are kept; the bots carry
+  every rule and the newest 30 answers in their instructions and recall older ones when a buyer
+  writes about the same subject. **Try it** (Business tab) runs the bots' own prompt code on a
+  message you type, with your API key, and lets you 👍 or correct the answer on the spot.
+  **Teach these** (Activity tab) lists the questions the bots could not answer from your text,
+  one box each. Under the model list the page shows what the AI cost (measured by the computers)
+  and an estimate per model for the teaching saved now.
+- **(v0.21.75) Buyers answered at any hour; evidence for the video complaint.** The old
+  "Respect business hours" gate is gone (see `replyWindowOnly`); the hours now window the
+  messages the bot starts. The Activity tab's computers line names a computer that has **no cloud
+  login** (it logs but cannot read the Activity log, so it can answer or send the demo a second
+  time — sign in on it). The Videos tab shows **Where the videos went, last 7 days** (chats that
+  look double-served, chats still short of a clip and who answered them since). The toolbar's
+  **Copy report** gathers the computers line, the cost, the video report, the unanswered
+  questions, the teaching text and the last 20 messages as text to paste to support — no key.
+- **Coaching** (120 graded answers + rules): 👍 stores the reply as a model answer, 👎 stores your correction, and the
+  “Teach a rule” box stores a standing rule tagged `note:"always applies"`. Rules are evicted last.
 ## Tab: Videos
 
-`videos` — array of rows. Each: `{ name, url, notes }`. A library of demo-video URLs (reference list).
+- `demoVideoUrls` — array of `{ name, url, size? }`. **Central demo videos**: uploaded once in
+  the dashboard (stored in Supabase Storage), served via the config URL. Each extension
+  downloads them and sends them as **native** attachments **once per chat** — including
+  on quiet/older chats it revisits (not just right after a reply). The buyer never sees a link.
+  (v0.21.72) The list **saves itself** on upload and on Remove; each machine starts
+  downloading a new clip the minute the list arrives (before any buyer needs it); `size`
+  (bytes, written by the dashboard on upload) lets the bots recognise the same FILE listed
+  or uploaded twice. Lighter is better — every bot uploads each clip into every chat.
+- `videoCompleteSet` — bool (default `true`). (v0.21.72) **Every clip, exactly once per chat.**
+  Each chat keeps a ledger of the clips it was handed, by file (`videoClips` in the
+  machine's local storage: `s` = sent, `t` = handed over but never confirmed; both mean
+  "never again in this chat"). A chat that still owes a **never-attempted** clip — one
+  added to the list since, one whose download was struck out that day, the rest of a set
+  whose first clip was sent unconfirmed — receives exactly that clip (on the buyer's next
+  message; a parked tail still finishes through the pending queue). Chats served before
+  v0.21.72 have no ledger and are left as they are. `false` = the pre-.72 count-based
+  behaviour; the "never the same clip twice" skip stays on either way.
+- `demoVideoDelaySec` — number (default `10`). Seconds to wait after a fresh reply before
+  sending the first video (on a revisit it's sent immediately).
+- `demoVideoBetweenSec` — number (default `8`). Seconds to pause **between** videos when
+  several are configured.
+- `videos` — array of `{ name, url, notes }`. A reference URL library only (not auto-sent).
+- `videoRetryMax` — number (default `2`). (v0.21.47) How many times a chat's native
+  attach is retried (each time with a different attach channel first) when **nothing
+  could be confirmed staged** — no preview tile and Messenger's own send control never
+  left its empty state. `0` = no native retry.
+- `videoLinkOptIn` / `videoLinkFallback` / `videoLinkUrl` / `videoLinkText` — **REMOVED (v0.21.66).** The
+  demo is sent as a video FILE or not at all; the link sender was deleted in v0.21.60 and the owner asked
+  for the option itself to go ("sounds like a scam"). The keys survive in DEFAULTS only so stored configs
+  still parse; no form shows them and nothing reads them.
+- **Power features** — **(v0.21.53) these are NO LONGER web-app settings.** They moved to each
+  machine's own `chrome.storage.local` (extension Settings → Videos), because v0.21.48-.50
+  shipped `videoForeground: true` in the dashboard's DEFAULTS: an unrelated Save wrote a `true`
+  the operator never chose into the ONE cloud row the whole fleet reads, v0.21.51's new `false`
+  default could not beat a saved value, and PC-1zysp was still logging `fg=60` — sixty
+  window-focus steals in seven minutes. A shared row must not be able to arm desktop-grabbing
+  behaviour. Stale copies in the cloud row are ignored (the 🩺 line says so). All default `false`:
+  - `videoForeground` — bring the Messenger window to the front for a video set, hand focus back after.
+  - `videoPip` — open a small picture-in-picture "SubSell" window during a set to keep the page awake (no click).
+  - `videoActivateTab` — switch an unfocused Chrome window to the Messenger tab.
+  - `videoTrustedChannels` — real click on the attach button ("chooser"), real file drop ("drop"),
+    trusted Enter/Send. ⚠ On some Messenger builds the click opens a **real "Open file" dialog**
+    on the computer and an uncaught drop opens the video in the tab — this is what the operator
+    saw as "opening random files". Leave OFF unless a diagnostic shows the quiet channels stage nothing.
+  - `videoMediaPrime` — **default ON** (stored `false` = off; the one video helper that ships on,
+    v0.21.67): Chrome parks every media load of a page that is hidden and has never played media,
+    and Messenger decodes a clip before it stages it. Once per page load the bot probes that gate
+    (a 52-byte silent WAV) and, when parked, plays a silent MediaStream inside the page so the frame
+    counts as having played media — proven by re-probing. Nothing visible, no click, no dialog, no
+    window movement, no permission. 🩺 `gate=… primed=… prime=on|off(local)` on the attach line.
+  - `videoActivationPulse` — default OFF, an experiment: a key press the page ignores (F16, then
+    Shift) through the debugger before a clip is handed over. User activation is NOT what lifts the
+    media gate above; turn this on only when a diagnostic asks for it. 🩺 `pulse=off|ON(local)`.
 
 ## NOT web-managed (per-machine, stay in the extension)
 
 These live in each computer's local storage and are **not** in the config JSON:
 - `enabled` — on/off toggle per machine.
+- `machineLabel` — how this computer/account shows up in the web app's **Activity** log (Settings → "This computer's label"). Falls back to a stable random id.
 - `videoEnabled` (bool), `videoDelaySec` (number, default 10), `demoVideos` (uploaded
   mp4 files as base64) — the actual demo video is uploaded per machine (too big to serve
   as JSON). The **Videos** tab above syncs video *URLs* only.

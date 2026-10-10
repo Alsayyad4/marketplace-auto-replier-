@@ -58,15 +58,23 @@ per-machine on/off).
 | `dailyCap` | number | 200 | Max replies/day (safety). |
 | `responseDelaySec` | number | 30 | Wait before replying (human-like). |
 | `jitterSec` | number | 60 | Extra random 0–N s added to the delay. |
+| `typingPaceMaxSec` | number | 20 | (v0.21.71) Extra wait per reply proportional to its length (`wpmMin`–`wpmMax` typing speed), capped here; `0` = off. |
+| `threadMemory` | bool | true | (v0.21.71) Read the chat's Activity-log rows before every reply/video: never answer a message twice (across computers), never re-send the demo, tell the model what it already said. Off = pre-.71 behaviour. |
+| `ownerTeachingOnly` | bool | true | (v0.21.73) The prompt is built ONLY from the owner's text (business info, instructions, rules/corrections, prices, listings, closing goal, examples) plus mechanics: no built-in sales playbook or phrasebook, and an unwritten `instructions` / `closerGoals` contributes one neutral line instead of the extension's DEFAULTS text. `false` = the v0.21.72 playbook prompt. |
 | `listings` | array | [] | Inventory rows; included in the prompt. Each: `{title, model, storage, condition, price (number), videoUrl, available (bool)}`. |
+| `videoRetryMax` | number | 2 | (v0.21.47) Native attach retries per chat when nothing could be confirmed staged; `0` = none. |
+| `videoCompleteSet` | bool | true | (v0.21.72) Every dashboard clip reaches a chat exactly once: a per-chat clip ledger (by file) lets a chat that is missing a never-attempted clip receive just that one on the buyer's next message. `false` = pre-.72 count-based behaviour. |
+| `demoVideoUrls` | array | [] | Central demo clips, in sending order. Each: `{name, url, size?}` (`size` in bytes, written by the dashboard on upload — the same file listed twice is sent once). |
+| `videoLinkFallback` / `videoLinkOptIn` / `videoLinkUrl` / `videoLinkText` | — | — | **REMOVED (v0.21.66).** The demo is a video FILE or nothing; no link is ever sent, no form shows these, nothing reads them. Ignored if present in a stored config. |
+*(v0.21.53: `videoForeground`, `videoPip`, `videoActivateTab` and `videoTrustedChannels` were REMOVED from this config. They are per-machine `chrome.storage.local` flags now — a stale `true` in the shared row was arming the whole fleet. Any copies still present in a stored config are ignored by the extension.)*
 | `followUps` | array | [] | Follow-up nudges. Each: `{name, afterMinutes (number), message, enabled (bool)}`. After the bot replies, it arms a timer; if the buyer stays quiet that long it sends `message` once. |
 
 ### Advanced settings (stored but NOT active in the current "simple" build)
 Include them in the editor if you want forward-compat, but know they currently do
-nothing in the shipped extension: `wpmMin`, `wpmMax`, `maxRepliesPerConvo`,
-`convoCapBehavior`, `humanCadence`, `skipChance`, `breakChance`, `breakMinMin`,
-`breakMaxMin`, `warmupEnabled`, `warmupDays`, `warmupStartCap`, `visitConfirmEnabled`,
-`visitConfirmAfterMin`, `visitConfirmMessage`, `videos` (old URL list).
+nothing in the shipped extension: `humanCadence`, `skipChance`, `breakChance`, `breakMinMin`,
+`breakMaxMin`, `warmupEnabled`, `warmupDays`, `warmupStartCap`, `videos` (old URL list).
+(`wpmMin`/`wpmMax` are active since v0.21.71 — they set the typing pace; `maxRepliesPerConvo`,
+`convoCapBehavior` and the `visitConfirm*` keys have been active for a long time.)
 
 ### Per-machine settings (NOT web-managed — leave these to the extension)
 These live in each computer's local storage, not in the config JSON:
@@ -139,7 +147,7 @@ create policy "owner can read/write own row"
 **Config endpoint (Edge Function `config`):** public, takes `?key=<config_key>`,
 looks up the row by `config_key`, returns `row.config` as JSON with permissive CORS.
 This is the URL the user pastes into the extension. Example:
-`https://<project>.supabase.co/functions/v1/config?key=<config_key>`
+`https://<project>.supabase.co/functions/v1/subsell-config?key=<config_key>`
 
 (Because the key grants access to the API key inside, treat `config_key` as a secret:
 let the user regenerate it, and keep `apiKey` only in the config served over HTTPS.)
