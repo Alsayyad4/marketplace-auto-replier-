@@ -31,10 +31,25 @@
       renderStatePill(s.enabled);
       $("apiKey").textContent = s.apiKeySet ? "set ✓" : "NOT set";
       $("apiKey").className = s.apiKeySet ? "ok" : "bad";
-      $("hour").textContent = `${s.hourCount} / ${s.hourlyCap}`;
-      // Show the cap that is actually ENFORCED (s.fullDailyCap). s.dailyCap is the
-      // warm-up display target, which confused ("34 / 10") — warm-up isn't enforced.
-      $("day").textContent = `${s.dayCount} / ${s.fullDailyCap != null ? s.fullDailyCap : s.dailyCap}`;
+      // (v0.21.86) the message ledger: what went out in the last 60 min / 24 h (sliding
+      // windows, every computer counts its own account) against the cap in force —
+      // the warm-up ramp included, now that it is enforced. 0 = unlimited.
+      const b = s.budget || null;
+      const inf = (v) => (v ? String(v) : "∞");
+      if (b) {
+        $("hour").textContent = `${b.hour} / ${inf(b.hourCap)}`;
+        let dayTxt = `${b.day} / ${inf(b.dayCap)}`;
+        if (b.warming) dayTxt += ` · warm-up day ${b.warmDay + 1} of ${b.warmDays}`;
+        else if (b.warmDone) dayTxt += " · warm-up skipped (account was already active)";
+        const clips = b.kinds && b.kinds.day ? b.kinds.day.video : 0;
+        if (clips) dayTxt += ` · ${clips} clip${clips === 1 ? "" : "s"} ${b.countVideos ? "counted" : "not counted"}`;
+        $("day").textContent = dayTxt;
+        $("day").className = b.ok ? "" : "warn";
+        $("hour").className = b.ok ? "" : "warn";
+      } else {
+        $("hour").textContent = `${s.hourCount} / ${s.hourlyCap}`;
+        $("day").textContent = `${s.dayCount} / ${s.dailyCap}`;
+      }
       $("hours").textContent = s.withinHours ? "yes ✓" : "paused (reply window)"; // (v0.21.75) 24/7 unless replyWindowOnly
       $("hours").className = s.withinHours ? "ok" : "warn";
       // Activity-log (central) health — so an empty Activity tab is self-explaining.
@@ -77,7 +92,9 @@
         const now = Date.now();
         const at = (t) => { try { return new Date(t).toLocaleTimeString([], { hour: "2-digit", minute: "2-digit" }); } catch (e) { return "?"; } };
         const tc = c.tabClosed && c.tabClosed.until > now ? c.tabClosed : null;
-        if (tc) { cm.textContent = "Messenger tab closed by hand at " + at(tc.at) + " — the bot waits on this computer until " + at(tc.until) + " (📨 Open Marketplace brings it back now)"; cm.className = "warn"; }
+        const bu = s.budget && s.budget.breakUntil > now ? s.budget.breakUntil : 0; // (v0.21.86) the cadence break
+        if (bu) { cm.textContent = "on a break until " + at(bu) + " (Human cadence: no chat is opened and follow-ups wait; a reply already being typed still goes out)"; cm.className = "warn"; }
+        else if (tc) { cm.textContent = "Messenger tab closed by hand at " + at(tc.at) + " — the bot waits on this computer until " + at(tc.until) + " (📨 Open Marketplace brings it back now)"; cm.className = "warn"; }
         else if (c.humanActive) { cm.textContent = "someone is using it (" + Math.max(0, Math.round((now - c.humanAt) / 60000)) + " min ago) — the bot stays out of the way, replies continue in the background" + (c.restore ? "; un-minimize is ON on this computer" : ""); cm.className = "muted"; }
         else { cm.textContent = "free — the bot works in the background" + (c.restore ? " (un-minimize ON on this computer)" : ""); cm.className = "ok"; }
       }

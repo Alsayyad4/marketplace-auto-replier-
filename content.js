@@ -516,6 +516,28 @@
     return true;
   }
 
+  // (v0.21.86) Does the sidebar row say WE wrote the last message ("You: …", "Vous :",
+  // "You sent…")? Explicit only — a system row is neither ours nor the buyer's.
+  function sidebarOurRow(a) {
+    const t = safe(() => a.innerText || "", "");
+    if (!t) return false;
+    const lines = t.split("\n").map((s) => s.trim()).filter(Boolean);
+    if (lines.length < 2) return false;
+    const prev = lines.slice(1).join(" ").toLowerCase().replace(/^(?:unread messages?|messages? non lus?)\s*[:.,]?\s*/i, "");
+    return /^you[:\s]|^vous\s?:|^you sent|^vous avez envoyé/i.test(prev);
+  }
+  // (v0.21.86) The row's age tag in ms, weeks and years included ("1w", "2 sem", "1y",
+  // "1 an") — sidebarQuietMs stops at days on purpose (the follow-up logic reads it).
+  function sidebarAgeMsLoose(a) {
+    const d = sidebarQuietMs(a);
+    if (d != null) return d;
+    const t = safe(() => a.innerText || "", "");
+    const m = /(?:^|[\s·•])(\d{1,3})\s?(w|wk|sem|y|yr|an|ans)\b/i.exec(t);
+    if (!m) return null;
+    const n = parseInt(m[1], 10), u = m[2].toLowerCase();
+    return n * (u === "y" || u === "yr" || u === "an" || u === "ans" ? 365 : 7) * 24 * 3600 * 1000;
+  }
+
   // The sidebar row's OWN attribution of the last message: "Charles: How much? · 2h"
   // → { body: "How much?", media: false }. Messenger writes the sender's name
   // itself, so this is positive "the BUYER spoke last" evidence — used to rescue
@@ -2273,6 +2295,7 @@
   let pipHoldTimer = null;
   const stagedSweep = {}; // threadId -> {at, n, mutedUntil, fgAt}
   let lastSettings = {};
+  let warmLocalAt = 0; // (v0.21.86) last time the inbox was judged for warm-up evidence (once a minute while the ramp runs)
   async function sweepStagedClip(trigger) {
     try {
       const m = location.href.match(/\/t\/([^/?#]+)/);
@@ -2424,7 +2447,7 @@
         sw.n = 0;
         noteAttachMiss(false);
         vstat("watcher sent " + n + " staged demo clip(s) in the open chat ✓");
-        ask({ type: "LOG_EVENT", entry: { thread: safe(() => (document.title || "").replace(/\s*[|·—-]\s*Messenger.*$/i, "").trim(), "") || id, threadId: id, buyer: "(demo video)", action: "video", reply: n + " staged demo clip(s) sent by the watcher (upload had finished, nobody had pressed send)" } });
+        ask({ type: "LOG_EVENT", entry: { thread: safe(() => (document.title || "").replace(/\s*[|·—-]\s*Messenger.*$/i, "").trim(), "") || id, threadId: id, buyer: "(demo video)", action: "video", n, reply: n + " staged demo clip(s) sent by the watcher (upload had finished, nobody had pressed send)" } }); // (v0.21.86) n = clips this event delivered, for the message ledger
       } else if (sw.n >= 12) {
         sw.mutedUntil = now + 6 * 3600 * 1000;
         sw.n = 0;
@@ -3179,7 +3202,7 @@
         await setLocal({ videoSentThreads: dm });
         await recordVideoFail(id, "attach"); // paces the tail retries
         vstat("sent " + n + "/" + total + " with the reply — finishing the rest on a later visit (" + (name || id) + ")");
-        if (n > 0) ask({ type: "LOG_EVENT", entry: { thread: name, threadId: id, buyer: "(demo video)", action: "video", reply: n + "/" + total + " demo videos sent — finishing the rest later" } });
+        if (n > 0) ask({ type: "LOG_EVENT", entry: { thread: name, threadId: id, buyer: "(demo video)", action: "video", n, reply: n + "/" + total + " demo videos sent — finishing the rest later" } });
         return;
       }
       dm[id] = { done: true, at: Date.now(), owner: TAB_UID, sent: n };
@@ -3190,7 +3213,7 @@
       clearVideoPending(id);
       if (sidebarKey && sidebarKey !== id) clearVideoPending(sidebarKey);
       vstat("sent ✓ " + n + "/" + total + " to " + (name || id) + " (with the reply)");
-      if (n > 0) ask({ type: "LOG_EVENT", entry: { thread: name, threadId: id, buyer: "(demo video)", action: "video", reply: n + "/" + total + " demo video(s) sent" } });
+      if (n > 0) ask({ type: "LOG_EVENT", entry: { thread: name, threadId: id, buyer: "(demo video)", action: "video", n, reply: n + "/" + total + " demo video(s) sent" } });
     } catch (e) { /* bookkeeping must never break the reply path */ }
   }
   // Called when a staged draft is being ABANDONED this visit (navigation, send
@@ -4576,7 +4599,7 @@
               // guaranteed delivery), not dropped, and no failure is recorded.
               await parkTail(i + 1, `${okCount + sentBase}/${files.length} videos sent — pausing for a waiting buyer, finishing later`);
               vstat("sent " + (okCount + sentBase) + "/" + files.length + " — yielded to a waiting buyer, finishing later (" + (name || id) + ")");
-              ask({ type: "LOG_EVENT", entry: { thread: name, threadId: id, buyer: "(demo video)", action: "video", reply: (okCount + sentBase) + "/" + files.length + " demo videos sent — finishing the rest after a waiting buyer" + clipNamesSent() } });
+              ask({ type: "LOG_EVENT", entry: { thread: name, threadId: id, buyer: "(demo video)", action: "video", n: okCount, reply: (okCount + sentBase) + "/" + files.length + " demo videos sent — finishing the rest after a waiting buyer" + clipNamesSent() } });
               return;
             }
           }
@@ -4746,7 +4769,7 @@
             if (qkU && videoPending[qkU] == null && videoPending[id] == null) { videoPending[qkU] = Date.now(); persistDedup(); }
           }
           vstat("sent " + (okCount + sentBase) + "/" + files.length + " — last clip handed over but not shown; one adopt visit later (" + (name || id) + ")");
-          if (okCount > 0) ask({ type: "LOG_EVENT", entry: { thread: name, threadId: id, buyer: "(demo video)", action: "video", reply: (okCount + sentBase) + "/" + files.length + " demo videos sent — last clip checked on a later visit" } });
+          if (okCount > 0) ask({ type: "LOG_EVENT", entry: { thread: name, threadId: id, buyer: "(demo video)", action: "video", n: okCount, reply: (okCount + sentBase) + "/" + files.length + " demo videos sent — last clip checked on a later visit" } });
           return;
         }
         if (resumeAtF >= files.length && okCount + sentBase + adoptedN === 0) {
@@ -4765,7 +4788,7 @@
           dmT[id] = { done: true, at: Date.now(), owner: TAB_UID, sent: okCount + sentBase, resumeTotal: files.length };
           await setLocal({ videoSentThreads: dmT });
           vstat("sent " + (okCount + sentBase) + "/" + files.length + " — last clip unverifiable, dropped to stay duplicate-safe (" + (name || id) + ")");
-          if (okCount > 0) ask({ type: "LOG_EVENT", entry: { thread: name, threadId: id, buyer: "(demo video)", action: "video", reply: (okCount + sentBase) + "/" + files.length + " demo video(s) sent" } });
+          if (okCount > 0) ask({ type: "LOG_EVENT", entry: { thread: name, threadId: id, buyer: "(demo video)", action: "video", n: okCount, reply: (okCount + sentBase) + "/" + files.length + " demo video(s) sent" } });
           return;
         }
         if (okCount === 0) await noteAttachMiss(true); // a tail visit that confirmed nothing counts against the machine too
@@ -4781,7 +4804,7 @@
         const whyF = loadStop ? "couldn't load yet" : "didn't attach";
         vstat("sent " + (okCount + sentBase) + "/" + files.length + " — clip " + (failedAt + 1) + " " + whyF + "; finishing on a later visit (" + (name || id) + ")");
         setStatus({ lastError: "video: " + (okCount + sentBase) + "/" + files.length + " sent, clip " + (failedAt + 1) + " " + whyF + " — will finish later", currentThread: name });
-        if (okCount > 0) ask({ type: "LOG_EVENT", entry: { thread: name, threadId: id, buyer: "(demo video)", action: "video", reply: (okCount + sentBase) + "/" + files.length + " demo videos sent — finishing the rest on a later visit" + clipNamesSent() } });
+        if (okCount > 0) ask({ type: "LOG_EVENT", entry: { thread: name, threadId: id, buyer: "(demo video)", action: "video", n: okCount, reply: (okCount + sentBase) + "/" + files.length + " demo videos sent — finishing the rest on a later visit" + clipNamesSent() } });
         return;
       }
       // (v0.21.47) A chat that reaches the terminal with ZERO confirmed clips (an
@@ -4814,7 +4837,7 @@
           const qkSt = sidebarKey || id;
           if (qkSt && videoPending[qkSt] == null && videoPending[id] == null) { videoPending[qkSt] = Date.now(); persistDedup(); }
           vstat("sent " + (okCount + sentBase + adoptedN - 1) + "/" + files.length + " — the last clip is still staged (upload not finished); one more visit sends it (" + (name || id) + ")");
-          if (okCount > 1 || sentBase + adoptedN > 0) ask({ type: "LOG_EVENT", entry: { thread: name, threadId: id, buyer: "(demo video)", action: "video", reply: (okCount + sentBase + adoptedN - 1) + "/" + files.length + " demo videos sent — last clip checked on a later visit" } });
+          if (okCount > 1 || sentBase + adoptedN > 0) ask({ type: "LOG_EVENT", entry: { thread: name, threadId: id, buyer: "(demo video)", action: "video", n: Math.max(0, okCount - 1), reply: (okCount + sentBase + adoptedN - 1) + "/" + files.length + " demo videos sent — last clip checked on a later visit" } });
           return;
         }
         dmS[id] = { done: true, at: Date.now(), owner: TAB_UID, sent: okCount + sentBase + adoptedN };
@@ -4832,7 +4855,7 @@
       // (v0.21.72) the row NAMES the clips this chat now holds, and is written only
       // when this visit actually sent something (a closing visit with nothing new
       // used to add a second identical row).
-      if (okCount + adoptedN > 0) ask({ type: "LOG_EVENT", entry: { thread: name, threadId: id, buyer: "(demo video)", action: "video", reply: (okCount + sentBase + adoptedN) + "/" + files.length + " demo video(s) sent" + clipNamesSent() } });
+      if (okCount + adoptedN > 0) ask({ type: "LOG_EVENT", entry: { thread: name, threadId: id, buyer: "(demo video)", action: "video", n: okCount + adoptedN, reply: (okCount + sentBase + adoptedN) + "/" + files.length + " demo video(s) sent" + clipNamesSent() } });
       // A chat that still owes a NEVER-ATTEMPTED clip (its download was struck out
       // today) is not latched for the session: its buyer's next message tops it up.
       if (completeSet && clipOwed(led, fileIds).owed.length > 0) videoLocked.delete(id);
@@ -4980,6 +5003,13 @@
       // S25 ultra S23 ultra…") as its whole answer — one machine SENT that to a
       // buyer as a "follow-up". A real follow-up never begins with the full
       // "Name · listing" label; treat an echo as a skip, never type it.
+      // (v0.21.86) a cap, the follow-up window or the master switch HELD it: that is not a
+      // verdict on this chat — its clock and its skip count stay untouched (three cap
+      // skips used to retire a chat from follow-ups for good) and it is asked again later.
+      if (r.skip && r.held) {
+        setStatus({ lastAction: "follow-up waits — " + (r.reason || "held"), currentThread: name });
+        return;
+      }
       const titleEcho = !!(r.text && name && normMsg(name).length >= 8 && normMsg(r.text).startsWith(normMsg(name)));
       const skipped = r.skip || !r.text || !r.text.trim() || titleEcho;
       st.lastAt = skipped ? now - Math.floor(thresholdMs / 2) : now;
@@ -5014,6 +5044,79 @@
       }
     } catch (e) {
       setStatus({ lastError: "follow-up error: " + e.message });
+    }
+  }
+
+  /* ---------------- (v0.21.86) the per-chat cap, one place for every path ----------------
+   * The local check before the model is asked, the background's cloud count (the chat's
+   * text rows from every computer and every install) and the pre-send recheck all land
+   * here. The chat is marked handled for this message (a raised cap answers the NEXT
+   * buyer message), keeps its one-time demo set (idempotent, skipped when the video
+   * engine is already running for this chat), and then: "close" types the canned closing
+   * line as the cap's LAST message, "notify" tells the owner once, "stop" is silence. */
+  function convoCapOf(settings) {
+    const cap = Math.max(0, Math.floor(Number(settings.maxRepliesPerConvo) || 0));
+    const mode = String(settings.convoCapBehavior || "stop");
+    return { cap, mode, limit: cap && mode === "close" ? Math.max(1, cap - 1) : cap }; // mirrors convoCapLimit (background.js)
+  }
+  function closeLineOf(settings) {
+    return "Passe nous voir au shop quand tu veux — " +
+      (settings.businessAddress || "757 Rue Beaubien E, Montréal") + ", " +
+      (settings.businessHoursText || "9AM–10PM, 7 days") +
+      " 😊 On va bien s'occuper de toi! (Come by anytime — we'll take care of you!)";
+  }
+  async function atConvoCap(id, name, sidebarId, turn, settings, cc, so, why, noVideo) {
+    clearWaiting(id, sidebarId); // the cap settles this message — off the never-miss ledger
+    cooldowns[id] = Date.now() + IDLE_COOLDOWN_MS;
+    lastHandled[id] = turn.dedupeKey;
+    if ((replyCounts[id] || 0) < so) replyCounts[id] = so; // what the cloud counted, remembered here too
+    persistDedup();
+    if (!noVideo) {
+      // the demo clips are separate from the cap: the chat still gets its one-time set
+      await maybeSendVideo(id, name, false, sidebarId);
+      if (videoLocked.has(id)) clearVideoPending(sidebarId);
+    }
+    const tag = why ? " · " + why : "";
+    if (cc.mode === "close" && so < cc.cap && stillOnThread(id)) {
+      // the closing line is a message too: it keeps to the hour / day caps like any other
+      // (held = it goes out on the buyer's next message instead, the chat still has the slot)
+      const stC = await ask({ type: "GET_STATUS" });
+      if (stC && stC.ok && stC.budget && !stC.budget.ok) {
+        setStatus({ lastAction: "reply cap — closing line held (" + stC.budget.reason + ")" + tag, currentThread: name });
+        return;
+      }
+      // …and the same fresh look at the chat's memory the reply path takes before typing:
+      // another computer may have answered or closed this chat meanwhile (two computers on
+      // one account), or the count read here may be stale — never a line past the cap.
+      const closeLine = closeLineOf(settings);
+      const fresh = await ask({ type: "MEMORY_PRESEND", threadId: id, threadName: name, buyerMessage: turn.buyerMessage, transcript: fullTranscript(40) || turn.memTranscript || turn.transcript, localReplies: so });
+      if (fresh && fresh.ok && fresh.skip && (!fresh.cap || (Number(fresh.replies) || 0) >= cc.cap)) {
+        if ((replyCounts[id] || 0) < (Number(fresh.replies) || 0)) { replyCounts[id] = Number(fresh.replies) || 0; persistDedup(); }
+        setStatus({ lastAction: "reply cap — closing line not sent (" + (fresh.reason || "the chat moved on") + ")" + tag, currentThread: name });
+        return;
+      }
+      // a person needs time to type it (the floor right after a clip, as for a reply)
+      const paceC = typingPaceMs(closeLine, settings);
+      if (paceC > 0) await sleep(paceC);
+      if (!stillOnThread(id)) return;
+      const composerC = findComposer();
+      if (composerC) {
+        const okC = await typeAndSend(composerC, closeLine);
+        if (okC) {
+          rememberSent(closeLine);
+          replyCounts[id] = cc.cap; // the cap's last message — the chat is full now
+          persistDedup();
+          ask({ type: "LOG_EVENT", entry: { thread: name, threadId: id, buyer: trunc(turn.buyerMessage, 120), action: "text", reply: closeLine } });
+          setStatus({ lastAction: "reply cap — closing line sent as the last message (" + cc.cap + "/" + cc.cap + ", no API cost)" + tag, lastReplySent: trunc(closeLine, 120), currentThread: name });
+          return;
+        }
+      }
+    }
+    if (cc.mode === "notify") {
+      ask({ type: "CAP_NOTIFY", threadId: id, threadName: name, replies: so, cap: cc.cap });
+      setStatus({ lastAction: "needs you — reply cap reached (" + so + "/" + cc.cap + "), buyer still messaging" + tag, currentThread: name });
+    } else {
+      setStatus({ lastAction: "skip — reply cap reached (" + so + "/" + cc.cap + ") for this chat" + tag, currentThread: name });
     }
   }
 
@@ -5214,50 +5317,20 @@
     }
 
     // ---- HARD PER-CONVERSATION REPLY CAP (maxRepliesPerConvo) ----
-    // Count = TEXT replies the bot has already sent in THIS chat (videos & follow-ups
-    // are separate and never counted). Once a chat reaches the cap we go silent for the
-    // rest of the conversation — even if the buyer keeps asking more questions. Checked
-    // here, before spending a Claude call. cap 0 = unlimited.
+    // (v0.21.86) The cap is the number of bot TEXTS a chat may hold. Counted here from
+    // this computer's own memory, and in the background from the Activity rows of
+    // EVERY computer and every install (the Web Store build is a new extension id with
+    // empty storage: without the cloud count every capped chat started again at 0).
+    // Demo clips are not replies. "stop" = silence at the cap, exactly as labelled;
+    // "notify" = silence + one notification; "close" = the LAST message under the cap
+    // is a canned closing line (no model call). Never a message past the cap again —
+    // the old courtesy close was a cap+1 message. Checked before any Claude call.
     const settings = (await ask({ type: "GET_SETTINGS" })).settings || {};
-    const replyCap = Math.max(0, Number(settings.maxRepliesPerConvo) || 0);
+    const cc = convoCapOf(settings);
+    const replyCap = cc.cap;
     const repliesSoFar = replyCounts[id] || 0;
-    if (replyCap > 0 && repliesSoFar >= replyCap) {
-      clearWaiting(id, sidebarId); // cap says stay silent — resolved by policy
-      cooldowns[id] = Date.now() + IDLE_COOLDOWN_MS;
-      // No more text replies — but the demo video is separate ("2 + videos"), so still
-      // make sure this chat got its one-time video (idempotent: no-op if already sent).
-      await maybeSendVideo(id, name, false, sidebarId);
-      if (videoLocked.has(id)) clearVideoPending(sidebarId); // terminal → clear sidebar-keyed pending
-      // COURTESY CLOSE at the cap — ZERO API cost. The operator's law is "every
-      // message gets an answer"; going silent mid-conversation broke it. The
-      // FIRST buyer message past the cap gets ONE canned, settings-built closing
-      // line (no Claude call, so the cap still caps the spend); after that,
-      // silence. replyCounts moves to cap+1 as the sent-once flag.
-      if (repliesSoFar === replyCap && stillOnThread(id)) {
-        const composerC = findComposer();
-        if (composerC) {
-          const closeLine =
-            "Passe nous voir au shop quand tu veux — " +
-            (settings.businessAddress || "757 Rue Beaubien E, Montréal") + ", " +
-            (settings.businessHoursText || "9AM–10PM, 7 days") +
-            " 😊 On va bien s'occuper de toi! (Come by anytime — we'll take care of you!)";
-          const okC = await typeAndSend(composerC, closeLine);
-          if (okC) {
-            rememberSent(closeLine);
-            lastHandled[id] = turn.dedupeKey;
-            replyCounts[id] = replyCap + 1; // courtesy close sent once — never again
-            persistDedup();
-            ask({ type: "LOG_EVENT", entry: { thread: name, threadId: id, buyer: trunc(turn.buyerMessage, 120), action: "text", reply: closeLine } });
-            setStatus({ lastAction: "cap reached — one-time courtesy close sent (no API cost)", lastReplySent: trunc(closeLine, 120), currentThread: name });
-            return;
-          }
-        }
-      }
-      if ((settings.convoCapBehavior || "stop") === "notify") {
-        setStatus({ lastAction: "needs you — reply cap reached (" + repliesSoFar + "/" + replyCap + "), buyer still messaging", currentThread: name });
-      } else {
-        setStatus({ lastAction: "skip — reply cap reached (" + repliesSoFar + "/" + replyCap + ") for this chat", currentThread: name });
-      }
+    if (replyCap > 0 && repliesSoFar >= cc.limit) {
+      await atConvoCap(id, name, sidebarId, turn, settings, cc, repliesSoFar, "", false);
       return;
     }
 
@@ -5297,7 +5370,7 @@
     // configured delay, counted from this instant), and the remaining clips
     // stream out one by one, yielding whenever another buyer is waiting.
     // Still exactly one API call per reply.
-    const replyPromise = ask({ type: "GET_REPLY_SIMPLE", buyerMessage: turn.buyerMessage, context: turn.transcript, memContext: turn.memTranscript, threadName: name, threadId: id, cachedText: memoOk ? memo.text : undefined });
+    const replyPromise = ask({ type: "GET_REPLY_SIMPLE", buyerMessage: turn.buyerMessage, context: turn.transcript, memContext: turn.memTranscript, threadName: name, threadId: id, cachedText: memoOk ? memo.text : undefined, localReplies: repliesSoFar }); // (v0.21.86) localReplies: this computer's count, the background takes the higher of it and the cloud's
     const replyClockStart = Date.now();
     const targetDelayMs = (settings.responseDelaySec || 15) * 1000 + rand(0, (settings.jitterSec || 15) * 1000);
 
@@ -5313,6 +5386,15 @@
         return;
       }
       if (reply.skip) {
+        if (reply.cap) {
+          // (v0.21.86) the Activity log counts more bot texts in this chat than this
+          // computer remembers (another computer, or the install before this one): the
+          // same cap handling as the local check — nothing is typed past the cap. The
+          // video engine may be running for this chat right now, so no video pass here.
+          delete pendingReply[id];
+          await atConvoCap(id, name, sidebarId, turn, settings, convoCapOf(settings), Math.max(repliesSoFar, Number(reply.replies) || 0), "counted across computers", true);
+          return;
+        }
         if (reply.reason === "empty reply" || reply.memory === "answered" || reply.memory === "echo" || reply.title || reply.screen) { // (v0.21.85) screen = Facebook's own line, never a buyer's
           // Claude DELIBERATELY chose silence (system/meta message, nothing to answer).
           // Mark handled so the same unanswerable message isn't re-billed every
@@ -5376,8 +5458,14 @@
       // After the navigation check (the transcript must be THIS chat's), before the
       // conversation recheck. The 40-bubble read lets it see an older reply to the
       // same words that has scrolled out of the model's 12.
-      const pre = await ask({ type: "MEMORY_PRESEND", threadId: id, threadName: name, buyerMessage: turn.buyerMessage, transcript: fullTranscript(40) || turn.memTranscript || turn.transcript });
+      const pre = await ask({ type: "MEMORY_PRESEND", threadId: id, threadName: name, buyerMessage: turn.buyerMessage, transcript: fullTranscript(40) || turn.memTranscript || turn.transcript, localReplies: replyCounts[id] || 0 });
       if (pre && pre.ok && pre.skip) {
+        if (pre.cap) {
+          // (v0.21.86) the chat reached its cap during our wait (another computer delivered)
+          delete pendingReply[id];
+          await atConvoCap(id, name, sidebarId, turn, settings, convoCapOf(settings), Math.max(replyCounts[id] || 0, Number(pre.replies) || 0), "counted across computers", true);
+          return;
+        }
         if (pre.memory === "claimed") {
           cooldowns[id] = Date.now() + 2 * 60 * 1000; // the earlier claim delivers; look again soon (memo kept — replayed free if it never lands)
         } else {
@@ -5931,20 +6019,36 @@
       // waiting" signal overnight, and those chats were forgotten by morning. Now the
       // dots survive until the bot is actually allowed to answer.
       const st = await ask({ type: "GET_STATUS" });
+      // (v0.21.86) WARM-UP EVIDENCE FROM THE INBOX: the ramp is for a NEW account. A list that
+      // already shows chats WE answered ("You: …") with an age tag older than this install is
+      // an established account. Judged here, from the list alone — no chat opened, no cloud
+      // read — and BEFORE the pause below, so the day-0 cap can never hold a computer that has
+      // nothing left to prove it wrong (the cloud evidence needs a chat to be opened first).
+      if (st && st.ok && st.budget && st.budget.warming && st.budget.installTs && Date.now() - warmLocalAt > 60 * 1000) {
+        warmLocalAt = Date.now();
+        const ageInstall = Date.now() - st.budget.installTs;
+        let olderOurs = 0;
+        for (const a of anchors) {
+          if (!safe(() => sidebarOurRow(a), false)) continue;
+          const age = safe(() => sidebarAgeMsLoose(a), null);
+          if (age != null && age > ageInstall + 3600 * 1000) olderOurs++;
+        }
+        if (olderOurs >= 1) ask({ type: "WARM_EVIDENCE_LOCAL", n: olderOurs }); // one is enough: a new account has none
+      }
+      let cadenceBreakUntil = 0; // (v0.21.86) judged after the pick: a chat owed clips is still served
       if (st && st.ok) {
         if (st.withinHours === false) {
           setStatus({ lastAction: "paused — outside business hours (chats stay unread until open)" });
           return;
         }
-        if (st.hourlyCap && st.hourCount >= st.hourlyCap) {
-          setStatus({ lastAction: "paused — hourly cap reached (chats stay unread)" });
+        // (v0.21.86) the ledger's verdict: sliding 60-min / 24-h windows, the warm-up
+        // ramp in force today, 0 = unlimited.
+        const b = st.budget;
+        if (b && !b.ok) {
+          setStatus({ lastAction: "paused — " + b.reason + " (chats stay unread)" });
           return;
         }
-        const dCap = st.fullDailyCap != null ? st.fullDailyCap : st.dailyCap;
-        if (dCap && st.dayCount >= dCap) {
-          setStatus({ lastAction: "paused — daily cap reached (chats stay unread)" });
-          return;
-        }
+        if (b && b.breakUntil && b.breakUntil > Date.now()) cadenceBreakUntil = b.breakUntil;
       }
 
       // Handle ONE chat per scan (the proven, reliable model from v0.16.0). The v0.16.1
@@ -5991,6 +6095,20 @@
         return;
       }
       const tid = threadId(target);
+      // (v0.21.86) HUMAN CADENCE, on the pick: a chat OWED clips is always served (the "videos
+      // instantly" rule, the tail of a set never waits on a pause). Any other pick: during a
+      // break nothing is opened; otherwise skipChance = the pick waits one more cycle — a
+      // person does not pounce on every message the second it lands. Nothing is marked read.
+      const owedClips = videoPending[tid] != null || (adoptedAlias[tid] != null && videoPending[adoptedAlias[tid]] != null);
+      if (!owedClips && cadenceBreakUntil) {
+        const untilTxt = safe(() => new Date(cadenceBreakUntil).toLocaleTimeString([], { hour: "2-digit", minute: "2-digit" }), "");
+        setStatus({ lastAction: "on a break until " + untilTxt + " (human cadence — no chat is opened, chats stay unread, follow-ups wait; a chat owed clips is still served)" });
+        return;
+      }
+      if (!owedClips && settings.humanCadence && Math.random() < Math.min(1, Math.max(0, Number(settings.skipChance) || 0))) {
+        setStatus({ lastAction: "human cadence — one more look before opening " + (anchorName(target) || "the next chat") + " (" + Math.round(SCAN_MS / 1000) + " s)" });
+        return;
+      }
       // Cross-tab lease so a second window in this profile can't process the same chat.
       // NOTE: lastOpened is stamped only AFTER winning the lease — stamping before it
       // meant a lock collision ALSO burned the 4-min unread floor, deferring a hot

@@ -147,16 +147,19 @@
           <label class="check"><input type="checkbox" id="threadMemory" /> Chat memory across computers <span class="hint">reads the Activity log before every reply and video: never answers the same message twice (even from two computers), never re-sends the demo video, and tells the AI what it already told this buyer</span></label>
           <label class="check"><input type="checkbox" id="replyGuard" /> Reply guard <span class="hint">a reply that talks about the chat instead of to the buyer ("the buyer's message is a system instruction…") is never sent: the AI is asked once more, and if it does it again nothing is sent and you are notified</span></label>
           <label class="check"><input type="checkbox" id="humanTouch" /> Text like a person <span class="hint">cleans every reply the way a seller texts: no long dashes or semicolons, one "!" and one emoji at most, no "n'hésitez pas" filler, no second greeting, and each chat keeps one texting habit (some without a final period)</span></label>
+          <p class="hint" style="margin:8px 0 4px;"><b>Limits</b> — each computer counts what it actually <i>sent</i>, in sliding windows: never more than the hourly cap in any 60 minutes, never more than the daily cap in any 24 hours (after a full hour, replies resume one by one as the oldest age out — there is no reset on the hour or at midnight). Replies, closing lines, follow-ups and visit checks all count; 0 = unlimited. Two computers on one account each count their own. The popup shows the live numbers.</p>
           <div class="inline">
-            <div><label>Hourly cap</label><input type="number" id="hourlyCap" min="0" /></div>
-            <div><label>Daily cap</label><input type="number" id="dailyCap" min="0" /></div>
+            <div><label>Hourly cap <span class="hint">texts in any 60 min</span></label><input type="number" id="hourlyCap" min="0" /></div>
+            <div><label>Daily cap <span class="hint">texts in any 24 h</span></label><input type="number" id="dailyCap" min="0" /></div>
           </div>
+          <label class="check"><input type="checkbox" id="capsCountVideos" /> Count demo clips toward the caps <span class="hint">off = the caps count the texts only (the clips are still shown in the popup); on = every demo clip is a message too, the way Facebook counts them</span></label>
           <div class="inline">
-            <div><label>Max replies / conversation <span class="hint">0 = unlimited</span></label><input type="number" id="maxRepliesPerConvo" min="0" /></div>
+            <div><label>Max replies / conversation <span class="hint">seller texts one chat may hold — counted from the chat itself (every "You" message visible in it, yours included), the computer's own memory and, with Chat memory on and a cloud login, the Activity log of all your computers (its text rows live 5 days); 0 = unlimited</span></label><input type="number" id="maxRepliesPerConvo" min="0" /></div>
             <div><label>When that cap is hit</label>
               <select id="convoCapBehavior">
                 <option value="stop">Go quiet (stop replying)</option>
                 <option value="notify">Notify me to take over</option>
+                <option value="close">Close politely — the last message under the cap is a short closing line (no AI cost)</option>
               </select>
             </div>
           </div>
@@ -174,10 +177,10 @@
           <label class="check"><input type="checkbox" id="replyWindowOnly" /> Reply to buyers only between these hours too <span class="hint">off = the bot answers buyers 24/7 (recommended: a buyer who writes at midnight is gone by morning)</span></label>
 
           <hr />
-          <label class="check"><input type="checkbox" id="humanCadence" /> Human cadence <span class="hint">random breaks + occasional skipped cycles</span></label>
+          <label class="check"><input type="checkbox" id="humanCadence" /> Human cadence <span class="hint">pauses only, never a lost message: after a reply there is a chance of a break during which no chat is opened — a buyer who writes meanwhile is answered when it ends, a reply already being typed still goes out, follow-ups wait — and a look at the inbox is sometimes skipped for one cycle</span></label>
           <div class="inline">
-            <div><label>Skip chance (0–1)</label><input type="number" id="skipChance" min="0" max="1" step="0.01" /></div>
-            <div><label>Break chance / cycle (0–1)</label><input type="number" id="breakChance" min="0" max="1" step="0.01" /></div>
+            <div><label>Skip chance (0–1) <span class="hint">chance that a look which would open a chat waits one more cycle (~8 s)</span></label><input type="number" id="skipChance" min="0" max="1" step="0.01" /></div>
+            <div><label>Break chance / reply (0–1) <span class="hint">chance, after each reply, of a break of the length below</span></label><input type="number" id="breakChance" min="0" max="1" step="0.01" /></div>
           </div>
           <div class="inline">
             <div><label>Break min (min)</label><input type="number" id="breakMinMin" min="0" /></div>
@@ -185,7 +188,7 @@
           </div>
 
           <hr />
-          <label class="check"><input type="checkbox" id="warmupEnabled" /> Warm-up mode <span class="hint">ramp daily volume over N days</span></label>
+          <label class="check"><input type="checkbox" id="warmupEnabled" /> Warm-up mode <span class="hint">a NEW account ramps its daily cap from the day-0 cap up to the daily cap over N days. Per computer, from its first run. An established account skips the ramp by itself: an inbox already showing 3+ chats answered before the install, or a chat whose Activity rows are older than the install, ends it (so a computer moving to the Web Store version is not throttled)</span></label>
           <div class="inline">
             <div><label>Warm-up days</label><input type="number" id="warmupDays" min="0" /></div>
             <div><label>Day-0 daily cap</label><input type="number" id="warmupStartCap" min="1" /></div>
@@ -372,6 +375,6 @@
     <script src="config.js?v=20261011"></script>
     <script src="seed.js?v=20260921"></script>
     <script src="https://cdn.jsdelivr.net/npm/@supabase/supabase-js@2"></script>
-    <script src="app.js?v=20261010c"></script>
+    <script src="app.js?v=20261014"></script>
   </body>
 </html>

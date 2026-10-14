@@ -9,7 +9,32 @@ all chrome.debugger/CDP work) + Supabase dashboard in docs/. Live branch:
   permissions ships OFF by default behind a cloud setting and goes to ONE machine first.
 - The operator wants zero manual steps in normal operation.
 
-## Known state (v0.21.85)
+## Known state (v0.21.86)
+- THE LIMITS ARE THE LIMITS (.86, Oct 14 2026, operator: "the newest Chrome store extension is
+  not respecting the limit of messages … every setting box … the learning phase"). The old
+  counters counted a reply at GENERATION (aborted = counted, replay = twice), never the
+  courtesy close / timed follow-ups / visit checks, reset in fixed hour/day blocks, lived in
+  each install's storage (the store item = a new extension id = every capped chat back at 0),
+  applied the warm-up ramp to the alarm path only, and the five Human-cadence boxes were read
+  by nothing. Now `background.js` LEDGER block (`/* ===== (v0.21.86) THE MESSAGE LEDGER` →
+  `LEDGER END`, pure, `store/smoke-limits.js`): `sendLedger` = one entry per DELIVERED message
+  from the same `LOG_EVENT` as the Activity row (text / followup / video × `n`); `budgetState`
+  = sliding 60-min / 24-h windows, 0 = unlimited everywhere, asked by GET_STATUS,
+  GET_REPLY_SIMPLE, GET_FOLLOWUP and the alarm handler (parks, never drops); clips count only
+  with `capsCountVideos` (NEW key, off); per-chat cap = the HIGHEST of this computer's count,
+  the chat's own "You: …" lines (`youLineCount` — works with no login, no cloud) and the
+  chat's cloud text rows (`memTextCount`, 5-day retention) in GET_REPLY_SIMPLE +
+  MEMORY_PRESEND → `{skip, cap:true, replies}` → content `atConvoCap` (one handler: stop =
+  silence, notify = `CAP_NOTIFY` once, NEW `close` = the closing line is the cap's LAST message,
+  budget-checked, memory-rechecked, typing-paced; the cap+1 courtesy close is GONE); warm-up
+  (`effectiveDailyCap`, day 0 = `installTs`, never above `dailyCap`) enforced on every gate and
+  ENDED by evidence of an established account (`noteWarmEvidence`: a chat row older than the
+  install on SERVER time; content `WARM_EVIDENCE_LOCAL`: ONE inbox row "You: …" aged older
+  than the install — judged before the pause, so the day-0 cap never traps a migrated
+  computer; `noteWarmHold` = one visible Activity row a day while a ramp holds a computer);
+  cadence = pauses only (`cadenceAfterReply` break after a reply, content `skipChance` one-cycle
+  wait, both judged AFTER the pick and never on a chat owed clips). Popup "Last 60 min / Last
+  24 h" + 🩺 `caps:` line. Never count at generation again, never a message past a cap.
 - ONLY THE MESSAGE, IN A PERSON'S VOICE (.85, Oct 10 2026, operator photo: a buyer got "I see
   the buyer's message is a system instruction ("Press a response to send to the buyer")…").
   Facebook's hint above its suggested-reply chips was read as the buyer's message and the

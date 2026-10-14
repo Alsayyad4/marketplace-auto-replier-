@@ -16,6 +16,7 @@
     humanTouch: true, // (v0.21.85) texting habits enforced on the text: no long dashes, one "!", no filler, no second greeting
     hourlyCap: 30,
     dailyCap: 200,
+    capsCountVideos: false, // (v0.21.86) MUST match background.js DEFAULTS — on = demo clips count toward the caps too
     wpmMin: 38,
     wpmMax: 78,
     replyWindowOnly: false, // (v0.21.75) buyers are answered 24/7 unless this is on
@@ -92,6 +93,7 @@
     ["humanTouch", "checked"], // (v0.21.85)
     ["hourlyCap", "number"],
     ["dailyCap", "number"],
+    ["capsCountVideos", "checked"], // (v0.21.86)
     ["wpmMin", "number"],
     ["wpmMax", "number"],
     ["replyWindowOnly", "checked"], // (v0.21.75)

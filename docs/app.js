@@ -21,6 +21,7 @@
     humanTouch: true, // (v0.21.85) MUST match background.js DEFAULTS
     hourlyCap: 30,
     dailyCap: 200,
+    capsCountVideos: false, // (v0.21.86) MUST match background.js DEFAULTS — on = demo clips count toward the caps too
     maxRepliesPerConvo: 5,
     convoCapBehavior: "stop",
     wpmMin: 38,
@@ -84,7 +85,7 @@
     ["responseDelaySec", "number"], ["jitterSec", "number"],
     ["typingPaceMaxSec", "number"], ["threadMemory", "checked"], // (v0.21.71)
     ["replyGuard", "checked"], ["humanTouch", "checked"], // (v0.21.85)
-    ["hourlyCap", "number"], ["dailyCap", "number"],
+    ["hourlyCap", "number"], ["dailyCap", "number"], ["capsCountVideos", "checked"], // (v0.21.86)
     ["maxRepliesPerConvo", "number"], ["convoCapBehavior", "value"],
     ["wpmMin", "number"], ["wpmMax", "number"],
     ["replyWindowOnly", "checked"], ["businessHoursStart", "number"], ["businessHoursEnd", "number"], // (v0.21.75)

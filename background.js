@@ -45,6 +45,11 @@ const DEFAULTS = {
   humanTouch: true,
   hourlyCap: 30,
   dailyCap: 200,
+  // (v0.21.86) the caps count the TEXTS the bot sends (replies, closing lines, follow-ups,
+  // visit checks) in sliding 60-min / 24-h windows; on, every demo clip counts as a
+  // message too (Facebook counts them). A NEW key: off keeps the meaning the owner's
+  // numbers always had. The clips are shown in the popup either way.
+  capsCountVideos: false,
   wpmMin: 38,
   wpmMax: 78,
   // (v0.21.75) Buyers are answered AT ANY HOUR (operator, Oct 6 2026: "remove business
@@ -96,8 +101,9 @@ const DEFAULTS = {
   // per-conversation reply cap
   maxRepliesPerConvo: 5, // total bot replies allowed in one conversation (0 = unlimited)
   convoCapBehavior: "stop", // "stop" = go quiet, "notify" = fire a [HUMAN] notification once
-  // human cadence (reserved — currently NOT enforced anywhere; left as a no-op so the
-  // bot never skips a waiting buyer. Response delay + caps already pace it humanly.)
+  // human cadence — (v0.21.86) enforced as PAUSES, never a lost message: after a delivered
+  // reply, breakChance of a break (breakMinMin..breakMaxMin min) during which the scan opens
+  // no chat except one owed clips; skipChance = a pick waits one more 8-s cycle. Read by nothing before .86.
   humanCadence: true,
   skipChance: 0.12,
   breakChance: 0.05,
@@ -2002,34 +2008,181 @@ async function cloudStatus() {
 }
 
 /* ---------------- counters / rate limits ---------------- */
-
-function getCounters() {
-  return new Promise((resolve) => {
-    chrome.storage.local.get(["counters"], (res) =>
-      resolve(res.counters || { hourStart: 0, hourCount: 0, dayStart: 0, dayCount: 0 })
-    );
-  });
+/* ===== (v0.21.86) THE MESSAGE LEDGER — the caps count what was actually SENT =====
+ * Operator, Oct 14 2026: "the newest Chrome store extension is not respecting the
+ * limit of messages". What the old counters did: counted a reply when it was
+ * GENERATED (an aborted send counted, a replayed one counted twice), never counted
+ * the courtesy close, the timed follow-ups or the visit checks, forgot everything on
+ * a reinstall (the Web Store item is a new extension id = empty storage), reset in
+ * fixed hour/day blocks (up to twice the cap inside any rolling hour), applied the
+ * warm-up ramp to the alarm path only (the popup said so: "warm-up isn't enforced"),
+ * and read cap 0 as "unlimited" on one path and "always capped" on another. Now:
+ *   - every DELIVERED message lands here once, from the same LOG_EVENT its Activity
+ *     row comes from: kind text (a reply or the closing line), followup (smart, timed,
+ *     visit check), video (one entry per clip — `n` rides on the event);
+ *   - the caps are SLIDING windows: never more than hourlyCap in any 60 minutes, never
+ *     more than the day's cap in any 24 hours; 0 = unlimited, on every path;
+ *   - texts always count; clips count only with `capsCountVideos` (shown either way);
+ *   - the warm-up ramp (effectiveDailyCap) applies to every gate. Day 0 is this
+ *     install's first run — and an account the bot already answered BEFORE this
+ *     install (a chat carrying bot rows older than the install) ends the ramp at
+ *     once, so the fleet's move to the Web Store build throttles nobody;
+ *   - humanCadence: after a reply, breakChance of a break of breakMinMin..breakMaxMin
+ *     minutes during which no chat is opened (a chat owed clips still is) and alarms
+ *     wait (the content script rolls skipChance itself: a pick waits one more cycle);
+ *   - the ledger is PER COMPUTER (chrome.storage.local): two computers on one Facebook
+ *     account each hold their own hour / day; the per-chat cap is the one count shared
+ *     through the Activity log, and that log keeps 5 days (supabase/retention.sql).
+ * Pure helpers first — store/smoke-limits.js runs the slice from this comment to
+ * LEDGER END, so keep chrome.* inside the functions marked (storage). ===== */
+const LEDGER_KEY = "sendLedger";
+const LEDGER_MAX = 3000;                 // entries kept — a day of the busiest computer is far below this
+const LEDGER_HOUR_MS = 3600 * 1000;
+const LEDGER_DAY_MS = 86400 * 1000;
+const LEDGER_KINDS = { text: 1, followup: 1, video: 1 }; // the Activity actions that are messages to a buyer
+const num0 = (v, d) => { const n = Number(v); return Number.isFinite(n) ? n : d; };
+/* How many messages an Activity event stands for: a text or follow-up row is one; a
+ * video row carries `n` (the clips THAT event delivered — the engine's "k/total sent"
+ * rows are cumulative, so the number rides on the event and is never parsed from the
+ * text; no `n` = nothing confirmed); any other row (video-status, human, gap, teach,
+ * usage, claim) is not a message. */
+function ledgerUnits(entry) {
+  if (!entry || !LEDGER_KINDS[entry.action]) return 0;
+  if (entry.action === "video") return Math.max(0, Math.floor(num0(entry.n, 0)));
+  return Math.max(0, Math.floor(num0(entry.n, 1)));
 }
-
-function setCounters(c) {
-  return new Promise((resolve) => chrome.storage.local.set({ counters: c }, resolve));
+/* Entries older than 24 h (+1 min) go; a stamp up to 24 h in the FUTURE stays (the clock
+ * jumped back — the entry counts as "now" until real time passes it, never emptying the
+ * hour); further than that is a broken clock's leftover and goes. */
+function ledgerPrune(items, now) {
+  const keep = (Array.isArray(items) ? items : []).filter((it) => it && typeof it.t === "number" && now - it.t < LEDGER_DAY_MS + 60 * 1000 && it.t <= now + LEDGER_DAY_MS);
+  return keep.length > LEDGER_MAX ? keep.slice(keep.length - LEDGER_MAX) : keep;
 }
-
-function rollWindows(c, now) {
-  const HOUR = 3600 * 1000;
-  const DAY = 86400 * 1000;
-  if (!c.hourStart || now - c.hourStart >= HOUR) {
-    c.hourStart = now;
-    c.hourCount = 0;
+/* What went out in the last 60 min / 24 h, by kind, and the two totals the caps judge. */
+function ledgerCounts(items, now, countVideos) {
+  const z = () => ({ text: 0, followup: 0, video: 0 });
+  const hour = z(), day = z();
+  for (const it of Array.isArray(items) ? items : []) {
+    if (!it || !LEDGER_KINDS[it.k] || typeof it.t !== "number") continue;
+    const age = Math.max(0, now - it.t); // a future stamp (clock jumped back) counts as now
+    if (age < LEDGER_DAY_MS) day[it.k] += 1;
+    if (age < LEDGER_HOUR_MS) hour[it.k] += 1;
   }
-  if (!c.dayStart || now - c.dayStart >= DAY) {
-    c.dayStart = now;
-    c.dayCount = 0;
-  }
-  return c;
+  const total = (c) => c.text + c.followup + (countVideos ? c.video : 0);
+  return { hour: total(hour), day: total(day), kinds: { hour, day } };
 }
+/* Which day of the warm-up this is (0-based), or -1 when the ramp does not apply:
+ * off, no days, done, past the ramp, or no install stamp yet. */
+function warmDayOf(settings, warm, now) {
+  const days = Math.max(0, Math.floor(num0(settings.warmupDays, 0)));
+  if (!settings.warmupEnabled || days <= 0 || !warm || warm.done) return -1;
+  const installTs = num0(warm.installTs, 0);
+  if (!installTs) return -1;
+  const dayNum = Math.floor(((now == null ? Date.now() : now) - installTs) / LEDGER_DAY_MS);
+  return dayNum < 0 || dayNum >= days ? -1 : dayNum;
+}
+/* The day's cap: during the warm-up a straight line from warmupStartCap (day 0) to the
+ * full dailyCap over warmupDays; otherwise the full cap. dailyCap 0 (unlimited) still
+ * holds the start cap while the ramp runs, then opens. The owner's daily cap is the
+ * ceiling: a start cap above it never lets the ramp exceed it. */
+function effectiveDailyCap(settings, warm, now) {
+  const full = Math.max(0, Math.floor(num0(settings.dailyCap, 0)));
+  const dayNum = warmDayOf(settings, warm, now);
+  if (dayNum < 0) return full;
+  const days = Math.max(1, Math.floor(num0(settings.warmupDays, 0)));
+  const start = Math.max(1, Math.floor(num0(settings.warmupStartCap, 10)) || 10);
+  if (!full) return start;
+  return Math.min(full, Math.max(start, Math.round(start + (full - start) * (dayNum / days))));
+}
+/* A Facebook account the bot was already answering BEFORE this install exists is not a
+ * new account: the first chat opened on it carries bot rows (text, follow-up or video,
+ * from any computer) older than the install itself. One such row ends the ramp for
+ * good on this computer. Rows written after the install are this install's own work
+ * and prove nothing; an hour of margin covers the clocks. */
+function warmEvidence(rows, installTs, now) {
+  if (!Array.isArray(rows) || !installTs) return null;
+  const cut = installTs - LEDGER_HOUR_MS;
+  for (const r of rows) {
+    if (!r || !LEDGER_KINDS[r.kind]) continue;
+    const t = Date.parse(r.created_at) || 0;
+    if (t && t < cut && (now == null || t <= now + 5 * 60 * 1000)) return { at: t, kind: r.kind, machine: String(r.machine || "") };
+  }
+  return null;
+}
+/* The per-chat cap, in replies the model may still write. "stop" / "notify" = the cap
+ * itself; "close" keeps the LAST slot for a canned closing line (no model call), so a
+ * chat never holds more than maxRepliesPerConvo bot texts in any mode. cap 0 = off. */
+function convoCapLimit(settings) {
+  const cap = Math.max(0, Math.floor(num0(settings.maxRepliesPerConvo, 0)));
+  const mode = String(settings.convoCapBehavior || "stop");
+  return { cap, mode, limit: cap && mode === "close" ? Math.max(1, cap - 1) : cap }; // cap 1 + close = one reply, no line (a buyer always gets an answer first)
+}
+/* Bot texts already in the chat according to the Activity log — every computer, every
+ * install, within the log's 5-day retention: the text rows (replies and closing lines).
+ * Follow-ups and clips are not replies and are not counted (the dashboard says so). */
+function memTextCount(rows) {
+  return Array.isArray(rows) ? rows.filter((r) => r && r.kind === "text").length : 0;
+}
+/* Seller texts visible in the chat as the content script read it: its "You: …" lines
+ * (our clips read "You: [attachment]" and are not texts). The floor of the per-chat
+ * count on a computer that has no count of its own yet — a fresh install, no login, the
+ * cloud down, rows past retention — and it counts the owner's own typed messages too:
+ * a chat he is handling by hand fills up like any other. */
+function youLineCount(transcript) {
+  if (!transcript) return 0;
+  let n = 0;
+  for (const raw of String(transcript).split("\n")) {
+    const line = raw.trim();
+    if (!/^you:/i.test(line)) continue;
+    const body = line.replace(/^you:\s*/i, "").trim();
+    if (body && body.toLowerCase() !== "[attachment]") n++;
+  }
+  return n;
+}
+/* The break roll after a reply: 0 = no break; else its length in ms. `rnd`/`rnd2` are
+ * for the test; live they are Math.random(). */
+function cadenceBreakMs(settings, rnd, rnd2) {
+  if (!settings || !settings.humanCadence) return 0;
+  const chance = Math.min(1, Math.max(0, num0(settings.breakChance, 0)));
+  if (!(chance > 0)) return 0;
+  if ((rnd == null ? Math.random() : rnd) >= chance) return 0;
+  const lo = Math.max(0, num0(settings.breakMinMin, 0));
+  const hi = Math.max(lo, num0(settings.breakMaxMin, lo));
+  const min = lo + (hi - lo) * (rnd2 == null ? Math.random() : rnd2);
+  return Math.round(min * 60 * 1000);
+}
+/* The verdict every gate asks for. Pure: the ledger, the settings, the warm-up state
+ * and the break in — one object out. `ok` is the caps alone (a reply already being
+ * typed still goes out during a break); the break is reported for the scan (opens no
+ * chat while it lasts) and the alarms (parked). */
+function budgetVerdict(settings, items, now, warm, brk) {
+  now = now == null ? Date.now() : now;
+  const countVideos = settings.capsCountVideos === true;
+  const c = ledgerCounts(items, now, countVideos);
+  const hourCap = Math.max(0, Math.floor(num0(settings.hourlyCap, 0)));
+  const fullDayCap = Math.max(0, Math.floor(num0(settings.dailyCap, 0)));
+  const dayCap = effectiveDailyCap(settings, warm, now);
+  const warmDay = warmDayOf(settings, warm, now);
+  const warmDays = Math.max(0, Math.floor(num0(settings.warmupDays, 0)));
+  const warming = warmDay >= 0;
+  const breakUntil = brk && num0(brk.until, 0) > now ? num0(brk.until, 0) : 0;
+  let ok = true, reason = "";
+  if (hourCap && c.hour >= hourCap) { ok = false; reason = "hourly cap reached (" + c.hour + "/" + hourCap + " in the last 60 min)"; }
+  else if (dayCap && c.day >= dayCap) {
+    ok = false;
+    reason = warming
+      ? "warm-up daily cap reached (" + c.day + "/" + dayCap + ", day " + (warmDay + 1) + " of " + warmDays + ")"
+      : "daily cap reached (" + c.day + "/" + dayCap + " in the last 24 h)";
+  }
+  return {
+    ok, reason, hour: c.hour, day: c.day, hourCap, dayCap, fullDayCap, kinds: c.kinds, countVideos,
+    warming, warmDay, warmDays, warmDone: !!(warm && warm.done), warmupOn: !!settings.warmupEnabled, breakUntil,
+    installTs: warm ? num0(warm.installTs, 0) : 0, // the content script judges the inbox's age tags against it
+  };
+}
+/* ===== LEDGER END ===== */
 
-/* First-run timestamp — used to compute warm-up day for a fresh account. */
+/* First-run timestamp — day 0 of the warm-up for this install. */
 function getInstallTs() {
   return new Promise((resolve) => {
     chrome.storage.local.get(["installTs"], (res) => {
@@ -2039,39 +2192,105 @@ function getInstallTs() {
     });
   });
 }
-
-/* Effective daily cap: during warm-up, ramp linearly from warmupStartCap to
- * the full dailyCap over warmupDays. New accounts start gentle, looks organic. */
-async function effectiveDailyCap(settings) {
-  if (!settings.warmupEnabled) return settings.dailyCap;
-  const installTs = await getInstallTs();
-  const dayNum = Math.floor((Date.now() - installTs) / 86400000); // 0-based
-  if (dayNum >= settings.warmupDays) return settings.dailyCap;
-  const start = settings.warmupStartCap || 10;
-  const full = settings.dailyCap;
-  const frac = settings.warmupDays > 0 ? dayNum / settings.warmupDays : 1;
-  return Math.max(start, Math.round(start + (full - start) * frac));
+/* (storage) the ledger, the warm-up state and the break, in one read. */
+function ledgerRead() {
+  return new Promise((resolve) => {
+    chrome.storage.local.get([LEDGER_KEY, "installTs", "warmupDone", "cadenceBreak"], (r) => {
+      void chrome.runtime.lastError;
+      r = r || {};
+      const items = r[LEDGER_KEY] && Array.isArray(r[LEDGER_KEY].items) ? r[LEDGER_KEY].items : [];
+      resolve({ items, warm: { installTs: num0(r.installTs, 0), done: r.warmupDone || null }, brk: r.cadenceBreak || null });
+    });
+  });
 }
-
-async function checkRateLimit(settings) {
-  const now = Date.now();
-  const c = rollWindows(await getCounters(), now);
-  if (c.hourCount >= settings.hourlyCap) return { ok: false, reason: "hourly cap reached" };
-  const dayCap = await effectiveDailyCap(settings);
-  if (c.dayCount >= dayCap) {
-    const warming = dayCap < settings.dailyCap;
-    return { ok: false, reason: warming ? `warm-up daily cap reached (${dayCap})` : "daily cap reached" };
-  }
-  return { ok: true, counters: c };
+/* (storage) one delivered event into the ledger. Chained: two events from the same
+ * instant must not read the same snapshot and lose each other. */
+function ledgerNote(entry) {
+  const units = ledgerUnits(entry);
+  if (!units) return Promise.resolve(0);
+  const kind = entry.action;
+  ledgerNote.chain = (ledgerNote.chain || Promise.resolve()).then(() => new Promise((done) => {
+    try {
+      chrome.storage.local.get([LEDGER_KEY], (r) => {
+        if (chrome.runtime.lastError) { done(); return; }
+        const now = Date.now();
+        const items = ledgerPrune((r && r[LEDGER_KEY] && r[LEDGER_KEY].items) || [], now);
+        for (let i = 0; i < units; i++) items.push({ t: now, k: kind });
+        chrome.storage.local.set({ [LEDGER_KEY]: { items } }, () => { void chrome.runtime.lastError; done(); });
+      });
+    } catch (e) { done(); }
+  })).catch(() => { /* bookkeeping only */ });
+  return ledgerNote.chain.then(() => units);
 }
-
-async function incrementCounters() {
+/* (storage) the verdict for right now. */
+async function budgetState(settings) {
+  const s = await ledgerRead();
+  if (!s.warm.installTs) s.warm.installTs = await getInstallTs(); // first run of this install = warm-up day 0
+  return budgetVerdict(settings, s.items, Date.now(), s.warm, s.brk);
+}
+/* (storage) the break roll after a delivered reply. */
+function cadenceAfterReply(settings) {
+  const ms = cadenceBreakMs(settings);
+  if (!ms) return Promise.resolve(0);
   const now = Date.now();
-  const c = rollWindows(await getCounters(), now);
-  c.hourCount += 1;
-  c.dayCount += 1;
-  await setCounters(c);
-  return c;
+  return new Promise((resolve) => {
+    chrome.storage.local.get(["cadenceBreak"], (r) => {
+      const cur = r && r.cadenceBreak;
+      if (cur && num0(cur.until, 0) > now) { resolve(0); return; } // one break at a time
+      chrome.storage.local.set({ cadenceBreak: { at: now, until: now + ms, min: Math.round(ms / 60000) } }, () => {
+        void chrome.runtime.lastError;
+        LOG("human cadence: break of", Math.round(ms / 60000), "min — no new chat is opened until", new Date(now + ms).toLocaleTimeString());
+        resolve(ms);
+      });
+    });
+  });
+}
+/* (storage) the Activity rows of an opened chat double as the account's age: a bot row
+ * older than this install ends the warm-up for good. Fire-and-forget. */
+let warmDoneCache = null; // null = not read yet in this worker's life; false = not done; object = done
+async function warmDoneRead() {
+  if (warmDoneCache === null) warmDoneCache = await new Promise((r) => chrome.storage.local.get(["warmupDone"], (x) => r((x && x.warmupDone) || false)));
+  return warmDoneCache;
+}
+/* (storage) the ramp ends for good on this computer. Two kinds of evidence: a chat's
+ * cloud rows older than the install (noteWarmEvidence), or the inbox itself listing
+ * chats this account answered before the install (WARM_EVIDENCE_LOCAL, judged by the
+ * content script from the sidebar's age tags — no cloud read, no chat opened, so the
+ * day-0 cap can never hold a computer with nothing left to prove it wrong). */
+async function markWarmDone(ev) {
+  if (await warmDoneRead()) return false;
+  warmDoneCache = Object.assign({ at: Date.now() }, ev);
+  await new Promise((r) => chrome.storage.local.set({ warmupDone: warmDoneCache }, () => { void chrome.runtime.lastError; r(); }));
+  LOG("warm-up ended: " + (ev && ev.why));
+  return true;
+}
+/* (storage) the warm-up cap is holding this computer: say so in the Activity feed once a
+ * day, so the owner sees WHICH computer is ramping without a popup or a 🩺 — and the cure. */
+function noteWarmHold(budget) {
+  try {
+    chrome.storage.local.get(["warmHoldNotedAt"], (r) => {
+      if (chrome.runtime.lastError) return;
+      const at = (r && r.warmHoldNotedAt) || 0;
+      if (Date.now() - at < LEDGER_DAY_MS) return;
+      chrome.storage.local.set({ warmHoldNotedAt: Date.now() }, () => {
+        void chrome.runtime.lastError;
+        appendLog({ thread: "(system)", threadId: "", buyer: "(warm-up)", action: "video-status", reply: "warm-up holds this computer at " + budget.dayCap + " texts in 24 h (day " + (budget.warmDay + 1) + " of " + budget.warmDays + ") — if this account is not new, untick Warm-up mode in the dashboard (General tab); nothing else to do" });
+      });
+    });
+  } catch (e) { /* telemetry-grade */ }
+}
+async function noteWarmEvidence(settings, rows) {
+  try {
+    if (!settings || !settings.warmupEnabled || !Array.isArray(rows) || !rows.length) return;
+    if (await warmDoneRead()) return;
+    const installTs = await getInstallTs();
+    // the rows carry SERVER time, the install stamp this PC's: compare on server time
+    // (memSkewMs = server − local, from the PostgREST Date header), or a clock an hour
+    // ahead would read this install's own first rows as older than the install
+    const ev = warmEvidence(rows, installTs + memSkewMs, memNow());
+    if (!ev) return;
+    await markWarmDone({ evidenceAt: ev.at, kind: ev.kind, machine: ev.machine.slice(0, 60), why: "this account was already answered before this install (" + new Date(ev.at).toISOString() + ", " + ev.machine.slice(0, 60) + ")" });
+  } catch (e) { /* telemetry-grade */ }
 }
 
 /* Per-conversation reply counter (persisted, keyed by threadId). Counts how
@@ -4604,9 +4823,14 @@ chrome.alarms.onAlarm.addListener(async (alarm) => {
     LOG("alarm parked until the window opens", alarm.name, new Date(when).toLocaleString());
     return;
   }
-  const rl = await checkRateLimit(settings);
-  if (!rl.ok) {
-    LOG("alarm skipped:", rl.reason);
+  // (v0.21.86) A cap or a cadence break holds it too — parked, never dropped (the same
+  // rule as the window above): a visit check due while the hour is full comes back
+  // when the hour frees up.
+  const budget = await budgetState(settings);
+  if (!budget.ok || budget.breakUntil) {
+    const when = Date.now() + (budget.ok ? Math.max(60 * 1000, budget.breakUntil - Date.now()) + 60 * 1000 + Math.floor(Math.random() * 120 * 1000) : 15 * 60 * 1000 + Math.floor(Math.random() * 300 * 1000));
+    chrome.alarms.create(alarm.name, { when });
+    LOG("alarm parked:", budget.ok ? "on a break" : budget.reason, alarm.name, new Date(when).toLocaleString());
     return;
   }
 
@@ -4884,10 +5108,15 @@ async function buildDiagnostic() {
       (st.videoDoctorLast ? " | doctor(" + ageM(st.videoDoctorLast.at) + "): " + cut(st.videoDoctorLast.text, 640) : "")
     );
   }
-  const c = rollWindows(await getCounters(), now);
+  // (v0.21.86) the message ledger: what went out in the last 60 min / 24 h (sliding), the
+  // cap in force today (warm-up ramp included), the clips beside the texts, the break.
+  const b = await budgetState(settings);
   const tickd = st.debugTick || {};
   L.push(
-    "counters: hour=" + c.hourCount + " day=" + c.dayCount +
+    "caps: hour=" + b.hour + "/" + (b.hourCap || "inf") + " day=" + b.day + "/" + (b.dayCap || "inf") +
+    (b.warming ? "(warm-up d" + (b.warmDay + 1) + "/" + b.warmDays + ")" : b.warmDone ? "(warm-up done: account active before this install)" : b.warmupOn ? "(warm-up over)" : "(warm-up off)") +
+    " texts24h=" + (b.kinds.day.text + b.kinds.day.followup) + " clips24h=" + b.kinds.day.video + (b.countVideos ? "(counted)" : "(not counted)") +
+    " break=" + (b.breakUntil ? "until " + new Date(b.breakUntil).toLocaleTimeString() : "-") + " perChat=" + settings.maxRepliesPerConvo + "/" + (settings.convoCapBehavior || "stop") +
     " | mirror: " + (st.lastMirror ? (st.lastMirror.ok ? "ok " + ageM(st.lastMirror.at) : "FAIL " + cut(st.lastMirror.error, 40)) : "-") +
     " | tick: scan=" + (tickd.lastScanTime ? ageM(Date.parse(tickd.lastScanTime)) : "-") +
     " act=\"" + cut(tickd.lastAction, 60) + "\" vid=\"" + cut(tickd.videoLast, 60) + "\" err=\"" + cut(tickd.lastError, 60) + "\""
@@ -5137,8 +5366,7 @@ chrome.runtime.onMessage.addListener((msg, _sender, sendResponse) => {
         }
         case "GET_STATUS": {
           const settings = await getSettings();
-          const counters = rollWindows(await getCounters(), Date.now());
-          const dayCap = await effectiveDailyCap(settings);
+          const budget = await budgetState(settings); // (v0.21.86) the ledger's verdict: sliding windows, warm-up, break
           const lastMirror = await new Promise((r) => chrome.storage.local.get(["lastMirror"], (x) => r((x && x.lastMirror) || null)));
           const cloudStale = await new Promise((r) => chrome.storage.local.get(["cloudStale"], (x) => r((x && x.cloudStale) || null)));
           const cloudHold = await getAuthHold(); // (v0.21.78) why it is frozen, and whether waiting fixes it
@@ -5153,12 +5381,13 @@ chrome.runtime.onMessage.addListener((msg, _sender, sendResponse) => {
             cloudHoldLine: authHoldLine(cloudHold),
             enabled: settings.enabled,
             apiKeySet: !!settings.apiKey,
-            hourCount: counters.hourCount,
-            dayCount: counters.dayCount,
-            hourlyCap: settings.hourlyCap,
-            dailyCap: dayCap,
-            fullDailyCap: settings.dailyCap,
-            warming: dayCap < settings.dailyCap,
+            budget, // (v0.21.86) {ok, reason, hour, day, hourCap, dayCap, fullDayCap, kinds, countVideos, warming, warmDay, warmDays, warmDone, breakUntil}
+            hourCount: budget.hour, // the older names, same numbers (a popup of another build)
+            dayCount: budget.day,
+            hourlyCap: budget.hourCap,
+            dailyCap: budget.dayCap,
+            fullDailyCap: budget.fullDayCap,
+            warming: budget.warming,
             withinHours: withinBusinessHours(settings),
             lastMirror, // activity-log health: {at, ok, error} — surfaced in the popup
           });
@@ -5200,15 +5429,27 @@ chrome.runtime.onMessage.addListener((msg, _sender, sendResponse) => {
             sendResponse({ ok: true, skip: true, reason: "outside business hours" });
             break;
           }
-          const c = rollWindows(await getCounters(), Date.now());
-          if (settings.hourlyCap && c.hourCount >= settings.hourlyCap) {
-            sendResponse({ ok: true, skip: true, reason: "hourly cap reached" });
+          // (v0.21.86) the ledger's verdict: sliding hour / day windows, the warm-up
+          // ramp, 0 = unlimited — the same function every gate asks (see LEDGER).
+          const budget = await budgetState(settings);
+          if (!budget.ok) {
+            if (budget.warming) noteWarmHold(budget); // once a day, visible in the Activity feed
+            sendResponse({ ok: true, skip: true, held: true, reason: budget.reason });
             break;
           }
-          if (settings.dailyCap && c.dayCount >= settings.dailyCap) {
-            sendResponse({ ok: true, skip: true, reason: "daily cap reached" });
-            break;
-          }
+          // (v0.21.86) THE PER-CHAT CAP — the highest of three counts wins: this computer's own
+          // count, the seller texts visible in the chat as it was read ("You: …" lines of the
+          // wider read, clips excluded — a fresh install has no count of its own and may have
+          // no login yet; the owner's typed messages count too, the chat is then his) and, once
+          // the memory is read below, the chat's text rows in the Activity log (every computer,
+          // every install, within the log's 5-day retention).
+          const cc = convoCapLimit(settings);
+          let soFar = cc.cap ? Math.max(Math.floor(num0(msg.localReplies, 0)), youLineCount(dropTitleLines(msg.memContext, msg.threadName) || ctx)) : 0;
+          const capAnswer = () => {
+            memNote({ capHit: 1 });
+            sendResponse({ ok: true, skip: true, cap: true, replies: soFar, max: cc.cap, mode: cc.mode, reason: "reply cap reached for this chat (" + soFar + "/" + cc.cap + " seller texts, counted across every computer)" });
+          };
+          if (cc.cap && soFar >= cc.limit) { capAnswer(); break; }
           // (v0.21.71) THREAD MEMORY, before anything is billed or typed: the chat's
           // Activity rows (any computer) decide whether this message is already
           // answered / is ours / is being answered elsewhere. Nothing new is sent
@@ -5226,6 +5467,16 @@ chrome.runtime.onMessage.addListener((msg, _sender, sendResponse) => {
                 sendResponse({ ok: true, skip: true, memory: v.memory, reason: v.reason });
                 break;
               }
+              // (v0.21.86) the same rows are the account's age (a bot row older than this
+              // install ends the warm-up) and the chat's reply count across every
+              // computer and every install: the per-chat cap used to live in each
+              // install's own storage, so the Web Store build — a new extension id,
+              // empty storage — started every capped chat again at zero.
+              noteWarmEvidence(settings, memRows);
+              if (cc.cap) {
+                soFar = Math.max(soFar, memTextCount(memRows));
+                if (soFar >= cc.limit) { memNote({ capCloud: 1 }); capAnswer(); break; }
+              }
             }
             memOthers = await memRecentRows();
           }
@@ -5242,8 +5493,7 @@ chrome.runtime.onMessage.addListener((msg, _sender, sendResponse) => {
           // gates above ran again exactly like a retry, but no new API call is paid.
           // (The Activity row is written by the content script on delivery.)
           if (replay) {
-            await incrementCounters();
-            sendResponse({ ok: true, text: msg.cachedText });
+            sendResponse({ ok: true, text: msg.cachedText }); // (v0.21.86) counted on delivery, like any reply
             break;
           }
           const memory = memOn ? memoryLine(settings, memCtx, memRows, memOthers, msg.threadId) : "";
@@ -5285,7 +5535,8 @@ chrome.runtime.onMessage.addListener((msg, _sender, sendResponse) => {
             sendResponse({ ok: true, skip: true, reason: "empty reply" });
             break;
           }
-          await incrementCounters();
+          // (v0.21.86) nothing is counted here: the ledger counts the reply when the
+          // content script DELIVERS it (LOG_EVENT), the same moment its Activity row is written.
           // (v0.21.74) The owner's text had no answer to this one: tell the dashboard
           // (hidden row, kind "gap", no thread id so the chat memory never sees it).
           if (parsed.gap) mirrorToCloud({ action: "gap", thread: msg.threadName, threadId: null, buyer: msg.buyerMessage, reply: text });
@@ -5309,6 +5560,19 @@ chrome.runtime.onMessage.addListener((msg, _sender, sendResponse) => {
           const now = memNow();
           const v = memVerdict(rows, { buyerMessage: msg.buyerMessage, transcript: msg.transcript, machineId, now, phase: "pre" });
           if (v) { memNote({ [v.memory]: 1 }); sendResponse({ ok: true, skip: true, memory: v.memory, reason: v.reason }); break; }
+          // (v0.21.86) the chat may have reached its cap during our wait (another computer
+          // delivered): the fresh rows decide, nothing is typed past the cap.
+          {
+            const cc = convoCapLimit(settings);
+            if (cc.cap) {
+              const so = Math.max(Math.floor(num0(msg.localReplies, 0)), youLineCount(dropTitleLines(msg.transcript, msg.threadName)), memTextCount(rows));
+              if (so >= cc.limit) {
+                memNote({ capCloud: 1 });
+                sendResponse({ ok: true, skip: true, cap: true, replies: so, max: cc.cap, mode: cc.mode, reason: "reply cap reached for this chat (" + so + "/" + cc.cap + " bot texts, counted across every computer)" });
+                break;
+              }
+            }
+          }
           // Going ahead: renew our claim when it is missing (a replay long after its
           // first claim, a machine that was unhealthy at generation) or older than
           // 5 min (the videos-first path can attach for minutes before the text).
@@ -5356,20 +5620,19 @@ chrome.runtime.onMessage.addListener((msg, _sender, sendResponse) => {
           // follow-up only ever sends clean text.
           const settings = await getSettings();
           if (!settings.smartFollowupEnabled) {
-            sendResponse({ ok: true, skip: true, reason: "smart follow-up off" });
+            sendResponse({ ok: true, skip: true, held: true, reason: "smart follow-up off" });
             break;
           }
           if (!withinNudgeHours(settings)) { // (v0.21.75) a nudge the bot starts keeps to the window; replies do not
-            sendResponse({ ok: true, skip: true, reason: "outside the follow-up window" });
+            sendResponse({ ok: true, skip: true, held: true, reason: "outside the follow-up window" });
             break;
           }
-          const cf = rollWindows(await getCounters(), Date.now());
-          if (settings.hourlyCap && cf.hourCount >= settings.hourlyCap) {
-            sendResponse({ ok: true, skip: true, reason: "hourly cap reached" });
-            break;
-          }
-          if (settings.dailyCap && cf.dayCount >= settings.dailyCap) {
-            sendResponse({ ok: true, skip: true, reason: "daily cap reached" });
+          // (v0.21.86) the ledger's verdict (sliding windows, warm-up, 0 = unlimited).
+          // `held` = not a verdict on the chat: the content script keeps its clock and
+          // its skip count untouched and simply asks again on a later pass.
+          const fbudget = await budgetState(settings);
+          if (!fbudget.ok) {
+            sendResponse({ ok: true, skip: true, held: true, reason: fbudget.reason });
             break;
           }
           // Replay of an already-billed follow-up whose send was aborted — same
@@ -5403,7 +5666,7 @@ chrome.runtime.onMessage.addListener((msg, _sender, sendResponse) => {
             }
             if (settings.humanTouch !== false) ftext = humanTouch(ftext, { transcript: fctx, seed: msg.threadId, ownerText: ownerTextOf(settings) });
           }
-          await incrementCounters();
+          // (v0.21.86) counted by the ledger on delivery (LOG_EVENT), not here.
           // No appendLog here: the content script logs the follow-up when it is
           // actually DELIVERED (LOG_EVENT). Logging at generation time too meant
           // every follow-up showed twice in the Activity feed (same minute, same
@@ -5559,8 +5822,44 @@ chrome.runtime.onMessage.addListener((msg, _sender, sendResponse) => {
         }
         case "LOG_EVENT": {
           // content.js logs follow-ups and failures here.
-          await appendLog(msg.entry || {});
+          const entry = msg.entry || {};
+          await appendLog(entry);
+          // (v0.21.86) the same event feeds the message ledger (the caps count delivered
+          // messages: text, followup, video × n) and, after a reply, the cadence roll.
+          await ledgerNote(entry);
+          if (entry.action === "text") await cadenceAfterReply(await getSettings());
           sendResponse({ ok: true });
+          break;
+        }
+        case "WARM_EVIDENCE_LOCAL": {
+          // (v0.21.86) the content script counted, in the inbox list, chats this account
+          // answered ("You: …") with an age tag older than this install. A brand-new account
+          // has none by definition, so ONE is an established account: the ramp ends (see
+          // markWarmDone) — a computer held at 10 a day for a week costs far more than a
+          // misread row that lets a new account skip its ramp.
+          const n = Math.floor(num0(msg.n, 0));
+          const settings = await getSettings();
+          let marked = false;
+          if (n >= 1 && settings.warmupEnabled) marked = await markWarmDone({ kind: "inbox", n, why: "the inbox already listed " + n + " chat(s) answered before this install" });
+          sendResponse({ ok: true, marked, done: !!(await warmDoneRead()) });
+          break;
+        }
+        case "CAP_NOTIFY": {
+          // (v0.21.86) "Notify me to take over": once per chat — a notification and a
+          // [HUMAN] Activity row, so the dashboard shows who is waiting past the cap.
+          const tid = String(msg.threadId || "");
+          const seen = await getCapNotified();
+          for (const k of Object.keys(seen)) if (Date.now() - num0(seen[k], 0) > 30 * LEDGER_DAY_MS) delete seen[k]; // a month of chats is plenty
+          let fresh = false;
+          if (tid && !seen[tid]) {
+            fresh = true;
+            seen[tid] = Date.now();
+            await new Promise((r) => chrome.storage.local.set({ capNotified: seen }, () => { void chrome.runtime.lastError; r(); }));
+            const why = "reply cap reached (" + (msg.replies || "?") + "/" + (msg.cap || "?") + ") and the buyer is still writing — take over this chat";
+            notifyHuman(why, msg.threadName);
+            await appendLog({ thread: msg.threadName, threadId: tid, buyer: "(reply cap)", action: "human", reply: "[HUMAN] " + why });
+          }
+          sendResponse({ ok: true, notified: fresh });
           break;
         }
         case "GET_LOG": {

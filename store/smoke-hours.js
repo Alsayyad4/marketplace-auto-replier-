@@ -58,7 +58,7 @@ const alarmH = between(bg, "chrome.alarms.onAlarm.addListener(async (alarm) => {
 ok(/if \(!withinNudgeHours\(settings\)\) \{\s*\n\s*const when = nextNudgeWindowStart\(settings\);\s*\n\s*chrome\.alarms\.create\(alarm\.name, \{ when \}\);/.test(alarmH), "a follow-up or visit alarm due outside the window is re-armed for the opening, not dropped");
 ok(!/LOG\("alarm skipped: outside business hours"/.test(bg), "the old 'alarm skipped: outside business hours' drop is gone");
 ok(/if \(!alarm\.name\.startsWith\(ALARM_PREFIX\) && !alarm\.name\.startsWith\(VISIT_PREFIX\)\) return;/.test(alarmH), "…and only the follow-up / visit alarms are parked (the periodic alarms have their own listeners)");
-ok(/if \(!withinNudgeHours\(settings\)\) \{ \/\/ \(v0\.21\.75\)[^\n]*\n\s*sendResponse\(\{ ok: true, skip: true, reason: "outside the follow-up window" \}\);/.test(bg), "the smart follow-up (a message the bot starts) keeps to the window");
+ok(/if \(!withinNudgeHours\(settings\)\) \{ \/\/ \(v0\.21\.75\)[^\n]*\n\s*sendResponse\(\{ ok: true, skip: true, (?:held: true, )?reason: "outside the follow-up window" \}\);/.test(bg), "the smart follow-up (a message the bot starts) keeps to the window"); // (v0.21.86) held = the chat's clock is untouched
 ok(/noteTeaching\(settings\);[^\n]*\n\s*if \(!withinBusinessHours\(settings\)\) \{\s*\n\s*sendResponse\(\{ ok: true, skip: true, reason: "outside business hours" \}\);/.test(bg), "a REPLY still passes withinBusinessHours — which only gates when the owner opted into a window");
 const reads = (bg.match(/settings\.businessHoursEnabled|\.businessHoursEnabled\b/g) || []).length;
 ok(reads === 0, "nothing in background.js READS businessHoursEnabled any more (occurrences outside DEFAULTS: " + reads + ")");
