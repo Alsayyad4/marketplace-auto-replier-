@@ -9,7 +9,16 @@ all chrome.debugger/CDP work) + Supabase dashboard in docs/. Live branch:
   permissions ships OFF by default behind a cloud setting and goes to ONE machine first.
 - The operator wants zero manual steps in normal operation.
 
-## Known state (v0.21.86)
+## Known state (v0.21.87 on the branch; .86 LIVE on the Web Store)
+- SETTINGS → ACTIVITY LOG (.87, Oct 19 2026, on the branch, NOT submitted — batch it with the
+  next release): that tab is THIS install's `replyLog` only (per computer, per extension id —
+  the store copy starts empty; written on delivery). An empty list now explains itself
+  (options.js `emptyLogLines` / `explainEmptyLog`, `#logWhy`): install date, Bot ON/OFF (a
+  new copy starts OFF), cloud login, API key, Messenger tab (`GET_STATUS` `installTs` +
+  `messengerTabs`), today's count, link to the dashboard's Activity — the account-wide log.
+  `store/smoke-logwhy.js`. Web Store probes need `prodversion` + `acceptformat` or the update
+  server answers `noupdate` for every version (the item is fine). Release = HANDOFF
+  "Build / test / ship"; .86 was approved between Oct 14 and 19.
 - THE LIMITS ARE THE LIMITS (.86, Oct 14 2026, operator: "the newest Chrome store extension is
   not respecting the limit of messages … every setting box … the learning phase"). The old
   counters counted a reply at GENERATION (aborted = counted, replay = twice), never the

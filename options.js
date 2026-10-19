@@ -379,6 +379,61 @@
       tbody.appendChild(tr);
     }
   }
+  // (v0.21.87) An empty list used to be a bare "No activity logged yet." On a Web Store
+  // install that is the normal first sight: the store copy is a new extension id with a
+  // new, empty copy of this log, and the list only ever shows what THIS computer sent.
+  // The owner read it as the bot being broken. Say what this computer is doing instead:
+  // since when this copy exists, whether it is ON, logged in, has the key and a
+  // Messenger tab — and where every computer's activity is.
+  const DASHBOARD_URL = "https://alsayyad4.github.io/marketplace-auto-replier-/docs/";
+  function emptyLogLines(s, c, now) {
+    const lines = [];
+    let since = "";
+    try { if (s.installTs) since = " — this copy of SubSell was installed here on " + new Date(s.installTs).toLocaleDateString(); } catch (e) { since = ""; }
+    lines.push("Nothing has been sent from this computer yet" + since + ".");
+    lines.push(s.enabled
+      ? "Bot: ON ✓"
+      : "Bot: OFF — this computer answers nobody until you press \"Turn ON\" in the SubSell popup (the toolbar icon).");
+    if (c) {
+      lines.push(c.loggedIn
+        ? "Cloud login: " + (c.email || "logged in") + " ✓" + (c.holdLine ? " (" + c.holdLine + ")" : "")
+        : "Cloud login: none — log in on the General tab so this computer gets the teaching, the API key and the videos.");
+    }
+    lines.push(s.apiKeySet
+      ? "API key: set ✓"
+      : "API key: missing — nothing can be answered without it; it comes with the cloud login, or paste it on the General tab.");
+    if (typeof s.messengerTabs === "number" && s.messengerTabs >= 0) {
+      lines.push(s.messengerTabs > 0
+        ? "Messenger: " + s.messengerTabs + " tab(s) open ✓"
+        : "Messenger: no tab open — press \"Open Marketplace\" in the popup; the bot lives in that tab.");
+    }
+    const day = s.budget && typeof s.budget.day === "number" ? s.budget.day : (typeof s.dayCount === "number" ? s.dayCount : null);
+    if (day != null) {
+      lines.push(day > 0
+        ? "Counted today from this computer: " + day + " — but none listed here: the log was cleared, or press Refresh."
+        : "Sent today from this computer: 0.");
+    }
+    return lines;
+  }
+  function explainEmptyLog(show) {
+    const el = $("logWhy");
+    if (!el) return;
+    if (!show) { el.style.display = "none"; return; }
+    chrome.runtime.sendMessage({ type: "GET_STATUS" }, (s) => {
+      if (chrome.runtime.lastError || !s || !s.ok) { el.style.display = "none"; return; }
+      chrome.runtime.sendMessage({ type: "CLOUD_STATUS" }, (c) => {
+        const cloud = !chrome.runtime.lastError && c && c.ok ? c : null;
+        el.textContent = emptyLogLines(s, cloud, Date.now()).join("\n") + "\nEvery computer's activity, together: ";
+        const a = document.createElement("a");
+        a.href = DASHBOARD_URL;
+        a.target = "_blank";
+        a.rel = "noopener";
+        a.textContent = "the web dashboard → Activity";
+        el.appendChild(a);
+        el.style.display = "";
+      });
+    });
+  }
   function loadLog() {
     $("logStatus").textContent = "Loading…";
     chrome.runtime.sendMessage({ type: "GET_LOG" }, (resp) => {
@@ -388,6 +443,7 @@
       }
       renderLog(resp.log);
       $("logStatus").textContent = `${resp.log.length} entr${resp.log.length === 1 ? "y" : "ies"}.`;
+      explainEmptyLog(resp.log.length === 0);
     });
   }
   $("refreshLog").addEventListener("click", loadLog);

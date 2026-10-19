@@ -5371,8 +5371,18 @@ chrome.runtime.onMessage.addListener((msg, _sender, sendResponse) => {
           const cloudStale = await new Promise((r) => chrome.storage.local.get(["cloudStale"], (x) => r((x && x.cloudStale) || null)));
           const cloudHold = await getAuthHold(); // (v0.21.78) why it is frozen, and whether waiting fixes it
           const door = await new Promise((r) => chrome.storage.local.get(["cloudKeyDoor", "memStats", "tabClosed", "keepWindowsRestored"], (x) => r(x || {}))); // (v0.21.79) what still arrives through the account key; (v0.21.80) the calm computer
+          // (v0.21.87) the Options page's EMPTY Activity log explains itself with these two:
+          // since when this copy exists, and whether the bot has a Messenger tab to live in
+          const installTs = await getInstallTs();
+          const messengerTabs = await new Promise((r) => {
+            try {
+              chrome.tabs.query({ url: ["https://*.messenger.com/*", "https://www.facebook.com/messages/*", "https://www.facebook.com/marketplace/*"] }, (t) => r(chrome.runtime.lastError ? -1 : (t || []).length));
+            } catch (e) { r(-1); }
+          });
           sendResponse({
             ok: true,
+            installTs,
+            messengerTabs, // -1 = could not count
             cloudStale, // non-null = cloud sync frozen (auth dead) — settings/videos no longer updating
             cloudHold,
             cloudKeyDoor: door.cloudKeyDoor || null,
