@@ -85,7 +85,7 @@ const withWrote = (cfg) => {
   ok(p.includes("<owner_closing_goal>") && p.includes("Bring them to the shop to test the phone in their hands."), "the owner's own closing goal is the closing section");
   ok(p.includes("Everything you know about this business is what its owner wrote") && p.includes("do not guess"), "the contract: the owner's text is all it knows; a gap is never filled by a guess");
   ok(p.includes("Say you would rather confirm it at the shop than tell them something wrong") && p.includes("do not stretch a line beyond what it says") && p.includes("Give no reason of your own for not knowing"), "an uncovered question gets an honest way out: no invention, no stretched line, no made-up reason");
-  ok(p.includes("You are not told which post the buyer is writing from") && p.includes("a post's title is an advert, not a stock list"), "the model is told it does not know the post, and that a headline is not stock");
+  ok(p.includes("you are also told which listing the buyer is writing from (its title, with the price removed)") && p.includes("never from the title, which is an advert and not a stock list") && !p.includes("You are not told which post"), "the model is told it does not know the post, and that a headline is not stock");
   ok(p.includes("do not claim to be a human") && !p.includes("You are just the human seller"), "it stays in role without claiming to be human when asked");
   ok(B.buildSystemPrompt(Object.assign({}, base)) === p, "same settings → byte-identical prompt");
   console.log("        (owner-only prompt for this config: ~" + Math.ceil(p.length / 3.5) + " est. tokens)");
@@ -474,7 +474,8 @@ const withWrote = (cfg) => {
     ok(sent.system[0].text.includes("Tone (a default, until the owner writes instructions)") && !sent.system[0].text.includes("Never discount more than 10%"), "…and an empty box in the dashboard is the neutral line there too");
   }
   {
-    const Q = new Function("session", "localStorage", between(app, "  const gapKey = (t) =>", "  let gapRows = [];") + "\nreturn { gapKey, gapList };")(null, null);
+    const LF = new Function(between(app, "/* ==== LISTING-MIRROR-BEGIN", "/* ==== LISTING-MIRROR-END ==== */") + "\nreturn listingFromTitle;")(); // (v0.21.88) the gap list names the listing
+    const Q = new Function("session", "localStorage", "listingFromTitle", between(app, "  const gapKey = (t) =>", "  let gapRows = [];") + "\nreturn { gapKey, gapList };")(null, null, LF);
     const rowsG = [
       { created_at: "2026-10-05T15:00:00Z", buyer_text: "Vous prenez les cartes de crédit?", bot_text: "je te confirme ça au shop" },
       { created_at: "2026-10-05T14:00:00Z", buyer_text: "vous prenez les cartes de credit", bot_text: "le mieux c'est de confirmer au shop" },

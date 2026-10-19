@@ -2495,8 +2495,14 @@ function lessonKeys(text) {
   }
   return out;
 }
-function lessonFor(settings, buyerMessage) {
-  const list = (Array.isArray(settings && settings.coaching) ? settings.coaching : []).filter((c) => c && !coachIsRule(c) && c.buyer && coachUsable(c));
+function lessonFor(settings, buyerMessage, item, opts) {
+  // (v0.21.88) `item` = the listing the buyer writes from (listingFromTitle): a lesson
+  // about another model, or tied to another item, is left out (lessonClash);
+  // `opts.skipSubjects` = subjects not to teach right now (availability lessons on a
+  // unit the owner marked gone)
+  const skip = (opts && Array.isArray(opts.skipSubjects)) ? opts.skipSubjects : [];
+  const list = (Array.isArray(settings && settings.coaching) ? settings.coaching : []).filter((c) => c && !coachIsRule(c) && c.buyer && coachUsable(c) && !lessonClash(c, buyerMessage, item) &&
+    !(skip.length && [...lessonKeys(c.buyer)].some((k) => skip.includes(k))));
   const q = lessonNorm(buyerMessage);
   if (!q || !list.length) return "";
   const qt = q.split(" ");
@@ -2528,18 +2534,23 @@ function lessonFor(settings, buyerMessage) {
       : `The owner corrected the bot on this same kind of message. The owner's answer: "${one(best.better, 300)}".` + (best.note ? ` The lesson: ${one(best.note, 120)}.` : "") + tail);
   }
   // Same subject, other words (or the other language): up to two more, the newest first on a tie.
-  const qk = lessonKeys(buyerMessage);
+  // (v0.21.88) the listing's words count toward the match ("dispo?" on an iPhone 13
+  // chat recalls what the owner taught about the iPhone 13's availability), but the
+  // SUBJECT has to come from the message itself: the item alone must not drag a price
+  // lesson into a delivery question.
+  const mk = lessonKeys(buyerMessage);
+  const qk = lessonKeys(String(buyerMessage || "") + (item ? " " + item : ""));
   if (qk.size) {
     const rel = [];
     list.forEach((c, i) => {
       // not the strong match itself, not an older lesson on that same message (it was superseded), not the same answer again
       if (c === best || (best && (lessonNorm(c.buyer) === lessonNorm(best.buyer) || lessonNorm(answer(c)) === lessonNorm(answer(best))))) return;
-      const ck = lessonKeys(c.buyer);
+      const ck = lessonKeys(String(c.buyer) + (c.item ? " " + c.item : "")); // (v0.21.88) the item a lesson is tied to is its subject too
       if (!ck.size) return;
-      let shared = 0, subject = false;
-      for (const k of qk) if (ck.has(k)) { shared++; if (k.charAt(0) === "#") subject = true; }
+      let shared = 0, subject = false, own = 0;
+      for (const k of qk) if (ck.has(k)) { shared++; if (k.charAt(0) === "#" && mk.has(k)) subject = true; if (mk.has(k)) own++; }
       const score = shared / Math.min(qk.size, ck.size);
-      if (score >= 0.5 && (subject || shared >= 2)) rel.push({ c, i, score });
+      if (score >= 0.5 && (subject || own >= 2)) rel.push({ c, i, score });
     });
     rel.sort((a, b) => b.score - a.score || b.i - a.i);
     const seen = new Set(), top = [];
@@ -2555,6 +2566,144 @@ function lessonFor(settings, buyerMessage) {
     }
   }
   return lines.join("\n");
+}
+/* (v0.21.88) WHICH LISTING THE BUYER IS WRITING FROM — WITHOUT ITS PRICE.
+ * A Marketplace chat is named "Buyer · listing headline", and the headline is the
+ * owner's own post title, price included. Since .73 that title is not a line of the
+ * chat, and the model was told it does not know the post and must not guess a model
+ * — so "is it available?" got "which model are you looking for?". The owner (Oct 19
+ * 2026): "check the headline of what the customer is looking for but not the price …
+ * at least it answers knowing what the customer is asking for". Now, in the USER turn
+ * (the cached sheet stays byte-stable): the headline with every amount removed is
+ * given as the item the buyer means, and it is also the KEY into the owner's own
+ * Listings rows and price-list lines, so the price and the availability come from the
+ * owner's teaching for THAT item, never from the advert. The same model key tells a
+ * lesson about another model apart (lessonFor). Pure; store/smoke-listing.js. */
+// An amount: "650", "1099", "1 099", "1,099.00". A thousands group with a SPACE only
+// after a one-digit lead, so "13 650$" is the model 13 and the price 650.
+const PRICE_AMOUNT = String.raw`(?<![\d.,])(?:\d{2,3}(?:[,.]\d{3})*|\d(?:[ ,.]?\d{3}(?!\s?(?:go|gb|to|tb)\b))*)(?:[.,]\d{2})?(?!\d)`;
+// After a "$"-led amount: never the storage, spec or duration number that follows a
+// price ("650$ 128 Go" is a price, then a storage — the "$" belongs to the 650).
+const PRICE_NOT_SPEC = String.raw`(?!\s?(?:go|gb|to|tb|g|hz|mp|ans?|mois|x)\b|\s?\/|[.,]\d)`;
+const PRICE_RANGE = String.raw`(?:\s?[-–à]\s?` + PRICE_AMOUNT + `)?`; // 650-700$, 650 à 700$
+const PRICE_RES = [
+  new RegExp(String.raw`\b(?:prix|price|asking)\s*[:=]?\s*` + PRICE_AMOUNT + PRICE_RANGE + String.raw`\s?(?:\$|cad|usd|€)?`, "gi"), // prix: 650 — first, or the label is left behind
+  new RegExp(String.raw`(?:ca|us|c)?\s?(?<!\d)\$\s?` + PRICE_AMOUNT + PRICE_NOT_SPEC + PRICE_RANGE + String.raw`(?:\s?(?:cad|usd))?`, "gi"), // $650, CA$ 1,099.00, C$650
+  new RegExp(PRICE_AMOUNT + PRICE_RANGE + String.raw`\s?(?:(?:ca|us|c)?\$|€)(?:\s?(?:cad|usd))?`, "gi"),           // 650$, 1 099,99 $, 650 C$, 650€
+  new RegExp(String.raw`\b` + PRICE_AMOUNT + PRICE_RANGE + String.raw`\s?(?:cad|usd|dollars?|piasses?|balles?|bucks|euros?|(?:tx|taxes?)(?:\s?(?:incl\.?|incluses?|included))?)\b`, "gi"), // 650 CAD, 650 dollars, 650 tx incl
+  new RegExp(String.raw`\b(?:prix|price|asking)\s*[:=]\s*(?=[,;.)]|$)`, "gi"),                                  // a label left alone
+  new RegExp(String.raw`\b(?:tx|taxes?)\s?(?:incl\.?|incluses?|included)\b`, "gi"),                              // "tx incl" left alone
+];
+function stripPrices(text) {
+  let s = String(text == null ? "" : text);
+  for (const re of PRICE_RES) s = s.replace(re, " ");
+  return s.replace(/\(\s*\)/g, " ").replace(/\s+/g, " ").replace(/\s+([,;:])/g, "$1").replace(/([,;:])(?:\s*[,;:])+/g, "$1").replace(/[\s\-–—:|,;!?.·]+$/g, "").replace(/^[\s\-–—:|,;!?·]+/g, "").trim();
+}
+// Advert words: haggling, urgency, warranty claims. The title identifies the item;
+// what it promises is the owner's sections' business (a "négociable" in a title made
+// the model offer to negotiate).
+const ADVERT_RE = /\b(?:non\s+)?n[ée]go(?:ciable|tiable|cier)?s?\b|\bn[ée]g\.?(?=\s|$)|\bobo\b|\bor best offer\b|\bprix ferme\b|\bferme\b|\bfirm\b|\burgent\b|(?<!\p{L})[àa] vendre\b|\bfor sale\b|\bwow\b|\bdeal\b|\baubaine\b|\bsp[ée]cial\b|\bpromo(?:tion)?\b|\brabais\b|\bdiscount\b|\bcheap\b|\bpas cher\b|\bmeilleur prix\b|\bbest price\b|\bmust go\b|\bliquidation\b|\bclearance\b|\b\d{1,2}\s*(?:ans?|mois|years?|months?)\s*(?:de\s*)?(?:garantie|warranty|guarantee)\b|\b(?:garantie|warranty|guarantee)\b(?:\s*(?:de\s*)?\d+\s*(?:ans?|mois|years?|months?))?/giu;
+// The headline alone (what follows the first "·" of "Buyer · headline"), prices and
+// advert words out, the sidebar's time tag out. "" when the label is not a
+// Marketplace chat.
+function listingFromTitle(threadName) {
+  const s = String(threadName == null ? "" : threadName);
+  const cut = s.indexOf("·");
+  if (cut < 1) return "";
+  let item = s.slice(cut + 1).replace(/\s*[·•]\s*\d{1,3}\s?(?:min|m|h|hr|j|d|sem|w|y)\b.*$/i, "").replace(/\s+/g, " ").trim();
+  item = stripPrices(stripPrices(item).replace(ADVERT_RE, " "));
+  return item.length >= 2 ? item : "";
+}
+// A model's identity: its number ("13", "s24", "a54", "4a", "16e"), its qualifiers
+// (pro max plus mini ultra se xr xs x air lite fe edge note fold flip) and its
+// storage. Brand words only help. Pure.
+const MODEL_QUALIFIERS = new Set("pro max plus mini ultra se xr xs x air lite fe edge note fold flip".split(" "));
+const MODEL_BRANDS = new Set("iphone ipad ipod macbook imac airpods watch galaxy pixel samsung apple google huawei xiaomi oneplus motorola moto lg sony playstation ps xbox switch nintendo tab".split(" "));
+const BRAND_ALIAS = { galaxy: "samsung", google: "pixel", moto: "motorola", ps: "playstation" }; // one family, two names
+// Numbers that are not a model: durations, grades, counts, percentages, screen sizes,
+// radio and spec units. Removed before the model's number is read.
+const SPEC_RE = /\b\d{1,2}\s*(?:ans?|mois|jours?|years?|months?|yrs?)\b|\b\d{1,2}\s*\/\s*10\b|\b(?:x\s*\d{1,2}|\d{1,2}\s*x)\b|\d{1,3}\s*%|\b\d+(?:[.,]\d+)?\s*(?:pouces?|po|inch(?:es)?)\b|\b(?:3g|4g|5g|lte|nfc)\b|\b\d{2,4}\s?(?:hz|mp|mah|w)\b/giu;
+function modelKeys(text) {
+  const out = { digits: new Set(), quals: new Set(), brands: new Set(), storage: "", words: new Set() };
+  const words = lessonNorm(stripPrices(String(text == null ? "" : text)).replace(SPEC_RE, " ")).split(" ").filter(Boolean);
+  for (let i = 0; i < words.length; i++) {
+    const w = words[i], next = words[i + 1] || "";
+    const size = w.match(/^(64|128|256|512|1024)(gb|go)?$/) || w.match(/^([12])(tb|to)$/);
+    if (size) { if (!out.storage) out.storage = size[1]; continue; }
+    if (/^[12]$/.test(w) && /^(tb|to)$/.test(next)) { if (!out.storage) out.storage = w; i++; continue; } // "1 To"
+    if (/^(64|128|256|512|1024)$/.test(w) && /^(gb|go)$/.test(next)) { if (!out.storage) out.storage = w; i++; continue; }
+    if (/^\d{1,2}$/.test(w) || /^[a-z]\d{1,3}[a-z]?$/.test(w) || /^\d{1,2}[a-z]{1,2}$/.test(w)) { out.digits.add(w); continue; }
+    if (MODEL_QUALIFIERS.has(w)) out.quals.add(w);
+    else if (MODEL_BRANDS.has(w)) out.brands.add(BRAND_ALIAS[w] || w);
+    else if (w.length >= 3 && !LESSON_STOP.has(w)) out.words.add(w); // "oled", "lite", "2022" — the no-number models' variants
+  }
+  return out;
+}
+const sameSet = (a, b) => a.size === b.size && [...a].every((x) => b.has(x));
+// Same model = same number(s) and the same qualifiers (a 13 Pro is not a 13 Pro Max).
+// A text with a model number never matches one without. With no number on either
+// side (iPhone SE, Switch OLED) the family must be shared and no variant word may
+// contradict (OLED ≠ Lite; "SE 2022" is still the SE).
+function sameModel(a, b) {
+  const none = { same: false, storageMatch: false };
+  if (a.brands.size && b.brands.size && ![...a.brands].some((x) => b.brands.has(x))) return none;
+  if (!sameSet(a.quals, b.quals)) return none;
+  if (a.digits.size || b.digits.size) {
+    if (!a.digits.size || !b.digits.size || !sameSet(a.digits, b.digits)) return none;
+  } else {
+    if (!(a.brands.size && b.brands.size) && !a.quals.size) return none;
+    if (a.words.size && b.words.size && ![...a.words].some((x) => b.words.has(x))) return none;
+  }
+  return { same: true, storageMatch: !a.storage || !b.storage || a.storage === b.storage };
+}
+// The owner's own entry for this item: the best Listings row (same model; same storage
+// and available first) and the price-list lines about the same model.
+function ownerEntryFor(settings, item) {
+  const k = modelKeys(item);
+  const prices = String((settings && settings.priceList) || "");
+  const hidePrices = !!(settings && settings.noExactPrices) && !prices.trim();
+  let listing = null, best = -1, storageMatch = true;
+  (Array.isArray(settings && settings.listings) ? settings.listings : []).filter(Boolean).forEach((l, i) => {
+    const m = sameModel(k, modelKeys([l.title, l.model, l.storage].map((x) => (x == null ? "" : String(x))).join(" ")));
+    if (!m.same) return;
+    const score = (m.storageMatch ? 2 : 0) + (l.available !== false ? 1 : 0) + i / 1000;
+    if (score > best) { best = score; listing = l; storageMatch = m.storageMatch; }
+  });
+  const priceLines = prices.split("\n").map((s) => s.trim()).filter((s) => s && sameModel(k, modelKeys(s)).same).slice(0, 3);
+  return { listing, storageMatch, priceLines, hidePrices };
+}
+// `opts.hasLesson` = a lesson of the owner's sits beside the message (then a price may
+// come from it, and no [GAP] is asked for); `opts.followup` = the follow-up decision
+// (a nudge must never start with [GAP]: the handler reads a leading token as "skip").
+function listingContext(settings, threadName, opts) {
+  opts = opts || {};
+  const item = listingFromTitle(threadName);
+  if (!item) return "";
+  const one = (s, n) => { s = String(s == null ? "" : s).replace(/\s+/g, " ").trim(); return s.length > n ? s.slice(0, n) + "…" : s; };
+  const L = [`The buyer is writing from this listing: "${one(item, 140)}". That is what "this", "it", "the phone" or an unnamed model means, so answer about this item (when the buyer names another model, answer about the one they name). The title only tells you which item (model, storage, colour): its price was removed on purpose, and anything else it claims is advert wording, not a fact. The price and the availability of this item come only from the owner's sections, never from a post title.`];
+  const e = ownerEntryFor(settings, item);
+  if (e.listing || e.priceLines.length) {
+    const gone = !!(e.listing && e.listing.available === false);
+    if (e.listing) {
+      const l = e.listing;
+      L.push(`The owner's own entry for this item: "${one(l.title || l.model || "item", 80)} | ${one(l.storage, 20)} | ${one(l.condition, 40)}` + (e.hidePrices ? "" : ` | $${l.price || "?"} CAD`) + ` | available: ${l.available === false ? "no" : "yes"}"` +
+        (gone ? " — the owner marks it unavailable: say so plainly, give no price for it, and offer what the owner's sections do offer" : e.storageMatch ? "" : " — a different storage than the listing: say that price is for that unit and that the exact one is confirmed at the shop") + ".");
+    }
+    // no starting price for a unit the owner marked gone
+    if (e.priceLines.length && !gone) L.push(`The owner's price-list line${e.priceLines.length > 1 ? "s" : ""} for this model: ` + e.priceLines.map((s) => `"${one(s, 160)}"`).join("; ") + ` (starting prices: say "à partir de" / "starts at").`);
+  } else {
+    L.push("The owner's Listings and price list have no row for this exact model: take no price from the title. A price for it can come only from the owner's other text" + (opts.hasLesson ? " or the lesson beside this message" : "") +
+      "; otherwise say it is confirmed at the shop" + (opts.hasLesson || opts.followup ? "" : ", and begin with [GAP] when the buyer asked its price or its availability") + ".");
+  }
+  return L.join("\n");
+}
+// A lesson about another model is never offered for this one; a lesson the owner
+// tied to an item is offered only when the chat is about that same model.
+function lessonClash(c, buyerMessage, item) {
+  if (c.item && (!item || !sameModel(modelKeys(String(c.item)), modelKeys(String(item))).same)) return true;
+  const lm = modelKeys(String(c.buyer || "") + " " + String(c.item || ""));
+  const qm = modelKeys(String(buyerMessage || "") + " " + String(item || ""));
+  return !!(lm.digits.size && qm.digits.size && !sameModel(lm, qm).same);
 }
 function buildOwnerPrompt(settings) {
   const L = [];
@@ -2599,8 +2748,9 @@ function buildOwnerPrompt(settings) {
     L.push("<owner_corrections>");
     L.push("Real replies the owner graded. Each one shows how a kind of buyer message is to be answered. Apply its lesson to every similar message, not only the identical one, in the buyer's language.");
     for (const c of graded) {
-      if (c.kind === "good") L.push(`- Buyer: "${one(c.buyer, 200)}" Approved answer: "${one(c.reply, 300)}"`);
-      else L.push(`- Buyer: "${one(c.buyer, 200)}"` + (txt(c.bad) ? ` Rejected answer: "${one(c.bad, 200)}"` : "") + ` Correct answer: "${one(c.better, 300)}"` + (txt(c.note) ? ` Lesson: ${one(c.note, 120)}` : ""));
+      const about = txt(c.item) ? ` (about the listing "${one(c.item, 80)}")` : ""; // (v0.21.88) a lesson tied to an item
+      if (c.kind === "good") L.push(`- Buyer: "${one(c.buyer, 200)}"${about} Approved answer: "${one(c.reply, 300)}"`);
+      else L.push(`- Buyer: "${one(c.buyer, 200)}"${about}` + (txt(c.bad) ? ` Rejected answer: "${one(c.bad, 200)}"` : "") + ` Correct answer: "${one(c.better, 300)}"` + (txt(c.note) ? ` Lesson: ${one(c.note, 120)}` : ""));
     }
     L.push("</owner_corrections>");
   }
@@ -2651,7 +2801,7 @@ function buildOwnerPrompt(settings) {
   }
 
   L.push("");
-  L.push("What you receive with each message: the recent conversation (\"Buyer:\" lines are theirs, \"You:\" lines are your own earlier messages), sometimes a note about what you already told this buyer or a lesson the owner gave for this kind of message, the current local time, and the buyer's latest message. Reply to that latest message. You are not told which post the buyer is writing from, and a post's title is an advert, not a stock list, so when the buyer says \"this\" or \"it\" without naming a model, do not guess one: answer from the owner's text in general terms, or ask which model they want. If the latest message is empty, only an emoji or a sticker, or makes no sense, greet them briefly and ask what they are looking for. Words that belong to the Messenger screen (menu labels, \"Marketplace\", \"Privacy & support\") are never something the buyer said, and when the latest message is one of them (a Facebook notice, a hint such as \"Press a response to send to the buyer\", a listing card), reply [SKIP].");
+  L.push("What you receive with each message: the recent conversation (\"Buyer:\" lines are theirs, \"You:\" lines are your own earlier messages), sometimes a note about what you already told this buyer or a lesson the owner gave for this kind of message, the current local time, and the buyer's latest message. Reply to that latest message. When the chat comes from a Marketplace post you are also told which listing the buyer is writing from (its title, with the price removed): that is what \"this\", \"it\" or \"the phone\" means, so answer about that item, and take its price and availability from the owner's sections only, never from the title, which is an advert and not a stock list. When no listing is given and the buyer names no model, do not guess one: answer from the owner's text in general terms, or ask which model they want. If the latest message is empty, only an emoji or a sticker, or makes no sense, greet them briefly and ask what they are looking for. Words that belong to the Messenger screen (menu labels, \"Marketplace\", \"Privacy & support\") are never something the buyer said, and when the latest message is one of them (a Facebook notice, a hint such as \"Press a response to send to the buyer\", a listing card), reply [SKIP].");
   L.push("");
   L.push("Use the local time to sound natural (\"on ferme dans une heure\", \"demain matin ça marche?\") and to avoid proposing a visit when the shop is closed or about to close. Do not write the time out as a timestamp.");
   L.push("");
@@ -3064,12 +3214,17 @@ async function postClaude(settings, body, errLen) {
     .trim();
   return { text };
 }
-async function callClaude(settings, buyerMessage, extraContext, memory, retry) {
+async function callClaude(settings, buyerMessage, extraContext, memory, retry, threadName) {
   if (!settings.apiKey) return { error: "No API key set." };
   extraContext = trimContext(extraContext);
-  // (v0.21.73) A lesson the owner gave for THIS message (Activity tab 👍 / 👎) goes
-  // right beside it. User turn only: the system prompt stays byte-stable.
-  const lesson = lessonFor(settings, buyerMessage);
+  // (v0.21.88) the listing the buyer writes from (price removed) and the owner's own
+  // entry for it, then (v0.21.73) a lesson the owner gave for THIS message (Activity
+  // tab 👍 / 👎), right beside it. User turn only: the system prompt stays byte-stable.
+  const item = listingFromTitle(threadName);
+  const entry = item ? ownerEntryFor(settings, item) : null;
+  const gone = !!(entry && entry.listing && entry.listing.available === false); // a unit the owner marked gone: no "still available" lesson
+  const lesson = lessonFor(settings, buyerMessage, item, gone ? { skipSubjects: ["#availability"] } : undefined);
+  const listing = listingContext(settings, threadName, { hasLesson: !!lesson });
   const body = {
     model: settings.model || "claude-haiku-4-5",
     max_tokens: 1024,
@@ -3084,6 +3239,7 @@ async function callClaude(settings, buyerMessage, extraContext, memory, retry) {
         content:
           (extraContext ? extraContext + "\n\n" : "") +
           (memory ? String(memory) + "\n" : "") + // (v0.21.71) memory of this chat — user turn only, the system prompt stays cached
+          (listing ? listing + "\n" : "") + // (v0.21.88) which item, and the owner's entry for it
           (lesson ? lesson + "\n" : "") +
           nowLine() + "\n" +
           "Buyer's latest message:\n" +
@@ -3112,6 +3268,7 @@ async function callClaudeFollowup(settings, context, threadName, memory) {
   // to come that the owner wrote — the built-in wording below offers "liquidation"
   // and "new arrivals" whether or not the Business tab ever mentioned them.
   const ownerOnly = settings.ownerTeachingOnly !== false;
+  const listing = listingContext(settings, threadName, { followup: true }); // (v0.21.88) the nudge is about the item they came for; never a [GAP] (read as "skip")
   const body = {
     model: settings.model || "claude-haiku-4-5",
     max_tokens: 512,
@@ -3127,6 +3284,7 @@ async function callClaudeFollowup(settings, context, threadName, memory) {
             "If yes, reply with only the follow-up message: in the buyer's language, freshly worded, tied to what they wanted, with one honest reason to come that the owner's text supports (never invent stock, prices, other buyers or deadlines), and one easy question about when they can come. Two short sentences at most. " +
             "If there is no good reason (they declined, it is settled, a visit time is already set, or another nudge would be spam), reply with exactly [SKIP].\n\n" +
             (memory ? String(memory) + "\n" : "") +
+            (listing ? listing + "\n" : "") +
             nowLine() + "\n" +
             "Conversation so far (most recent last):\n" +
             trimContext(context)
@@ -3140,6 +3298,7 @@ async function callClaudeFollowup(settings, context, threadName, memory) {
           "Two short sentences maximum, warm and casual — a busy seller texting, not a marketing blast. " +
           "If there is NO good reason (they declined, said no, it's resolved, they set a visit time already, or another nudge would be spammy): reply with exactly [SKIP].\n\n" +
           (memory ? String(memory) + "\n" : "") + // (v0.21.71) what we already told this buyer
+          (listing ? listing + "\n" : "") +
           nowLine() + "\n" +
           "Conversation so far (most recent last):\n" +
           trimContext(context),
@@ -3377,13 +3536,13 @@ function humanTouch(text, ctx) {
 const GUARD_RETRY_NOTE = "The buyer would have read that word for word, and it is a note about the chat, not a message to them. Write only what the seller sends now, in the buyer's language. If the buyer's latest line is not something they wrote, or there is nothing to answer, reply with exactly [SKIP].";
 async function writeReply(settings, buyerMessage, extraContext, memory, opts) {
   opts = opts || {};
-  const r = await callClaude(settings, buyerMessage, extraContext, memory);
+  const r = await callClaude(settings, buyerMessage, extraContext, memory, undefined, opts.threadName); // (v0.21.88) the chat's label → the listing line
   if (r.error) return { error: r.error };
   let raw = r.text, parsed = parseReply(raw), why = guardVerdict(parsed), retried = false;
   const firstWhy = why;
   if (why && settings.replyGuard !== false) {
     retried = true;
-    const r2 = await callClaude(settings, buyerMessage, extraContext, memory, { bad: raw });
+    const r2 = await callClaude(settings, buyerMessage, extraContext, memory, { bad: raw }, opts.threadName);
     if (!r2.error) {
       const p2 = parseReply(r2.text);
       if (!guardVerdict(p2)) { raw = r2.text; parsed = p2; why = ""; }
@@ -5513,7 +5672,7 @@ chrome.runtime.onMessage.addListener((msg, _sender, sendResponse) => {
             buyerText,
             ctx ? "Conversation so far (most recent last):\n" + ctx : "",
             memory,
-            { threadId: msg.threadId }
+            { threadId: msg.threadId, threadName: msg.threadName } // (v0.21.88) "Buyer · headline" → the listing line
           );
           if (parsed.error) {
             claudeFailedAt = Date.now();

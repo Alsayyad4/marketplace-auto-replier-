@@ -9,9 +9,17 @@ all chrome.debugger/CDP work) + Supabase dashboard in docs/. Live branch:
   permissions ships OFF by default behind a cloud setting and goes to ONE machine first.
 - The operator wants zero manual steps in normal operation.
 
-## Known state (v0.21.87 on the branch; .86 LIVE on the Web Store)
-- SETTINGS → ACTIVITY LOG (.87, Oct 19 2026, on the branch, NOT submitted — batch it with the
-  next release): that tab is THIS install's `replyLog` only (per computer, per extension id —
+## Known state (v0.21.88; .86 LIVE on the Web Store)
+- THE LISTING (.88, Oct 19 2026): the chat label "Buyer · headline" gives the ITEM, never
+  its price — `listingFromTitle` (prices + advert words out), `ownerEntryFor` (the owner's
+  Listings row / price-list line for that model, `sameModel`: same number + qualifiers),
+  `listingContext` → the USER turn (sheet unchanged across chats); unavailable row = said,
+  no starting price; no entry = no price + [GAP]. Lessons carry `item`; `lessonClash` keeps
+  another model's lesson out; recall needs a subject from the MESSAGE. Dashboard: gap list
+  per listing + "about:", Teach it/👍/corrections store `item` (`itemBound`), Try-it listing
+  box, LISTING-MIRROR block (parity-tested). `store/smoke-listing.js`. Simulated on Haiku
+  before shipping (6/6 item questions right, 0 headline prices).
+- SETTINGS → ACTIVITY LOG (.87, Oct 19 2026, rides with .88): that tab is THIS install's `replyLog` only (per computer, per extension id —
   the store copy starts empty; written on delivery). An empty list now explains itself
   (options.js `emptyLogLines` / `explainEmptyLog`, `#logWhy`): install date, Bot ON/OFF (a
   new copy starts OFF), cloud login, API key, Messenger tab (`GET_STATUS` `installTs` +

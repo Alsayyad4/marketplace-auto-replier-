@@ -226,6 +226,7 @@
               <b>💬 Try it</b> <span class="hint">type what a buyer would write and see the answer the bot gives right now, with what is on this page. Nothing is sent to Facebook; each try costs a fraction of a cent on your API key.</span>
               <pre id="tryLog" style="white-space:pre-wrap;font-size:13px;margin:6px 0;"></pre>
               <div class="row">
+                <input type="text" id="tryListing" placeholder="listing the buyer is writing from (optional) — e.g. iPhone 13 Pro Max 256 Go 650$" style="flex:1;min-width:240px;" title="The bots get the post's title with the price taken out, plus your Listings row / price line for that model." />
                 <input type="text" id="tryText" placeholder="e.g. est-ce que vous faites la livraison?" style="flex:1;min-width:240px;" />
                 <button id="tryAsk" type="button" class="primary">Ask the bot</button>
                 <button id="tryReset" type="button">New chat</button>
@@ -375,6 +376,6 @@
     <script src="config.js?v=20261011"></script>
     <script src="seed.js?v=20260921"></script>
     <script src="https://cdn.jsdelivr.net/npm/@supabase/supabase-js@2"></script>
-    <script src="app.js?v=20261014"></script>
+    <script src="app.js?v=20261019"></script>
   </body>
 </html>

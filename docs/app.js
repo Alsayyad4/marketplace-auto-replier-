@@ -671,6 +671,43 @@
     return ("0000000" + (h >>> 0).toString(16)).slice(-8);
   }
   /* ==== TEACHING-MIRROR-END ==== */
+  /* ==== LISTING-MIRROR-BEGIN (v0.21.88) — the same code as background.js (listingFromTitle); store/smoke-listing.js fails on drift ==== */
+  // An amount: "650", "1099", "1 099", "1,099.00". A thousands group with a SPACE only
+  // after a one-digit lead, so "13 650$" is the model 13 and the price 650.
+  const PRICE_AMOUNT = String.raw`(?<![\d.,])(?:\d{2,3}(?:[,.]\d{3})*|\d(?:[ ,.]?\d{3}(?!\s?(?:go|gb|to|tb)\b))*)(?:[.,]\d{2})?(?!\d)`;
+  // After a "$"-led amount: never the storage, spec or duration number that follows a
+  // price ("650$ 128 Go" is a price, then a storage — the "$" belongs to the 650).
+  const PRICE_NOT_SPEC = String.raw`(?!\s?(?:go|gb|to|tb|g|hz|mp|ans?|mois|x)\b|\s?\/|[.,]\d)`;
+  const PRICE_RANGE = String.raw`(?:\s?[-–à]\s?` + PRICE_AMOUNT + `)?`; // 650-700$, 650 à 700$
+  const PRICE_RES = [
+    new RegExp(String.raw`\b(?:prix|price|asking)\s*[:=]?\s*` + PRICE_AMOUNT + PRICE_RANGE + String.raw`\s?(?:\$|cad|usd|€)?`, "gi"), // prix: 650 — first, or the label is left behind
+    new RegExp(String.raw`(?:ca|us|c)?\s?(?<!\d)\$\s?` + PRICE_AMOUNT + PRICE_NOT_SPEC + PRICE_RANGE + String.raw`(?:\s?(?:cad|usd))?`, "gi"), // $650, CA$ 1,099.00, C$650
+    new RegExp(PRICE_AMOUNT + PRICE_RANGE + String.raw`\s?(?:(?:ca|us|c)?\$|€)(?:\s?(?:cad|usd))?`, "gi"),           // 650$, 1 099,99 $, 650 C$, 650€
+    new RegExp(String.raw`\b` + PRICE_AMOUNT + PRICE_RANGE + String.raw`\s?(?:cad|usd|dollars?|piasses?|balles?|bucks|euros?|(?:tx|taxes?)(?:\s?(?:incl\.?|incluses?|included))?)\b`, "gi"), // 650 CAD, 650 dollars, 650 tx incl
+    new RegExp(String.raw`\b(?:prix|price|asking)\s*[:=]\s*(?=[,;.)]|$)`, "gi"),                                  // a label left alone
+    new RegExp(String.raw`\b(?:tx|taxes?)\s?(?:incl\.?|incluses?|included)\b`, "gi"),                              // "tx incl" left alone
+  ];
+  function stripPrices(text) {
+    let s = String(text == null ? "" : text);
+    for (const re of PRICE_RES) s = s.replace(re, " ");
+    return s.replace(/\(\s*\)/g, " ").replace(/\s+/g, " ").replace(/\s+([,;:])/g, "$1").replace(/([,;:])(?:\s*[,;:])+/g, "$1").replace(/[\s\-–—:|,;!?.·]+$/g, "").replace(/^[\s\-–—:|,;!?·]+/g, "").trim();
+  }
+  // Advert words: haggling, urgency, warranty claims. The title identifies the item;
+  // what it promises is the owner's sections' business (a "négociable" in a title made
+  // the model offer to negotiate).
+  const ADVERT_RE = /\b(?:non\s+)?n[ée]go(?:ciable|tiable|cier)?s?\b|\bn[ée]g\.?(?=\s|$)|\bobo\b|\bor best offer\b|\bprix ferme\b|\bferme\b|\bfirm\b|\burgent\b|(?<!\p{L})[àa] vendre\b|\bfor sale\b|\bwow\b|\bdeal\b|\baubaine\b|\bsp[ée]cial\b|\bpromo(?:tion)?\b|\brabais\b|\bdiscount\b|\bcheap\b|\bpas cher\b|\bmeilleur prix\b|\bbest price\b|\bmust go\b|\bliquidation\b|\bclearance\b|\b\d{1,2}\s*(?:ans?|mois|years?|months?)\s*(?:de\s*)?(?:garantie|warranty|guarantee)\b|\b(?:garantie|warranty|guarantee)\b(?:\s*(?:de\s*)?\d+\s*(?:ans?|mois|years?|months?))?/giu;
+  // The headline alone (what follows the first "·" of "Buyer · headline"), prices and
+  // advert words out, the sidebar's time tag out. "" when the label is not a
+  // Marketplace chat.
+  function listingFromTitle(threadName) {
+    const s = String(threadName == null ? "" : threadName);
+    const cut = s.indexOf("·");
+    if (cut < 1) return "";
+    let item = s.slice(cut + 1).replace(/\s*[·•]\s*\d{1,3}\s?(?:min|m|h|hr|j|d|sem|w|y)\b.*$/i, "").replace(/\s+/g, " ").trim();
+    item = stripPrices(stripPrices(item).replace(ADVERT_RE, " "));
+    return item.length >= 2 ? item : "";
+  }
+  /* ==== LISTING-MIRROR-END ==== */
 
   /* ---- (v0.21.73) A SAVE THAT LOSES THE RACE MERGES — IT IS NOT DROPPED ----
    * Every save carries the row stamp this page read, and a save whose stamp is stale
@@ -904,6 +941,7 @@
     L.push(`Address: ${settings.businessAddress || "(none)"}. Hours: ${settings.businessHoursText || "(none)"}.`);
     if (only) {
       L.push("");
+      L.push("With each message the bot is also told which listing the buyer is writing from (the post's title, with the price taken out), and your Listings row and price-list line for that model are put beside the message — so the price and the availability it gives are yours, for that item, never the post's. A question it still cannot answer lands in “Teach these” with the listing named.");
       L.push("The bot is told: everything you know about this business is what the owner wrote below, and nothing else. When a buyer asks something that is not written here, it says it is best confirmed at the shop. It never guesses.");
     }
     const sec = (title, body) => { if (body && String(body).trim()) { L.push(""); L.push("── " + title + " ──"); L.push(String(body).trim()); } };
@@ -1152,20 +1190,34 @@
   function gapDismissed() { try { return JSON.parse(localStorage.getItem(GAP_DISMISS + ":" + (session && session.user ? session.user.id : "")) || "[]"); } catch (e) { return []; } }
   function gapDismiss(key) { try { const d = gapDismissed(); d.push(key); localStorage.setItem(GAP_DISMISS + ":" + (session && session.user ? session.user.id : ""), JSON.stringify(d.slice(-200))); } catch (e) { /* storage blocked: it comes back on reload */ } }
   // Pure: rows (newest first) → the questions still worth teaching, most asked first.
+  // (v0.21.88) a question is listed once per LISTING it was asked about ("combien?" on
+  // the iPhone 13 and "combien?" on the 15 are two boxes); an answer the owner gave
+  // without a listing covers every listing.
   function gapList(rows, coaching, dismissed) {
-    const taught = new Set((coaching || []).filter((c) => c && c.buyer).map((c) => gapKey(String(c.buyer).replace(/(…|\.\.\.)\s*$/, ""))));
+    const taught = new Set((coaching || []).filter((c) => c && c.buyer).map((c) => gapKey(String(c.buyer).replace(/(…|\.\.\.)\s*$/, "")) + "|" + gapKey(c.item || "")));
     const gone = new Set(dismissed || []);
     const by = new Map();
     for (const r of rows || []) {
       const q = String((r && r.buyer_text) || "").trim();
       const k = gapKey(q);
-      if (!k || taught.has(k) || gone.has(k)) continue;
-      const e = by.get(k) || { key: k, question: q, said: String(r.bot_text || ""), n: 0, at: Date.parse(r.created_at) || 0 };
+      if (!k) continue;
+      const item = listingFromTitle(r.thread_name || "");
+      const ik = gapKey(item);
+      const key = ik ? k + "|" + ik : k;
+      if (taught.has(k + "|") || taught.has(k + "|" + ik) || gone.has(k) || gone.has(key)) continue;
+      const e = by.get(key) || { key, question: q, item, said: String(r.bot_text || ""), n: 0, at: Date.parse(r.created_at) || 0 };
       e.n++;
-      by.set(k, e);
+      by.set(key, e);
     }
     return Array.from(by.values()).sort((a, b) => b.n - a.n || b.at - a.at).slice(0, 8);
   }
+  // A lesson is tied to the listing only when it is about the item itself (its price,
+  // availability, storage, colour, condition, battery, a model number); "do you ship?"
+  // stays general, whatever chat it was asked in.
+  // Judged on the QUESTION (a digit in the answer — "de 10h à 17h", "757 rue…" — is not
+  // about the item); the answer counts only when it carries a price.
+  const ITEM_WORDS = /\d|\bprix\b|\bprice|\bcombien\b|\bhow much\b|\bcost|\bdispo|\bavailab|\bstock\b|\bcondition\b|\b[ée]tat\b|\bcouleur|\bcolou?r\b|\bbatter|\bstorage\b|\bstockage\b|\bcapacit/i;
+  const itemBound = (q, a, item) => !!item && (ITEM_WORDS.test(String(q || "")) || /\$|\bprix\b|\bprice\b|\bcad\b/i.test(String(a || "")));
   let gapRows = [];
   function renderGaps() {
     const box = $("gapBox");
@@ -1185,7 +1237,7 @@
       const row = document.createElement("div");
       row.style.cssText = "margin-top:8px;";
       const q = document.createElement("div");
-      q.textContent = "“" + truncTxt(it.question, 160) + "”" + (it.n > 1 ? "  · asked " + it.n + " times" : "") + (it.said ? "  · the bot said: “" + truncTxt(it.said, 110) + "”" : "");
+      q.textContent = "“" + truncTxt(it.question, 160) + "”" + (it.item ? "  · about: " + truncTxt(it.item, 60) : "") + (it.n > 1 ? "  · asked " + it.n + " times" : "") + (it.said ? "  · the bot said: “" + truncTxt(it.said, 110) + "”" : "");
       const line = document.createElement("div");
       line.className = "row";
       line.style.cssText = "margin-top:4px;";
@@ -1201,7 +1253,7 @@
         const a = (inp.value || "").trim();
         if (!a) { inp.focus(); return; }
         teach.disabled = true;
-        const saved = await addCoaching({ kind: "fix", buyer: truncTxt(it.question, 200), bad: truncTxt(it.said, 200), better: truncTxt(a, 300), note: "" });
+        const saved = await addCoaching({ kind: "fix", buyer: truncTxt(it.question, 200), bad: truncTxt(it.said, 200), better: truncTxt(a, 300), note: "", item: itemBound(it.question, a, it.item) ? truncTxt(it.item, 120) : "" });
         if (saved) renderGaps(); // taught → it leaves the list
         else { teach.disabled = false; teach.textContent = "NOT saved — try again"; }
       });
@@ -1215,7 +1267,7 @@
     if (!client || !session || !rowLoaded) return;
     try {
       const since = new Date(Date.now() - 14 * 24 * 3600 * 1000).toISOString();
-      const g = await client.from("subsell_messages").select("created_at, buyer_text, bot_text")
+      const g = await client.from("subsell_messages").select("created_at, buyer_text, bot_text, thread_name") // (v0.21.88) thread_name → which listing the question was about
         .eq("kind", "gap").gte("created_at", since).order("created_at", { ascending: false }).limit(300);
       if (g.error) return;
       gapRows = g.data || [];
@@ -1227,7 +1279,7 @@
   // same site). The two markers are comments in that file; store/smoke-teach.js fails if they move.
   const CORE_BEGIN = "/* ===================== (v0.21.73) THE OWNER IS THE ONLY TEACHER";
   const CORE_END = "/* ---------------- video fetch ---------------- */";
-  const CORE_VER = "20261010c"; // (v0.21.85) writeReply: the guard + humanTouch
+  const CORE_VER = "20261019"; // (v0.21.88) the listing line + the owner's entry for the item
   let teachCore = null, teachCoreErr = "";
   async function loadTeachCore() {
     if (teachCore) return teachCore;
@@ -1262,7 +1314,10 @@
     const s = Object.assign({}, settings);
     // (v0.21.85) the same pipeline as the bots: guard (one corrected retry) + humanTouch
     const tctx = "Conversation so far (most recent last):\n" + lines.join("\n");
-    const out = core.writeReply ? await core.writeReply(s, msg, tctx, "", { threadId: "try" }) : await core.callClaude(s, msg, tctx, "");
+    // (v0.21.88) the listing the pretend buyer writes from, as the bots get it ("Buyer · headline")
+    const tryItem = ($("tryListing") && $("tryListing").value || "").trim();
+    const tryName = tryItem ? "Buyer · " + tryItem : "";
+    const out = core.writeReply ? await core.writeReply(s, msg, tctx, "", { threadId: "try", threadName: tryName }) : await core.callClaude(s, msg, tctx, "", undefined, tryName);
     tryState.busy = false;
     $("tryAsk").disabled = false;
     if (!out || out.error) { tryNote("The AI call failed: " + ((out && out.error) || "no answer"), true); return; }
@@ -1513,9 +1568,10 @@
       row.style.cssText = "display:flex;gap:8px;align-items:flex-start;margin:4px 0;";
       const txt = document.createElement("div");
       txt.style.flex = "1";
-      txt.textContent = c.kind === "good"
+      txt.textContent = (c.kind === "good"
         ? `👍 "${truncTxt(c.buyer, 60)}" → "${truncTxt(c.reply, 90)}"`
-        : `👎 "${truncTxt(c.buyer, 60)}" → should say: "${truncTxt(c.better, 90)}"${c.note ? "  (" + truncTxt(c.note, 40) + ")" : ""}`;
+        : `👎 "${truncTxt(c.buyer, 60)}" → should say: "${truncTxt(c.better, 90)}"${c.note ? "  (" + truncTxt(c.note, 40) + ")" : ""}`) +
+        (c.item ? `  · about: ${truncTxt(c.item, 40)}` : ""); // (v0.21.88) a lesson tied to one listing
       const del = document.createElement("button");
       del.type = "button";
       del.className = "danger";
@@ -1536,7 +1592,7 @@
   async function addCoaching(item) {
     settings.coaching = settings.coaching || [];
     const same = (a) => a && a.kind === item.kind && (a.buyer || "") === (item.buyer || "") && (a.reply || "") === (item.reply || "") &&
-      (a.bad || "") === (item.bad || "") && (a.better || "") === (item.better || "") && (a.note || "") === (item.note || "");
+      (a.bad || "") === (item.bad || "") && (a.better || "") === (item.better || "") && (a.note || "") === (item.note || "") && (a.item || "") === (item.item || "");
     if (!settings.coaching.some(same)) settings.coaching.push(Object.assign({ at: Date.now() }, item)); // a retry after a failed save must not add it twice
     trimCoaching(settings.coaching); // rules are evicted last (v0.21.55)
     renderCoaching();
@@ -1618,7 +1674,9 @@
         up.type = "button"; up.textContent = "👍"; up.title = "Good — answer like this";
         up.addEventListener("click", async () => {
           up.disabled = true;
-          const saved = await addCoaching({ kind: "good", buyer: truncTxt(r.buyer_text, 200), reply: truncTxt(r.bot_text, 300) });
+          // (v0.21.88) an answer about the item itself (its price, availability…) is a lesson for THAT listing
+          const rowItem = listingFromTitle(r.thread_name || "");
+          const saved = await addCoaching({ kind: "good", buyer: truncTxt(r.buyer_text, 200), reply: truncTxt(r.bot_text, 300), item: itemBound(r.buyer_text, r.bot_text, rowItem) ? truncTxt(rowItem, 120) : "" });
           up.textContent = saved ? "✓" : "✗";
           if (!saved) { up.disabled = false; up.title = "NOT saved — the line at the bottom of the page says why. Click to try again."; }
         });
@@ -1655,12 +1713,14 @@
               return;
             }
             ok.disabled = true;
+            const rowItem = listingFromTitle(r.thread_name || ""); // (v0.21.88) see 👍
             const saved = await addCoaching({
               kind: "fix",
               buyer: truncTxt(r.buyer_text, 200),
               bad: truncTxt(r.bot_text, 200),
               better: truncTxt(better, 300),
               note: truncTxt(note.value.trim(), 120),
+              item: itemBound(r.buyer_text, better, rowItem) ? truncTxt(rowItem, 120) : "",
             });
             if (saved) ftr.remove();
             else { ok.disabled = false; ok.textContent = "NOT saved — try again"; } // the correction stays in the box
