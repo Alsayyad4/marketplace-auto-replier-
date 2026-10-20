@@ -9,7 +9,7 @@ all chrome.debugger/CDP work) + Supabase dashboard in docs/. Live branch:
   permissions ships OFF by default behind a cloud setting and goes to ONE machine first.
 - The operator wants zero manual steps in normal operation.
 
-## Known state (v0.21.88 SUBMITTED to the Web Store Oct 19 2026 ~15:50, pending review, auto-publish; .86 LIVE)
+## Known state (v0.21.88 LIVE on the Web Store since Oct 20 2026 — submitted Oct 19, auto-published overnight)
 - THE LISTING (.88, Oct 19 2026): the chat label "Buyer · headline" gives the ITEM, never
   its price — `listingFromTitle` (prices + advert words out), `ownerEntryFor` (the owner's
   Listings row / price-list line for that model, `sameModel`: same number + qualifiers),
