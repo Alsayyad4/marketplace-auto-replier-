@@ -31,6 +31,7 @@ for (const r of replies) {
     emoji: (final.match(/\p{Extended_Pictographic}/gu) || []).length,
     saysYes: /^(oui|yes|yep|ouais)\b/.test(low),
     dollarAmounts: (final.match(/\d[\d\s]*\$|\$\s?\d+/g) || []).length,
+    bannedWords: (low.match(/\b(condition|état|etat|grade|messages?|conversation|reply|response)\b/g) || []),
   };
   out.push({ id: r.id, checks, final });
 }
