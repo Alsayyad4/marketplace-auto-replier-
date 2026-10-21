@@ -32,6 +32,8 @@ for (const r of replies) {
     saysYes: /^(oui|yes|yep|ouais)\b/.test(low),
     dollarAmounts: (final.match(/\d[\d\s]*\$|\$\s?\d+/g) || []).length,
     bannedWords: (low.match(/\b(condition|état|etat|grade|messages?|conversation|reply|response)\b/g) || []),
+    batteryPct: /\d+\s?%/.test(final.replace(/20 (?:à|to) 40 %/g, "")) && /batter/i.test(final),
+    scareWords: (low.match(/sujet à changement|sans garantie|sous réserve|can't guarantee|no guarantee|peut changer/g) || []),
     conditionsApply: /conditions s'appliquent|conditions apply/.test(low),
     familyLine: /iphone \d+ \/ \d+ pro \/ \d+ pro max : à partir de/.test(low),
   };
