@@ -9,9 +9,9 @@ all chrome.debugger/CDP work) + Supabase dashboard in docs/. Live branch:
   permissions ships OFF by default behind a cloud setting and goes to ONE machine first.
 - The operator wants zero manual steps in normal operation.
 
-## Known state (v0.21.88 LIVE on the Web Store since Oct 20 2026 — submitted Oct 19, auto-published overnight)
-- WHERE THE TEACHING LIVES (.89, Oct 21 2026, on the branch, NOT submitted; the dashboard part
-  is live): the dashboard is the ACCOUNT's page (teaching, fleet line, account-wide Activity),
+## Known state (v0.21.88 LIVE on the Web Store since Oct 20 2026; v0.21.89 SUBMITTED Oct 21 2026 ~11:35, Pending review, auto-publish on)
+- WHERE THE TEACHING LIVES (.89, Oct 21 2026, submitted to the Web Store the same day; the
+  dashboard part is live): the dashboard is the ACCOUNT's page (teaching, fleet line, account-wide Activity),
   the extension's Settings is ONE computer's page — keep it that way. The popup and Settings
   now open the dashboard at `#business` / `#activity` (docs/app.js `applyHashTab`), and a
   Settings save MERGES over the account's current row (options.js pure block `SAVE OVER THE
