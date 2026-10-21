@@ -70,6 +70,57 @@
   };
 
   let settings = Object.assign({}, DEFAULTS);
+  // (v0.21.89) the settings as this page READ them — what a save compares its edits against
+  let loadedBase = null;
+
+  /* ===== (v0.21.89) SAVE OVER THE CURRENT ROW, NOT OVER A SNAPSHOT (pure) =====
+   * WHERE THE TEACHING LIVES. The dashboard (docs/) is the account's page: rules, corrections,
+   * graded replies, the gap list, the preview and Try it exist only there, and a save there
+   * reaches every computer within a minute. This page is one computer's page — and until now
+   * its Save (and "Get Claude's reply", which saves first) pushed the WHOLE settings object it
+   * had read when it opened, with no precondition: a Settings page left open on a shop
+   * computer and saved an hour later put that hour-old copy over everything the dashboard
+   * had taught meanwhile (the dashboard has saved with a stamp since v0.21.56 and merged
+   * since .73; this page never did). Now a save writes only what changed HERE over what the
+   * account holds NOW: a box typed here wins, a box untouched here keeps the account's value,
+   * lists merge item by item (added here = added, removed here = removed, added there = kept).
+   * Nothing below touches chrome.* — store/smoke-where.js runs it as is. */
+  const LIST_KEYS = ["listings", "followUps", "videos", "demoVideoUrls", "coaching"];
+  const clone = (v) => JSON.parse(JSON.stringify(v === undefined ? null : v));
+  // JSON with its keys sorted, so two copies of one value compare equal whatever order
+  // their keys were stored in (mirrors canonJson in background.js).
+  function canon(v) {
+    if (Array.isArray(v)) return "[" + v.map(canon).join(",") + "]";
+    if (v && typeof v === "object") return "{" + Object.keys(v).sort().map((k) => JSON.stringify(k) + ":" + canon(v[k])).join(",") + "}";
+    return JSON.stringify(v === undefined ? null : v);
+  }
+  function mergeList(base, mine, theirs) {
+    const B = new Set((base || []).map(canon)), M = new Set((mine || []).map(canon));
+    const out = (theirs || []).filter((x) => !(B.has(canon(x)) && !M.has(canon(x)))); // removed here = stays removed
+    const T = new Set(out.map(canon));
+    for (const x of mine || []) if (!B.has(canon(x)) && !T.has(canon(x))) out.push(x); // added here = added
+    return out;
+  }
+  // base = the settings as this page read them, mine = the form now, current = the account
+  // as of now. Returns the settings to save, the boxes changed here, and the boxes the
+  // account changed meanwhile that were kept.
+  function mergeOverCurrent(base, mine, current) {
+    const out = Object.assign({}, current || {});
+    const b = base || {}, m = mine || {};
+    const changed = [], kept = [];
+    for (const k of new Set(Object.keys(b).concat(Object.keys(m)).concat(Object.keys(out)))) {
+      if (canon(b[k]) === canon(m[k])) { // untouched here: the account's value stands
+        if (canon(out[k]) !== canon(b[k])) kept.push(k);
+        continue;
+      }
+      changed.push(k);
+      if (LIST_KEYS.includes(k)) out[k] = mergeList(b[k], m[k], Array.isArray(out[k]) ? out[k] : []);
+      else if (k in m) out[k] = m[k];
+      else delete out[k];
+    }
+    return { config: out, changed, kept };
+  }
+  /* ===== end save-over-current (pure) ===== */
 
   /* ----- tabs ----- */
   document.querySelectorAll(".tab").forEach((t) => {
@@ -320,9 +371,9 @@
 
   /* ----- test responses ----- */
   $("runTest").addEventListener("click", () => {
-    formToFields();
-    // Persist (synced) before testing so the test uses the current form values.
-    chrome.runtime.sendMessage({ type: "SAVE_SETTINGS", settings }, () => {
+    // Persist (synced) before testing so the test uses the current form values —
+    // (v0.21.89) through the same merge as Save: a test on a stale page must not publish it.
+    saveMergedSettings().then(() => {
       $("testStatus").textContent = "Calling Claude…";
       chrome.runtime.sendMessage(
         { type: "TEST_REPLY", buyerMessage: $("testInput").value },
@@ -386,6 +437,10 @@
   // since when this copy exists, whether it is ON, logged in, has the key and a
   // Messenger tab — and where every computer's activity is.
   const DASHBOARD_URL = "https://alsayyad4.github.io/marketplace-auto-replier-/docs/";
+  // (v0.21.89) the account's page, at its tab (the popup carries the same two links)
+  function openDashboardTab(tab) { chrome.tabs.create({ url: DASHBOARD_URL + "#" + tab, active: true }); }
+  if ($("openTeaching")) $("openTeaching").addEventListener("click", () => openDashboardTab("business"));
+  if ($("openActivityAll")) $("openActivityAll").addEventListener("click", () => openDashboardTab("activity"));
   function emptyLogLines(s, c, now) {
     const lines = [];
     let since = "";
@@ -425,7 +480,7 @@
         const cloud = !chrome.runtime.lastError && c && c.ok ? c : null;
         el.textContent = emptyLogLines(s, cloud, Date.now()).join("\n") + "\nEvery computer's activity, together: ";
         const a = document.createElement("a");
-        a.href = DASHBOARD_URL;
+        a.href = DASHBOARD_URL + "#activity"; // (v0.21.89) straight to every computer's log
         a.target = "_blank";
         a.rel = "noopener";
         a.textContent = "the web dashboard → Activity";
@@ -468,10 +523,54 @@
 
   /* ----- save / load ----- */
   let savedMsgTimer = null; // (v0.21.70) a 15-s red message must not blank a later green one
-  function save() {
+  const PULL_WAIT_MS = 10 * 1000; // (v0.21.89) a save waits at most this long for the account's current row
+  function ask(type, extra) {
+    return new Promise((resolve) =>
+      chrome.runtime.sendMessage(Object.assign({ type }, extra || {}), (res) => {
+        const err = chrome.runtime.lastError;
+        resolve({ res: err ? null : res, err: err ? err.message || "no reply" : null });
+      })
+    );
+  }
+  function withLists(s) {
+    s.listings = s.listings || [];
+    s.followUps = s.followUps || [];
+    s.videos = s.videos || [];
+    return s;
+  }
+  // (v0.21.89) the account as of NOW: with a login, a pull first (bounded — a cloud that
+  // does not answer must not hold the Save), then the merged read every page uses.
+  async function currentSettings() {
+    const st = await ask("CLOUD_STATUS");
+    if (st.res && st.res.loggedIn) await Promise.race([ask("CLOUD_PULL"), new Promise((r) => setTimeout(r, PULL_WAIT_MS))]);
+    const got = await ask("GET_SETTINGS");
+    if (!got.res || !got.res.settings) return null;
+    return withLists(Object.assign({}, DEFAULTS, got.res.settings));
+  }
+  // (v0.21.89) every save of this page goes through here (Save, "Get Claude's reply"):
+  // the form's changes over the account's current settings, never the page's snapshot.
+  async function saveMergedSettings() {
+    if (!loadedBase) return { r: null, err: null, notLoaded: true, changed: null, kept: null };
     formToFields();
+    const current = await currentSettings();
+    const m = current ? mergeOverCurrent(loadedBase, settings, current) : { config: settings, changed: null, kept: null };
+    const out = await ask("SAVE_SETTINGS", { settings: m.config });
+    const r = out.res;
+    if (r && !(r.cloud && r.cloud.ok === false)) {
+      // what every computer now holds is on screen: the account's newer boxes appear without a reload
+      settings = withLists(Object.assign({}, m.config));
+      loadedBase = clone(settings);
+      fieldsToForm();
+      renderListings();
+      renderFollowUps();
+      renderVideos();
+      renderCentralVideos();
+    }
+    return { r, err: out.err, notLoaded: false, changed: m.changed, kept: m.kept };
+  }
+  function save() {
     // Synced across all computers on the same Google account (via background).
-    chrome.runtime.sendMessage({ type: "SAVE_SETTINGS", settings }, (r) => {
+    saveMergedSettings().then(({ r, err, notLoaded, kept }) => {
       // (v0.21.61) When the guard folds values back into a save that would have
       // cleared them, say so — a silent repair is how you find out months later.
       const rep = (r && r.repaired) || [];
@@ -479,16 +578,20 @@
         ? "Saved ✓ — kept " + rep.length + " field(s) a blank form would have cleared (" +
           rep.slice(0, 3).join(", ") + (rep.length > 3 ? "…" : "") + ")"
         : "Saved ✓ (syncs to your other computers)";
+      // (v0.21.89) …and what the account changed since this page opened was kept, not overwritten
+      const keptN = kept ? kept.length : 0;
+      if (keptN) text += " — kept " + keptN + " newer change(s) from the account (" + kept.slice(0, 3).join(", ") + (keptN > 3 ? "…" : "") + ")";
       // (v0.21.70) Say what actually happened. For a week the account refused every
       // push (its safety-net trigger could not write its history table) and this
       // line still said "Saved ✓": the running bot reads cloudConfig, which a refused
       // push never updates, so the edit took effect NOWHERE — it only sits in this
       // machine's backup bank (Settings → General → "Earlier copies of my settings").
       const c = r && r.cloud; // null = not logged in; {ok:false} = the account refused the write
-      const lastErr = chrome.runtime.lastError;
       let bad = true;
-      if (lastErr || !r) {
-        text = "Not saved — the extension did not answer (" + ((lastErr && lastErr.message) || "no reply") + "). Reload the extension and try again.";
+      if (notLoaded) {
+        text = "Not saved — this page is still loading your settings; press Save again in a moment.";
+      } else if (err || !r) {
+        text = "Not saved — the extension did not answer (" + (err || "no reply") + "). Reload the extension and try again.";
       } else if (c && c.ok === false) {
         const err = String(c.error || "");
         text = "NOT applied — the cloud refused the save, so every computer (this one too) keeps the previous settings. " +
@@ -502,7 +605,7 @@
       clearTimeout(savedMsgTimer);
       $("savedMsg").textContent = text;
       $("savedMsg").style.color = bad ? "#c0392b" : "";
-      savedMsgTimer = setTimeout(() => ($("savedMsg").textContent = ""), bad ? 15000 : rep.length ? 6000 : 2500);
+      savedMsgTimer = setTimeout(() => ($("savedMsg").textContent = ""), bad ? 15000 : rep.length || keptN ? 6000 : 2500);
     });
   }
   $("save").addEventListener("click", save);
@@ -1038,6 +1141,7 @@
       settings.listings = settings.listings || [];
       settings.followUps = settings.followUps || [];
       settings.videos = settings.videos || [];
+      loadedBase = clone(settings); // (v0.21.89) the row as read — a save writes only this page's changes over the account's current row
       fieldsToForm();
       renderListings();
       renderFollowUps();

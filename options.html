@@ -207,6 +207,15 @@
 
       <!-- BUSINESS -->
       <section id="business">
+        <!-- (v0.21.89) WHERE THE TEACHING LIVES: the account's page, one for every computer -->
+        <div id="whereBox" class="hint" style="border:1px solid #1877f2;border-radius:8px;padding:10px;margin:8px 0 12px;">
+          <b>🎓 The bot is taught on the account's page, not here.</b>
+          Rules, corrections, graded replies (👍 / 👎), the "teach these" list of unanswered questions, "Show me exactly what the bot is being taught", "Answer only from what I teach" and the Try-it box exist only there — one page for every computer. A save there reaches this computer within about a minute; no update of this extension is needed.
+          The boxes below are the same Business fields: they show the account's current text, and Save writes only what you change here over the account's current settings (a box you did not touch keeps whatever the account holds now).
+          <div class="row" style="margin-top:8px;">
+            <button id="openTeaching" type="button" class="primary">🎓 Open the teaching page (every computer)</button>
+          </div>
+        </div>
         <label>Business name</label>
         <input type="text" id="businessName" />
         <label>Address</label>
@@ -297,6 +306,7 @@
       <!-- ACTIVITY LOG -->
       <section id="log">
         <div class="row">
+          <button id="openActivityAll" type="button" class="primary">📒 Every computer's activity</button>
           <button id="refreshLog">Refresh</button>
           <button id="exportLog">Export JSON</button>
           <button id="clearLog" class="danger">Clear log</button>

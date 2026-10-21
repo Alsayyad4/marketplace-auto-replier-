@@ -460,6 +460,14 @@
     e.preventDefault();
     chrome.runtime.openOptionsPage();
   });
+  // (v0.21.89) WHERE THE TEACHING LIVES: the account's page (the dashboard), at its tab.
+  // Rules, corrections, graded replies, the gap list, the preview of what the bot is taught
+  // and Try it exist only there — one page for every computer, read by each within a minute
+  // of a save, with no update of this extension. This popup and Settings only lead to it.
+  const DASHBOARD_URL = "https://alsayyad4.github.io/marketplace-auto-replier-/docs/";
+  function openDashboard(tab) { chrome.tabs.create({ url: DASHBOARD_URL + "#" + tab, active: true }); }
+  $("teachLink").addEventListener("click", (e) => { e.preventDefault(); openDashboard("business"); });
+  $("activityLink").addEventListener("click", (e) => { e.preventDefault(); openDashboard("activity"); });
 
   loadStored();
   refreshStatus();

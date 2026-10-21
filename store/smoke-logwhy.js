@@ -65,7 +65,7 @@ ok(text({ enabled: false, apiKeySet: false, messengerTabs: 0 }, { ok: true, logg
 ok(/explainEmptyLog\(resp\.log\.length === 0\);/.test(opt), "loadLog explains an empty log and hides the box otherwise");
 ok(/if \(!show\) \{ el\.style\.display = "none"; return; \}/.test(opt), "a non-empty log hides the box");
 ok(/type: "GET_STATUS"/.test(opt.slice(from)) && /type: "CLOUD_STATUS"/.test(opt.slice(from)), "the box is built from GET_STATUS + CLOUD_STATUS");
-ok(/a\.href = DASHBOARD_URL;/.test(opt) && /alsayyad4\.github\.io\/marketplace-auto-replier-\/docs\//.test(opt), "the box links to the dashboard");
+ok(/a\.href = DASHBOARD_URL \+ "#activity";/.test(opt) && /alsayyad4\.github\.io\/marketplace-auto-replier-\/docs\//.test(opt), "the box links to the dashboard's Activity tab"); // (v0.21.89) at the tab
 ok(/id="logWhy"/.test(optHtml), "options.html carries the box");
 ok(/sent from THIS computer by this copy of SubSell/.test(optHtml) && !/this account sent/.test(optHtml), "the hint says THIS computer; 'this account sent' is gone");
 const gs = bg.slice(bg.indexOf('case "GET_STATUS"'), bg.indexOf('case "GET_DIAGNOSTIC"'));

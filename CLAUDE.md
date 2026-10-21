@@ -10,6 +10,15 @@ all chrome.debugger/CDP work) + Supabase dashboard in docs/. Live branch:
 - The operator wants zero manual steps in normal operation.
 
 ## Known state (v0.21.88 LIVE on the Web Store since Oct 20 2026 — submitted Oct 19, auto-published overnight)
+- WHERE THE TEACHING LIVES (.89, Oct 21 2026, on the branch, NOT submitted; the dashboard part
+  is live): the dashboard is the ACCOUNT's page (teaching, fleet line, account-wide Activity),
+  the extension's Settings is ONE computer's page — keep it that way. The popup and Settings
+  now open the dashboard at `#business` / `#activity` (docs/app.js `applyHashTab`), and a
+  Settings save MERGES over the account's current row (options.js pure block `SAVE OVER THE
+  CURRENT ROW`: typed boxes win, untouched boxes keep the account's value, lists item by item;
+  `CLOUD_PULL` first with a login, bounded 10 s) — an .88 page's Save overwrote the whole row
+  with its stale snapshot. Never duplicate the teaching UI into the extension; never iframe
+  the dashboard in it. `store/smoke-where.js`. Release = HANDOFF "Open after v0.21.89".
 - THE LISTING (.88, Oct 19 2026): the chat label "Buyer · headline" gives the ITEM, never
   its price — `listingFromTitle` (prices + advert words out), `ownerEntryFor` (the owner's
   Listings row / price-list line for that model, `sameModel`: same number + qualifiers),

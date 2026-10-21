@@ -137,14 +137,36 @@
   let session = null;
 
   /* ---------------- tabs ---------------- */
+  // (v0.21.89) WHERE THE TEACHING LIVES — this page, at a tab. The extension's popup and its
+  // Settings page send the owner here with a hash (#business = the teaching page, #activity =
+  // every computer's log), and a click writes the hash back, so a reload or a bookmark lands
+  // on the same tab. The Activity tab loads itself when the page lands on it after the login
+  // (applyHashTab runs from showApp, once the row is read — loadActivity needs the session).
+  function showTab(name) {
+    const t = document.querySelector('.tab[data-tab="' + name + '"]');
+    if (!t || !$(name)) return false;
+    document.querySelectorAll(".tab").forEach((x) => x.classList.remove("active"));
+    document.querySelectorAll("section.pane").forEach((x) => x.classList.remove("active"));
+    t.classList.add("active");
+    $(name).classList.add("active");
+    return true;
+  }
+  function hashTab() {
+    try { return String(location.hash || "").replace("#", "").trim().toLowerCase(); } catch (e) { return ""; }
+  }
+  function applyHashTab() {
+    const name = hashTab();
+    if (!name || !showTab(name)) return false;
+    if (name === "activity") loadActivity(); // a no-op before the login; showApp calls again after it
+    return true;
+  }
   document.querySelectorAll(".tab").forEach((t) => {
     t.addEventListener("click", () => {
-      document.querySelectorAll(".tab").forEach((x) => x.classList.remove("active"));
-      document.querySelectorAll("section.pane").forEach((x) => x.classList.remove("active"));
-      t.classList.add("active");
-      $(t.dataset.tab).classList.add("active");
+      showTab(t.dataset.tab);
+      try { history.replaceState(null, "", "#" + t.dataset.tab); } catch (e) { /* the tab is shown either way */ }
     });
   });
+  try { window.addEventListener("hashchange", applyHashTab); } catch (e) { /* no window (tests) */ }
 
   /* ---------------- form <-> settings ---------------- */
   function fieldsToForm() {
@@ -1786,7 +1808,7 @@
     $("loginView").classList.add("hidden");
     $("appView").classList.remove("hidden");
     $("whoami").textContent = (sess.user && sess.user.email) || "";
-    loadConfig();
+    loadConfig().then(applyHashTab, applyHashTab); // (v0.21.89) #business / #activity from the extension, once the row is read
   }
   function showLogin() {
     session = null;
