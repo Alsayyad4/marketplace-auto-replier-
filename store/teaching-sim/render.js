@@ -1,5 +1,5 @@
-// node render.js > teaching-copy-paste.md — one fenced block per dashboard box, in dashboard order.
-const t = require("./teaching.js");
+// node render.js [teaching2.js] > teaching-copy-paste.md — one fenced block per dashboard box, in dashboard order.
+const t = require("./" + (process.argv[2] || "teaching.js"));
 const boxes = [
   ["Business name", "businessName"],
   ["Address", "businessAddress"],

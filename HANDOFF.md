@@ -288,6 +288,28 @@ no Pixel / 14 Plus / 15 Plus / 16 Plus / 16e / SE / 8 Plus / iPad Air-Pro lines 
 said not to invent); 1-year warranty (his text also said 1–2 years). Dashboard switches the
 teaching assumes: Answer only from what I teach ON, Closer mode ON, Closing style = Master
 closer, Off-platform guardrails OFF, Silent visit confirmation ON.
+**Second request the same day — the TWO-MESSAGE version** (`teaching2.js` →
+`teaching-2026-10-21-two-messages.md`, the one the owner was told to paste): "we only send two
+messages, closing from two, know which post attracted them but never its price (we put 1 $ for
+marketing)". First message = name the model from the listing line + available in liquidation +
+1-year warranty + its starting price (the list too if they asked a price) + one promise + ONE
+time question + shop line; second = answer in general terms + the brand list + "exact price
+depends on capacity/condition/colour" + one or two hooks + "a lot of people write to us,
+priority to those who come" + a close that needs no answer (today or tomorrow before 21h, CAROL
+at the counter, bring the old phone) + shop line; a given time → [VISIT:yes] confirm only.
+Pairs with the dashboard's "Max replies / conversation" = 2 and "When that cap is hit" = Go
+quiet (`convoCapLimit`: stop/notify give 2 model replies then silence; "close" would spend the
+2nd slot on the canned line); smart follow-ups OFF; the visit-confirm is a THIRD text (a
+follow-up, not counted as a reply), so OFF for a strict two. The ad's 1 $ is already stripped by
+`listingFromTitle` for "iPhone 13 1$", "(1$)", "1$ iPhone 13", "128 Go 1$" — but "iPhone 13 - 1$"
+and "iPhone 13 à 1$" are read as a RANGE and the model number is eaten (title → "iPhone"):
+told the owner to put the 1 $ first or after the storage; a .89 tweak could refuse a range whose
+first number has no currency. Simulation 12 chats (6 first + 6 second messages): 11 clean; the
+EN "are you a bot?" second message was HELD by `metaVerdict` (length > 420 = one weak point,
+plus `\bmessages?\b` twice: "I handle the shop's messages" + "we get a lot of messages") — the
+teaching now bans message/messages/conversation/reply/response in buyer text ("a lot of people
+write to us", "between two customers"); re-test 3/3 (bot EN/FR, "too far"). Any long second
+message carries that one weak point, so a single guard word holds it: keep the ban when editing.
 
 ## Open after v0.21.88 (session of Oct 19 2026, afternoon)
 - **v0.21.88 IS LIVE ON THE WEB STORE (verified Oct 20 2026 morning: Chrome's update server serves `version="0.21.88"` for `ipompokpmlhgaioihnlbnmnhendcnejo`; approved and auto-published overnight, ~15 h after the submission).** Store computers update by themselves from here. The 9223 Chrome answered "Could not create new page" to a new tab that morning (the known Oct 13 state — a `Browser.close` + relaunch fixes it when a tab is actually needed; the update-server probe needs no tab).
