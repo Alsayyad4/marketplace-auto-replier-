@@ -32,6 +32,8 @@ for (const r of replies) {
     saysYes: /^(oui|yes|yep|ouais)\b/.test(low),
     dollarAmounts: (final.match(/\d[\d\s]*\$|\$\s?\d+/g) || []).length,
     bannedWords: (low.match(/\b(condition|état|etat|grade|messages?|conversation|reply|response)\b/g) || []),
+    conditionsApply: /conditions s'appliquent|conditions apply/.test(low),
+    familyLine: /iphone \d+ \/ \d+ pro \/ \d+ pro max : à partir de/.test(low),
   };
   out.push({ id: r.id, checks, final });
 }
