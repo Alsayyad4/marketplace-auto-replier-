@@ -102,3 +102,21 @@ owner) and a BEFORE UPDATE trigger that refuses to blank `apiKey`, `model`,
 `businessInfo` or `instructions`. The extension refuses the same writes, but this
 holds for every client at once — including machines still running an older build,
 and the dashboard.
+
+## Autolister (Oct 21 2026) — `lister.sql`
+
+The listing tool (see `lister/PLAN.md`) keeps its own four tables and one bucket, all
+namespaced `subsell_*`: `subsell_listings` (one row per listing, the Listing JSON in `data`,
+plus a claim lease), `subsell_lister_actions` (the ACCOUNT's ledger of creates / relists /
+deletes / renews from every computer, plus an hourly heartbeat per computer — the pace is
+judged per account, 14 days kept), `subsell_copy_library` (the owner's headlines and
+descriptions per category and language), `subsell_lister_settings` (the account's lister
+settings and the block hold — never inside `subsell_configs`), and the public bucket
+`subsell-photos` where each login may write only inside its own `<user_id>/` folder (the
+demo-video bucket lets any login write anywhere). A pg_cron job (`subsell-lister-retention`,
+hourly) trims action rows and removes listing ROWS the owner closed more than 60 days ago once
+their photos are gone; the FILES are removed by the dashboard through the Storage API (a SQL
+delete of `storage.objects` leaves the bytes orphaned — true of `retention.sql` as well). Paste
+`lister.sql` once in the SQL editor; it is idempotent and touches nothing else. The extension
+reads and writes these tables with the user's own session token (`cloudValidAuth`, the one auth
+door) through PostgREST, exactly like the `subsell_configs` read.

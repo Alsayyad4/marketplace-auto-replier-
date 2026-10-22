@@ -4,6 +4,13 @@ Chrome MV3 extension (content.js runs in messenger.com; background.js = service 
 all chrome.debugger/CDP work) + Supabase dashboard in docs/. Live branch:
 `claude/wizardly-noether-Oi6vP` — main is stale, never merge main over it.
 
+## AUTOLISTER (listing creation + delete-and-relist) — planned Oct 21 2026, being built in parallel
+- The plan, the contracts and the work packages are in `lister/PLAN.md` — read it before touching
+  anything under `lister/`, `supabase/lister.sql`, `store/smoke-lister-*.js` or `store/e2e-lister.mjs`.
+  One session = one work package = its own files; content.js is never edited for it; the five
+  wiring touches (manifest, background importScripts + reload guards, popup, options, build zips)
+  belong to WP-F and ship OFF by default behind two switches, one machine first.
+
 ## Standing rules (Sep 11 2026 "virus / random files" incident)
 - Anything that clicks Messenger UI, focuses/moves windows, opens PiP, or adds
   permissions ships OFF by default behind a cloud setting and goes to ONE machine first.

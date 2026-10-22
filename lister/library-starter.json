@@ -1,0 +1,260 @@
+{
+  "_readme": [
+    "AUTOLISTER starter pack (lister/PLAN.md section 8, WP-L). The dashboard's Library tab imports it",
+    "once (\"Load the starter pack\"); the owner then replaces or extends every line there — this file",
+    "is a seed, not the truth. One entry = one headline or one description, with its language.",
+    "",
+    "Placeholders: {model} {storage} {color} {grade} {condition} {price} {city} {brand} {specs}",
+    "{warranty} {shop} {hours} {category}. A title segment or a description sentence whose",
+    "placeholder is empty is dropped whole (lister-core fillTemplate).",
+    "",
+    "Copy rules (SubSell, every text): cash only — never store credit; payment \"sur place\" /",
+    "\"on the spot\" — never \"same day\"; warranty 1 year + lifetime network; no repair / technician /",
+    "diagnostic words; hours 9h–21h; no returns wording (\"échange gratuit\" only).",
+    "",
+    "tagSets must equal lister-core CATEGORIES[*].tags (store/smoke-lister-core.js checks it)."
+  ],
+  "version": 1,
+  "tagSets": {
+    "iphone": ["iphone", "apple", "smartphone", "cellulaire", "téléphone", "cell phone", "unlocked", "débloqué", "garantie", "warranty"],
+    "samsung": ["samsung", "galaxy", "android", "smartphone", "cellulaire", "téléphone", "cell phone", "unlocked", "débloqué", "garantie", "warranty"],
+    "phone": ["android", "smartphone", "cellulaire", "téléphone", "cell phone", "phone", "unlocked", "débloqué", "garantie", "warranty"],
+    "ipad": ["ipad", "apple", "tablet", "tablette", "wifi", "garantie", "warranty"],
+    "tablet": ["tablet", "tablette", "android", "wifi", "garantie", "warranty"],
+    "macbook": ["macbook", "apple", "mac", "laptop", "ordinateur portable", "macos", "garantie", "warranty"],
+    "laptop": ["laptop", "ordinateur portable", "portable", "pc", "windows", "notebook", "garantie", "warranty"],
+    "desktop": ["desktop", "ordinateur", "pc", "tour", "windows", "gaming pc", "garantie", "warranty"],
+    "console": ["console", "jeux vidéo", "video games", "gaming", "manette", "controller", "garantie", "warranty"],
+    "watch": ["smartwatch", "montre", "watch", "montre intelligente", "garantie", "warranty"],
+    "accessory": ["accessoire", "accessory", "cellulaire", "phone", "apple", "samsung"],
+    "other": ["garantie", "warranty"]
+  },
+  "headlines": {
+    "iphone": [
+      { "lang": "fr", "text": "{model} {storage} {color} — {price}$ — débloqué, {warranty}" },
+      { "lang": "fr", "text": "{model} {storage} — {price}$ — {condition}, testé, {city}" },
+      { "lang": "fr", "text": "iPhone {model} {storage} en {color} — {price}$ comptant" },
+      { "lang": "fr", "text": "{model} {storage} {color} — {price}$ — batterie vérifiée, aucun compte" },
+      { "lang": "fr", "text": "À vendre : {model} {storage} — {price}$ — garantie boutique {city}" },
+      { "lang": "fr", "text": "{model} {storage} — {price}$ — grade {grade}, déverrouillé tous réseaux" },
+      { "lang": "en", "text": "{model} {storage} {color} — ${price} — unlocked, {warranty}" },
+      { "lang": "en", "text": "{model} {storage} — ${price} — {condition}, tested, {city}" },
+      { "lang": "en", "text": "{model} {storage} in {color} — ${price} cash" },
+      { "lang": "en", "text": "{model} {storage} {color} — ${price} — battery checked, no accounts" },
+      { "lang": "en", "text": "For sale: {model} {storage} — ${price} — shop warranty {city}" },
+      { "lang": "en", "text": "{model} {storage} — ${price} — grade {grade}, unlocked all carriers" }
+    ],
+    "samsung": [
+      { "lang": "fr", "text": "{model} {storage} {color} — {price}$ — débloqué, {warranty}" },
+      { "lang": "fr", "text": "Samsung {model} {storage} — {price}$ — {condition}, testé" },
+      { "lang": "fr", "text": "{model} {storage} en {color} — {price}$ comptant — {city}" },
+      { "lang": "fr", "text": "{model} {storage} — {price}$ — aucun compte, prêt pour ta carte SIM" },
+      { "lang": "fr", "text": "À vendre : {model} {storage} — {price}$ — garantie boutique" },
+      { "lang": "fr", "text": "{model} {storage} {color} — {price}$ — grade {grade}" },
+      { "lang": "en", "text": "{model} {storage} {color} — ${price} — unlocked, {warranty}" },
+      { "lang": "en", "text": "Samsung {model} {storage} — ${price} — {condition}, tested" },
+      { "lang": "en", "text": "{model} {storage} in {color} — ${price} cash — {city}" },
+      { "lang": "en", "text": "{model} {storage} — ${price} — no accounts, SIM ready" },
+      { "lang": "en", "text": "For sale: {model} {storage} — ${price} — shop warranty" },
+      { "lang": "en", "text": "{model} {storage} {color} — ${price} — grade {grade}" }
+    ],
+    "phone": [
+      { "lang": "fr", "text": "{model} {storage} {color} — {price}$ — débloqué, {warranty}" },
+      { "lang": "fr", "text": "Cellulaire {model} {storage} — {price}$ — {condition}, testé" },
+      { "lang": "fr", "text": "{model} {storage} — {price}$ comptant — {city}" },
+      { "lang": "fr", "text": "{model} {storage} — {price}$ — aucun compte, prêt à l'emploi" },
+      { "lang": "fr", "text": "À vendre : {model} {storage} — {price}$ — garantie boutique" },
+      { "lang": "fr", "text": "{model} {storage} {color} — {price}$ — grade {grade}" },
+      { "lang": "en", "text": "{model} {storage} {color} — ${price} — unlocked, {warranty}" },
+      { "lang": "en", "text": "Cell phone {model} {storage} — ${price} — {condition}, tested" },
+      { "lang": "en", "text": "{model} {storage} — ${price} cash — {city}" },
+      { "lang": "en", "text": "{model} {storage} — ${price} — no accounts, ready to go" },
+      { "lang": "en", "text": "For sale: {model} {storage} — ${price} — shop warranty" },
+      { "lang": "en", "text": "{model} {storage} {color} — ${price} — grade {grade}" }
+    ],
+    "ipad": [
+      { "lang": "fr", "text": "{model} {storage} {color} — {price}$ — {warranty}" },
+      { "lang": "fr", "text": "iPad {model} {storage} — {price}$ — {condition}, testé, {city}" },
+      { "lang": "fr", "text": "{model} {storage} — {price}$ comptant — déconnecté d'iCloud" },
+      { "lang": "fr", "text": "À vendre : {model} {storage} — {price}$ — garantie boutique" },
+      { "lang": "fr", "text": "{model} {storage} {color} — {price}$ — grade {grade}" },
+      { "lang": "fr", "text": "{model} {storage} — {price}$ — batterie vérifiée" },
+      { "lang": "en", "text": "{model} {storage} {color} — ${price} — {warranty}" },
+      { "lang": "en", "text": "iPad {model} {storage} — ${price} — {condition}, tested, {city}" },
+      { "lang": "en", "text": "{model} {storage} — ${price} cash — signed out of iCloud" },
+      { "lang": "en", "text": "For sale: {model} {storage} — ${price} — shop warranty" },
+      { "lang": "en", "text": "{model} {storage} {color} — ${price} — grade {grade}" },
+      { "lang": "en", "text": "{model} {storage} — ${price} — battery checked" }
+    ],
+    "tablet": [
+      { "lang": "fr", "text": "{model} {storage} — {price}$ — {warranty}" },
+      { "lang": "fr", "text": "Tablette {model} {storage} — {price}$ — {condition}, testée" },
+      { "lang": "fr", "text": "{model} {storage} {color} — {price}$ comptant — {city}" },
+      { "lang": "fr", "text": "À vendre : {model} {storage} — {price}$ — garantie boutique" },
+      { "lang": "fr", "text": "{model} {storage} — {price}$ — réinitialisée, aucun compte" },
+      { "lang": "fr", "text": "{model} {storage} — {price}$ — grade {grade}" },
+      { "lang": "en", "text": "{model} {storage} — ${price} — {warranty}" },
+      { "lang": "en", "text": "Tablet {model} {storage} — ${price} — {condition}, tested" },
+      { "lang": "en", "text": "{model} {storage} {color} — ${price} cash — {city}" },
+      { "lang": "en", "text": "For sale: {model} {storage} — ${price} — shop warranty" },
+      { "lang": "en", "text": "{model} {storage} — ${price} — reset, no accounts" },
+      { "lang": "en", "text": "{model} {storage} — ${price} — grade {grade}" }
+    ],
+    "macbook": [
+      { "lang": "fr", "text": "{model} {specs} — {price}$ — {warranty}" },
+      { "lang": "fr", "text": "{model} {specs} — {price}$ — macOS installé, réinitialisé" },
+      { "lang": "fr", "text": "Apple {model} {specs} — {price}$ comptant — {city}" },
+      { "lang": "fr", "text": "{model} {specs} — {price}$ — déconnecté d'iCloud, prêt à configurer" },
+      { "lang": "fr", "text": "À vendre : {model} {specs} — {price}$ — garantie boutique" },
+      { "lang": "fr", "text": "{model} {specs} — {price}$ — grade {grade}, {condition}" },
+      { "lang": "en", "text": "{model} {specs} — ${price} — {warranty}" },
+      { "lang": "en", "text": "{model} {specs} — ${price} — macOS installed, reset" },
+      { "lang": "en", "text": "Apple {model} {specs} — ${price} cash — {city}" },
+      { "lang": "en", "text": "{model} {specs} — ${price} — signed out of iCloud, ready to set up" },
+      { "lang": "en", "text": "For sale: {model} {specs} — ${price} — shop warranty" },
+      { "lang": "en", "text": "{model} {specs} — ${price} — grade {grade}, {condition}" }
+    ],
+    "laptop": [
+      { "lang": "fr", "text": "{brand} {model} {specs} — {price}$ — {warranty}" },
+      { "lang": "fr", "text": "Portable {brand} {model} {specs} — {price}$ — Windows installé" },
+      { "lang": "fr", "text": "{model} {specs} — {price}$ comptant — {city}" },
+      { "lang": "fr", "text": "{model} {specs} — {price}$ — testé, réinitialisé" },
+      { "lang": "fr", "text": "À vendre : {brand} {model} {specs} — {price}$ — garantie boutique" },
+      { "lang": "fr", "text": "{model} {specs} — {price}$ — grade {grade}, {condition}" },
+      { "lang": "en", "text": "{brand} {model} {specs} — ${price} — {warranty}" },
+      { "lang": "en", "text": "Laptop {brand} {model} {specs} — ${price} — Windows installed" },
+      { "lang": "en", "text": "{model} {specs} — ${price} cash — {city}" },
+      { "lang": "en", "text": "{model} {specs} — ${price} — tested, reset" },
+      { "lang": "en", "text": "For sale: {brand} {model} {specs} — ${price} — shop warranty" },
+      { "lang": "en", "text": "{model} {specs} — ${price} — grade {grade}, {condition}" }
+    ],
+    "desktop": [
+      { "lang": "fr", "text": "{brand} {model} {specs} — {price}$ — {warranty}" },
+      { "lang": "fr", "text": "Ordinateur {model} {specs} — {price}$ — Windows installé" },
+      { "lang": "fr", "text": "{model} {specs} — {price}$ comptant — {city}" },
+      { "lang": "fr", "text": "À vendre : {model} {specs} — {price}$ — garantie boutique" },
+      { "lang": "fr", "text": "{model} {specs} — {price}$ — testé, grade {grade}" },
+      { "lang": "en", "text": "{brand} {model} {specs} — ${price} — {warranty}" },
+      { "lang": "en", "text": "Desktop {model} {specs} — ${price} — Windows installed" },
+      { "lang": "en", "text": "{model} {specs} — ${price} cash — {city}" },
+      { "lang": "en", "text": "For sale: {model} {specs} — ${price} — shop warranty" },
+      { "lang": "en", "text": "{model} {specs} — ${price} — tested, grade {grade}" }
+    ],
+    "console": [
+      { "lang": "fr", "text": "{model} {specs} — {price}$ — testée, manette incluse" },
+      { "lang": "fr", "text": "Console {model} — {price}$ — {condition}, {warranty}" },
+      { "lang": "fr", "text": "{model} {specs} — {price}$ comptant — {city}" },
+      { "lang": "fr", "text": "{model} — {price}$ — réinitialisée, aucun compte, prête à jouer" },
+      { "lang": "fr", "text": "À vendre : {model} {specs} — {price}$ — garantie boutique" },
+      { "lang": "fr", "text": "{model} {specs} — {price}$ — grade {grade}" },
+      { "lang": "en", "text": "{model} {specs} — ${price} — tested, controller included" },
+      { "lang": "en", "text": "Console {model} — ${price} — {condition}, {warranty}" },
+      { "lang": "en", "text": "{model} {specs} — ${price} cash — {city}" },
+      { "lang": "en", "text": "{model} — ${price} — factory reset, no accounts, ready to play" },
+      { "lang": "en", "text": "For sale: {model} {specs} — ${price} — shop warranty" },
+      { "lang": "en", "text": "{model} {specs} — ${price} — grade {grade}" }
+    ],
+    "watch": [
+      { "lang": "fr", "text": "{model} {specs} {color} — {price}$ — {warranty}" },
+      { "lang": "fr", "text": "Montre {model} {specs} — {price}$ — {condition}, testée" },
+      { "lang": "fr", "text": "{model} {specs} — {price}$ comptant — {city}" },
+      { "lang": "fr", "text": "À vendre : {model} {specs} — {price}$ — garantie boutique" },
+      { "lang": "fr", "text": "{model} {specs} — {price}$ — grade {grade}, aucun compte" },
+      { "lang": "en", "text": "{model} {specs} {color} — ${price} — {warranty}" },
+      { "lang": "en", "text": "Smartwatch {model} {specs} — ${price} — {condition}, tested" },
+      { "lang": "en", "text": "{model} {specs} — ${price} cash — {city}" },
+      { "lang": "en", "text": "For sale: {model} {specs} — ${price} — shop warranty" },
+      { "lang": "en", "text": "{model} {specs} — ${price} — grade {grade}, no accounts" }
+    ],
+    "accessory": [
+      { "lang": "fr", "text": "{model} {specs} — {price}$ — {condition}" },
+      { "lang": "fr", "text": "{brand} {model} — {price}$ — en stock, {city}" },
+      { "lang": "fr", "text": "{model} {specs} — {price}$ comptant — garantie boutique" },
+      { "lang": "fr", "text": "À vendre : {model} {specs} — {price}$" },
+      { "lang": "en", "text": "{model} {specs} — ${price} — {condition}" },
+      { "lang": "en", "text": "{brand} {model} — ${price} — in stock, {city}" },
+      { "lang": "en", "text": "{model} {specs} — ${price} cash — shop warranty" },
+      { "lang": "en", "text": "For sale: {model} {specs} — ${price}" }
+    ],
+    "other": [
+      { "lang": "fr", "text": "{model} {specs} — {price}$ — {condition}" },
+      { "lang": "fr", "text": "{model} {specs} — {price}$ comptant — {city}" },
+      { "lang": "fr", "text": "À vendre : {model} {specs} — {price}$ — garantie boutique" },
+      { "lang": "en", "text": "{model} {specs} — ${price} — {condition}" },
+      { "lang": "en", "text": "{model} {specs} — ${price} cash — {city}" },
+      { "lang": "en", "text": "For sale: {model} {specs} — ${price} — shop warranty" }
+    ]
+  },
+  "descriptions": {
+    "iphone": [
+      { "lang": "fr", "text": "{model} {storage} {color} à vendre, {price}$. Débloqué pour tous les réseaux, testé point par point et réinitialisé : aucun compte iCloud, tu arrives avec ta carte SIM et c'est parti.\n\nÉtat : {condition} (grade {grade}). {warranty}.\n\nPaiement comptant sur place, tu peux tout essayer en boutique avant de payer. Échange accepté : tu apportes ton ancien cellulaire et tu paies la différence comptant.\n\n{shop}, {city} — ouvert {hours}. Écris-moi ici pour passer le prendre." },
+      { "lang": "fr", "text": "On a ce {model} {storage} en inventaire à {price}$, en {color}. Grade {grade}, {condition}, batterie vérifiée, déverrouillé.\n\n{warranty}. Comptant sur place, aucun dépôt. Plus de 1 700 avis Google.\n\nDisponible tant que l'annonce est en ligne — {shop}, {city}, {hours}." },
+      { "lang": "fr", "text": "{model} {storage} — {price}$ comptant.\n\n• {condition}, grade {grade}\n• Débloqué tous réseaux, aucun compte\n• {warranty}\n• Essai en boutique avant de payer\n\nRamassage à {city}, {hours}. Écris-moi pour l'heure qui te convient." },
+      { "lang": "fr", "text": "Tu cherches un {model} sans le risque d'une vente privée ? Celui-ci est en {storage}, {color}, {price}$. Testé, réinitialisé, déverrouillé, et il part avec {warranty}.\n\nPaiement comptant sur place seulement. {shop}, {city}." },
+      { "lang": "en", "text": "{model} {storage} {color} for sale, ${price}. Unlocked for every carrier, fully tested and reset: no iCloud account, it boots to the setup screen like new.\n\nCondition: {condition} (grade {grade}). {warranty}.\n\nCash on the spot; test everything in the shop before paying. Trade-ins welcome: bring your old phone and pay the difference in cash.\n\n{shop}, {city} — open {hours}. Message me here to come pick it up." },
+      { "lang": "en", "text": "We have this {model} {storage} in stock at ${price}, in {color}. Grade {grade}, {condition}, battery checked, unlocked.\n\n{warranty}. Cash on the spot, no deposits. 1,700+ Google reviews.\n\nAvailable as long as this ad is up — {shop}, {city}, {hours}." },
+      { "lang": "en", "text": "{model} {storage} — ${price} cash.\n\n• {condition}, grade {grade}\n• Unlocked all carriers, no accounts\n• {warranty}\n• Try it in the shop before you pay\n\nPickup in {city}, {hours}. Message me for a time that works." },
+      { "lang": "en", "text": "Looking for a {model} without the risk of a private sale? This one is {storage}, {color}, ${price}. Tested, reset, unlocked, and it comes with {warranty}.\n\nCash on the spot only. {shop}, {city}." }
+    ],
+    "samsung": [
+      { "lang": "fr", "text": "{model} {storage} {color} à vendre, {price}$. Débloqué pour tous les réseaux, testé et réinitialisé : aucun compte Google ou Samsung, prêt pour ta carte SIM.\n\nÉtat : {condition} (grade {grade}). {warranty}.\n\nPaiement comptant sur place, essai en boutique avant de payer. Échange accepté, tu paies la différence comptant.\n\n{shop}, {city} — {hours}." },
+      { "lang": "fr", "text": "{model} {storage} — {price}$ comptant.\n\n• {condition}, grade {grade}\n• Débloqué, aucun compte\n• {warranty}\n• Essai en boutique\n\nRamassage à {city}, {hours}." },
+      { "lang": "fr", "text": "Samsung {model} en {storage}, {color}, {price}$. Testé point par point, déverrouillé, et il part avec {warranty}. Comptant sur place seulement. {shop}, {city}." },
+      { "lang": "en", "text": "{model} {storage} {color} for sale, ${price}. Unlocked for every carrier, tested and reset: no Google or Samsung account, SIM ready.\n\nCondition: {condition} (grade {grade}). {warranty}.\n\nCash on the spot; try it in the shop before paying. Trade-ins welcome, pay the difference in cash.\n\n{shop}, {city} — {hours}." },
+      { "lang": "en", "text": "{model} {storage} — ${price} cash.\n\n• {condition}, grade {grade}\n• Unlocked, no accounts\n• {warranty}\n• Try it in the shop\n\nPickup in {city}, {hours}." },
+      { "lang": "en", "text": "Samsung {model} in {storage}, {color}, ${price}. Fully tested, unlocked, and it comes with {warranty}. Cash on the spot only. {shop}, {city}." }
+    ],
+    "phone": [
+      { "lang": "fr", "text": "{model} {storage} {color} à vendre, {price}$. Débloqué, testé et réinitialisé, aucun compte. État : {condition} (grade {grade}). {warranty}.\n\nComptant sur place, essai en boutique avant de payer. {shop}, {city} — {hours}." },
+      { "lang": "fr", "text": "{model} {storage} — {price}$ comptant.\n\n• {condition}, grade {grade}\n• Débloqué tous réseaux\n• {warranty}\n\nRamassage à {city}, {hours}." },
+      { "lang": "en", "text": "{model} {storage} {color} for sale, ${price}. Unlocked, tested and reset, no accounts. Condition: {condition} (grade {grade}). {warranty}.\n\nCash on the spot; try it in the shop before paying. {shop}, {city} — {hours}." },
+      { "lang": "en", "text": "{model} {storage} — ${price} cash.\n\n• {condition}, grade {grade}\n• Unlocked all carriers\n• {warranty}\n\nPickup in {city}, {hours}." }
+    ],
+    "ipad": [
+      { "lang": "fr", "text": "{model} {storage} {color} à vendre, {price}$. Testé, réinitialisé, déconnecté d'iCloud : il démarre sur l'écran de configuration. État : {condition} (grade {grade}). {warranty}.\n\nComptant sur place, essai en boutique. {shop}, {city} — {hours}." },
+      { "lang": "fr", "text": "iPad {model} en {storage} — {price}$ comptant.\n\n• {condition}, grade {grade}\n• Aucun compte, batterie vérifiée\n• {warranty}\n\nRamassage à {city}, {hours}." },
+      { "lang": "en", "text": "{model} {storage} {color} for sale, ${price}. Tested, reset, signed out of iCloud: it boots to the setup screen. Condition: {condition} (grade {grade}). {warranty}.\n\nCash on the spot; try it in the shop. {shop}, {city} — {hours}." },
+      { "lang": "en", "text": "iPad {model} in {storage} — ${price} cash.\n\n• {condition}, grade {grade}\n• No accounts, battery checked\n• {warranty}\n\nPickup in {city}, {hours}." }
+    ],
+    "tablet": [
+      { "lang": "fr", "text": "{model} {storage} à vendre, {price}$. Testée, réinitialisée, aucun compte. État : {condition} (grade {grade}). {warranty}.\n\nComptant sur place, essai en boutique. {shop}, {city} — {hours}." },
+      { "lang": "fr", "text": "Tablette {model} {storage} — {price}$ comptant.\n\n• {condition}, grade {grade}\n• {warranty}\n\nRamassage à {city}, {hours}." },
+      { "lang": "en", "text": "{model} {storage} for sale, ${price}. Tested, reset, no accounts. Condition: {condition} (grade {grade}). {warranty}.\n\nCash on the spot; try it in the shop. {shop}, {city} — {hours}." },
+      { "lang": "en", "text": "Tablet {model} {storage} — ${price} cash.\n\n• {condition}, grade {grade}\n• {warranty}\n\nPickup in {city}, {hours}." }
+    ],
+    "macbook": [
+      { "lang": "fr", "text": "{model} {specs} à vendre, {price}$. macOS installé, réinitialisé et déconnecté d'iCloud : il démarre sur l'écran de bienvenue. Écran, clavier, trackpad, ports, haut-parleurs et batterie vérifiés. État : {condition} (grade {grade}). {warranty}.\n\nComptant sur place, essai en boutique avant de payer. {shop}, {city} — {hours}." },
+      { "lang": "fr", "text": "{model} {specs} — {price}$ comptant.\n\n• {condition}, grade {grade}\n• macOS installé, aucun compte\n• {warranty}\n• Essai en boutique\n\nRamassage à {city}, {hours}." },
+      { "lang": "en", "text": "{model} {specs} for sale, ${price}. macOS installed, reset and signed out of iCloud: it boots to the welcome screen. Screen, keyboard, trackpad, ports, speakers and battery checked. Condition: {condition} (grade {grade}). {warranty}.\n\nCash on the spot; try it in the shop before paying. {shop}, {city} — {hours}." },
+      { "lang": "en", "text": "{model} {specs} — ${price} cash.\n\n• {condition}, grade {grade}\n• macOS installed, no accounts\n• {warranty}\n• Try it in the shop\n\nPickup in {city}, {hours}." }
+    ],
+    "laptop": [
+      { "lang": "fr", "text": "{brand} {model} {specs} à vendre, {price}$. Windows installé, réinitialisé, testé : écran, clavier, ports, batterie. État : {condition} (grade {grade}). {warranty}.\n\nComptant sur place, essai en boutique. {shop}, {city} — {hours}." },
+      { "lang": "fr", "text": "Portable {brand} {model} {specs} — {price}$ comptant.\n\n• {condition}, grade {grade}\n• Windows installé, aucun compte\n• {warranty}\n\nRamassage à {city}, {hours}." },
+      { "lang": "en", "text": "{brand} {model} {specs} for sale, ${price}. Windows installed, reset, tested: screen, keyboard, ports, battery. Condition: {condition} (grade {grade}). {warranty}.\n\nCash on the spot; try it in the shop. {shop}, {city} — {hours}." },
+      { "lang": "en", "text": "Laptop {brand} {model} {specs} — ${price} cash.\n\n• {condition}, grade {grade}\n• Windows installed, no accounts\n• {warranty}\n\nPickup in {city}, {hours}." }
+    ],
+    "desktop": [
+      { "lang": "fr", "text": "{brand} {model} {specs} à vendre, {price}$. Windows installé, réinitialisé, testé. État : {condition} (grade {grade}). {warranty}.\n\nComptant sur place, essai en boutique. {shop}, {city} — {hours}." },
+      { "lang": "en", "text": "{brand} {model} {specs} for sale, ${price}. Windows installed, reset, tested. Condition: {condition} (grade {grade}). {warranty}.\n\nCash on the spot; try it in the shop. {shop}, {city} — {hours}." }
+    ],
+    "console": [
+      { "lang": "fr", "text": "{model} {specs} à vendre, {price}$. Testée, réinitialisée, aucun compte : tu branches et tu joues. Manette et fils inclus. État : {condition} (grade {grade}). {warranty}.\n\nComptant sur place, essai en boutique. {shop}, {city} — {hours}." },
+      { "lang": "fr", "text": "Console {model} — {price}$ comptant.\n\n• {condition}, grade {grade}\n• Manette et fils inclus\n• {warranty}\n\nRamassage à {city}, {hours}." },
+      { "lang": "en", "text": "{model} {specs} for sale, ${price}. Tested, factory reset, no accounts: plug in and play. Controller and cables included. Condition: {condition} (grade {grade}). {warranty}.\n\nCash on the spot; try it in the shop. {shop}, {city} — {hours}." },
+      { "lang": "en", "text": "Console {model} — ${price} cash.\n\n• {condition}, grade {grade}\n• Controller and cables included\n• {warranty}\n\nPickup in {city}, {hours}." }
+    ],
+    "watch": [
+      { "lang": "fr", "text": "{model} {specs} {color} à vendre, {price}$. Testée, réinitialisée, aucun compte. État : {condition} (grade {grade}). {warranty}.\n\nComptant sur place, essai en boutique. {shop}, {city} — {hours}." },
+      { "lang": "en", "text": "{model} {specs} {color} for sale, ${price}. Tested, reset, no accounts. Condition: {condition} (grade {grade}). {warranty}.\n\nCash on the spot; try it in the shop. {shop}, {city} — {hours}." }
+    ],
+    "accessory": [
+      { "lang": "fr", "text": "{model} {specs} — {price}$. {condition}. En stock en boutique, comptant sur place. {shop}, {city} — {hours}." },
+      { "lang": "en", "text": "{model} {specs} — ${price}. {condition}. In stock at the shop, cash on the spot. {shop}, {city} — {hours}." }
+    ],
+    "other": [
+      { "lang": "fr", "text": "{model} {specs} à vendre, {price}$. État : {condition}. {warranty}. Comptant sur place, essai en boutique. {shop}, {city} — {hours}." },
+      { "lang": "en", "text": "{model} {specs} for sale, ${price}. Condition: {condition}. {warranty}. Cash on the spot; try it in the shop. {shop}, {city} — {hours}." }
+    ]
+  }
+}
