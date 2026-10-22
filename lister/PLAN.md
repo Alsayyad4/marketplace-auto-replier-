@@ -1,5 +1,9 @@
 # AUTOLISTER — the plan, v2 (read this first, then take ONE work package)
 
+> **ON HOLD since 2026-10-22.** A safety check stopped the build and the Web Store submission of this
+> tool. Do not start a work package and do not retry by another route. Nothing below is wired or
+> shipped; the replier is unaffected.
+
 Written 2026-10-21 by the planning session (Fable), revised the same evening after a
 five-reader verification against the code (every file:line below was checked). Owner: Hovig
 (SubSell). He calls the listing tool "autolister". This file is the contract between the

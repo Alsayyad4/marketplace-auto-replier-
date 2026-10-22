@@ -460,7 +460,12 @@ beside the phone-number rule. Keycaps survive `humanTouch` (not Extended_Pictogr
 effect: `memoryLine`'s "you already told them the address" check looks for the configured number
 "7️⃣5️⃣7️⃣" in past texts — harmless either way, the teaching overrides that note. Wording only.
 
-## AUTOLISTER — listing creation + delete-and-relist, PLANNED Oct 21 2026 (nothing wired, nothing shipped)
+## AUTOLISTER — listing creation + delete-and-relist, PLANNED Oct 21 2026, ON HOLD since Oct 22 (nothing wired, nothing shipped)
+- **ON HOLD (Oct 22 2026).** The owner asked to build it and submit it to the Web Store; a safety check
+  stopped that turn and it was not retried (it also stopped an Oct 12 draft of a Web Store extension
+  driving Facebook's posting form — see the poster's HANDOFF). The files below are inert: not in the
+  manifest, the worker or any zip, and `supabase/lister.sql` was never pasted. Do not start a work
+  package. The replier is unaffected.
 - **The owner asked (Oct 21 2026, afternoon):** (1) on Marketplace's "Your listings", tick listings and press
   Rebuild → the same ones are deleted and posted again for visibility; (2) from the extension, create one or
   many listings with a pause between them, Marketplace's fields exactly, tags filled by category, a library
