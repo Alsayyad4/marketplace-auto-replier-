@@ -109,7 +109,7 @@ ok(/loadConfig\(\)\.then\(applyHashTab, applyHashTab\);/.test(app), "the hash ta
 ok(/if \(name === "activity"\) loadActivity\(\);/.test(app), "#activity loads the log");
 ok(/history\.replaceState\(null, "", "#" \+ t\.dataset\.tab\);/.test(app), "a click writes the hash back");
 ok(/app\.js\?v=20261021/.test(html), "the dashboard cache-buster is bumped");
-ok(manifest.version === "0.21.89", "manifest v0.21.89");
+ok(/^0\.21\.(89|9[0-9])$/.test(manifest.version), "manifest v0.21.89 or later — " + manifest.version); // (v0.21.90) the release after carries this page unchanged
 ok(/"options\.html", "options\.js", "popup\.html", "popup\.js"/.test(ps1), "the store zip carries the four page files (nothing new to add)");
 
 /* 4 — the dashboard, really run: a hash lands on its tab after the login */

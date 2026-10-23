@@ -47,15 +47,25 @@ ok(/async function cdpSetFiles\(tabId, paths, channel\) \{\s*if \(!chrome\.debug
 ok(/const STORE_BUILD = \(\(\) => \{ try \{ return !!chrome\.runtime\.getManifest\(\)\.update_url; \} catch \(e\) \{ return false; \} \}\)\(\);/.test(bg), "STORE_BUILD reads the manifest's update_url");
 ok(/async function cloudSelfUpdate\(force\) \{\s*if \(STORE_BUILD\) \{[\s\S]{0,400}return \{ ok: true, upToDate: true, store: true, version: v, reason: "store build" \};/.test(bg), "cloudSelfUpdate returns at once in a store build (no Downloads probe, no junk folder)");
 ok(/async function selfUpdateCheck\(\) \{\s*if \(STORE_BUILD\) return;/.test(bg), "selfUpdateCheck returns at once in a store build");
-ok(/" \| sud: " \+ \(STORE_BUILD \? "STORE\(Chrome updates it\) " : ""\)/.test(bg), "the diagnostic's sud line says STORE");
+ok(/" \| sud: " \+ \(STORE_BUILD \? "STORE\(installs itself\) upd=" \+/.test(bg), "the diagnostic's sud line says STORE and names a ready update (v0.21.90)");
 
 /* 3 — the popup */
-ok(/if \(r\.store\) \$\("updStatus"\)\.textContent = "v" \+ r\.version \+ " — the Chrome Web Store updates it by itself";/.test(popupSrc), "the popup's Update now says the Store updates it");
+ok(/if \(r\.store\) \$\("updStatus"\)\.textContent = storeUpdText\(r\);/.test(popupSrc) && /new versions install themselves/.test(popupSrc), "the popup's Update now says a store install installs its updates itself (v0.21.90)");
 
 /* 4 — (v0.21.83) the store background.js carries no self-updater */
 const { storeBackground } = require("./webstore-background.js");
 const sb = storeBackground(bg);
-ok(!/raw\.githubusercontent|SUD_RAW|SUD_FILES|sudDownload|chrome\.runtime\.reload\(/.test(sb), "the store background.js has no remote-file download and no self-reload");
+ok(!/raw\.githubusercontent|SUD_RAW|SUD_FILES|sudDownload/.test(sb), "the store background.js has no remote-file download");
+// (v0.21.90) the one reload left is Chrome's documented way to install an update the Store has
+// already downloaded (onUpdateAvailable) — never a fetch of code, never another reason.
+{
+  const reloads = sb.match(/chrome\.runtime\.reload\(\)/g) || [];
+  const code = sb.replace(/\/\*[\s\S]*?\*\//g, "").replace(/\/\/[^\n]*/g, "");
+  const codeReloads = code.match(/chrome\.runtime\.reload\(\)/g) || [];
+  ok(codeReloads.length === 1 && /let storeReload = \(\) => chrome\.runtime\.reload\(\);/.test(code), "the store background.js reloads in ONE place only: storeReload — " + reloads.length + " mention(s), " + codeReloads.length + " in code");
+  ok((code.match(/storeReload\(\)/g) || []).length === 1 && /\} else if \(d\.act === "apply"\) \{[\s\S]{0,300}storeReload\(\);/.test(code), "…called only when storeUpdateDecision says apply");
+  ok(/chrome\.runtime\.onUpdateAvailable\.addListener\(\(d\) => \{ storeUpdateNoted\(d && d\.version\); \}\);/.test(code), "…for a version Chrome itself reports as downloaded (onUpdateAvailable)");
+}
 ok(/const STORE_BUILD = true;/.test(sb) && /async function cloudSelfUpdate\(\) \{/.test(sb) && /async function selfUpdateCheck\(\) \{/.test(sb), "…and keeps the three stubs the rest of the file calls");
 let parses = true;
 try { new Function(sb); } catch (e) { parses = String(e.message); } // a syntax check only: the function is never called

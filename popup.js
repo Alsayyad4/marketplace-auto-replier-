@@ -395,13 +395,30 @@
     });
   }
 
+  /* (v0.21.90) What the "Update now" button says in a store install: no developer mode,
+   * ever — a ready version installs between two chats, the button only makes it now. */
+  function storeUpdText(r) {
+    if (r.applying) return "v" + r.version + " — installing now; this popup closes and the bot carries on";
+    if (r.pausing) return "v" + r.version + " — installing in a few seconds, as soon as the reply in progress is sent";
+    if (r.downloading) return "v" + r.version + " found — Chrome is downloading it; it installs itself within a minute";
+    if (r.upToDate) return "Up to date ✓ (v" + r.version + ") — new versions install themselves";
+    if (r.throttled) return "v" + r.version + " — checked a moment ago; new versions install themselves within 2 hours";
+    return "v" + r.version + " — new versions install themselves" + (r.why ? " (" + r.why + ")" : "");
+  }
+  // A version that is ready shows without a click.
+  chrome.runtime.sendMessage({ type: "GET_STATUS" }, (s) => {
+    if (chrome.runtime.lastError || !s || !s.ok || !s.storeUpdate || !$("updStatus")) return;
+    const u = s.storeUpdate, cur = chrome.runtime.getManifest().version;
+    if (u.version && u.version !== cur) $("updStatus").textContent = "v" + u.version + " ready — installs itself at the next quiet moment (Update now = right away)";
+  });
+
   /* ----- Built-in updater: check the cloud and update this extension now ----- */
   if ($("checkUpdate")) {
     $("checkUpdate").addEventListener("click", () => {
       $("updStatus").textContent = "Checking…";
       chrome.runtime.sendMessage({ type: "CHECK_UPDATE" }, (r) => {
         if (chrome.runtime.lastError || !r) { $("updStatus").textContent = "error"; return; }
-        if (r.store) $("updStatus").textContent = "v" + r.version + " — the Chrome Web Store updates it by itself"; // (v0.21.81)
+        if (r.store) $("updStatus").textContent = storeUpdText(r); // (v0.21.90) a store install installs its updates itself
         else if (r.upToDate) $("updStatus").textContent = "Up to date ✓ (v" + r.version + ")";
         else if (r.updated) $("updStatus").textContent = "v" + r.version + " downloaded — reloading…";
         else $("updStatus").textContent = r.reason || "failed";

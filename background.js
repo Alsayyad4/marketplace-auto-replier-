@@ -5100,7 +5100,7 @@ async function buildDiagnostic() {
   const st = await new Promise((r) =>
     chrome.storage.local.get(
       [
-        "enabledLocal", "remoteConfig", "remoteConfigAt", "remoteConfigUrl", "configKey",
+        "enabledLocal", "remoteConfig", "remoteConfigAt", "remoteConfigUrl", "configKey", "storeUpdate", // (v0.21.90) the store update that installs itself
         "configKeyDead", "configKeyDeadAt", "cloudKeyDoor", // (v0.21.79) the dead key and the second door
         "tabClosed", "humanAt", "humanWhy", "keepWindowsRestored", // (v0.21.80) the calm computer
         "cloudConfig", "cloudConfigAt", "cloudAuth", "cloudStale", "lastMirror", "debugTick", AUTH_HOLD_KEY,
@@ -5358,7 +5358,7 @@ async function buildDiagnostic() {
     " urlStrikesActive=" + strikes +
     " catchUp=" + (cu.armed ? "ARMED(" + ageM(cu.at) + ")" : "off") +
     " auto13=" + (st.autoCatchUp01213 ? "done" : "-") + " auto17=" + (st.autoCatchUp01217 ? "done" : "-") +
-    " | sud: " + (STORE_BUILD ? "STORE(Chrome updates it) " : "") + "base=" + (st.sudBase ? "set" : "-") + " dir=" + cut(st.sudDirName, 24) + " lastCheck=" + ageM(st.sudLastCheck) + (st.sudBase || STORE_BUILD ? "" : " why=\"" + cut(st.sudStatus, 110) + "\"") +
+    " | sud: " + (STORE_BUILD ? "STORE(installs itself) upd=" + (st[STORE_UPD_KEY] ? (st[STORE_UPD_KEY].version ? "v" + st[STORE_UPD_KEY].version + " ready " + ageM(st[STORE_UPD_KEY].readyAt) + " tries=" + (st[STORE_UPD_KEY].tries || 0) + (st[STORE_UPD_KEY].pauseAt ? " paused " + ageM(st[STORE_UPD_KEY].pauseAt) : "") : "none") + " check=" + ageM(st[STORE_UPD_KEY].checkedAt) + "(" + cut(st[STORE_UPD_KEY].checkStatus, 30) + ")" + (st[STORE_UPD_KEY].appliedVersion ? " last=v" + st[STORE_UPD_KEY].appliedVersion + "(" + ageM(st[STORE_UPD_KEY].appliedAt) + ")" : "") : "-") + " " : "") + "base=" + (st.sudBase ? "set" : "-") + " dir=" + cut(st.sudDirName, 24) + " lastCheck=" + ageM(st.sudLastCheck) + (st.sudBase || STORE_BUILD ? "" : " why=\"" + cut(st.sudStatus, 110) + "\"") +
     " | winRestored=" + (st.winRestoreN || 0) + (st.winRestoreN ? "(" + ageM(st.winRestoreAt) + ")" : "")
   );
   // (v0.21.80) the calm computer: when a person was last seen, a close being respected,
@@ -5473,7 +5473,8 @@ chrome.runtime.onMessage.addListener((msg, _sender, sendResponse) => {
         }
         case "CHECK_UPDATE": {
           // Popup "Update now" — run the built-in cloud self-update immediately.
-          sendResponse(await cloudSelfUpdate(true));
+          // (v0.21.90) a store install: install what Chrome has ready, else ask Chrome now.
+          sendResponse(STORE_BUILD ? await storeUpdateNow() : await cloudSelfUpdate(true));
           break;
         }
         case "SUD_DIRNAME": {
@@ -5558,6 +5559,7 @@ chrome.runtime.onMessage.addListener((msg, _sender, sendResponse) => {
             fullDailyCap: budget.fullDayCap,
             warming: budget.warming,
             withinHours: withinBusinessHours(settings),
+            storeUpdate: STORE_BUILD ? await storeUpdRead() : null, // (v0.21.90) a ready update and when it installs
             lastMirror, // activity-log health: {at, ok, error} — surfaced in the popup
           });
           break;
@@ -6766,6 +6768,164 @@ async function selfUpdateCheck() {
 }
 
 /* ===== STORE-STRIP:END ===== */
+
+/* ===== (v0.21.90) A STORE UPDATE INSTALLS ITSELF =====
+ * Owner, Oct 23 2026: "should be only from the link, I don't want to play with developer
+ * modes". Chrome installs a downloaded update of a store extension only once the extension
+ * is IDLE, and SubSell never is (the Messenger tab asks this worker something every 8 s): on
+ * the owner's PC v0.21.89 sat downloaded for 22 h (Oct 21 14:20 → Oct 22 12:21), other
+ * computers kept showing the old version, and a Settings page opened during Chrome's own late
+ * swap showed "ipompok… is blocked — ERR_BLOCKED_BY_CLIENT". Now, in the store build:
+ *   - this worker asks Chrome for an update at start-up and every 2 h (requestUpdateCheck);
+ *   - when Chrome has one ready (onUpdateAvailable) every bot tab stops STARTING new chats
+ *     (PAUSE_SCANS — the send in flight always finishes), and once no tab is mid-send for a
+ *     settle of 10 s the worker calls chrome.runtime.reload(), Chrome's documented way to
+ *     install a ready update now. The open Messenger tabs get the new content.js (onInstalled
+ *     re-injects), as with every update;
+ *   - never while this computer's Settings page or popup is open (a reload closes them and
+ *     whatever was typed); the popup's "Update now" checks and applies at once;
+ *   - bounded: a pause held 20 min by a busy tab resumes the bot and rests an hour; a version
+ *     that did not install after 3 reloads is left to Chrome.
+ * The decision is pure (storeUpdateDecision, store/smoke-storeupdate.js); nothing here runs in
+ * an unpacked install (STORE_BUILD false: Chrome never offers it an update). ===== */
+const STORE_UPD_KEY = "storeUpdate";                 // {version, readyAt, pauseAt, tries, triedAt, backoffUntil, checkedAt, checkStatus, appliedVersion, appliedAt}
+const STORE_UPD_ALARM = "subsell-store-update";      // the 2-hourly check
+const STORE_UPD_TICK = "subsell-store-update-tick";  // every 30 s while an update waits
+const STORE_UPD_SETTLE_MS = 10 * 1000;
+const STORE_UPD_PAUSE_MAX_MS = 20 * 60 * 1000;
+const STORE_UPD_REST_MS = 60 * 60 * 1000;
+const STORE_UPD_MAX_TRIES = 3;
+const STORE_UPD_TABS = ["https://*.messenger.com/*", "https://www.facebook.com/messages/*", "https://www.facebook.com/marketplace/*"];
+function verCmp(a, b) {
+  const pa = String(a || "").split(".").map((x) => parseInt(x, 10) || 0), pb = String(b || "").split(".").map((x) => parseInt(x, 10) || 0);
+  for (let i = 0; i < Math.max(pa.length, pb.length); i++) { const x = pa[i] || 0, y = pb[i] || 0; if (x !== y) return x < y ? -1 : 1; }
+  return 0;
+}
+/* What to do right now. Pure. s = the stored state; o = {now, loaded, busy, uiOpen, force}. */
+function storeUpdateDecision(s, o) {
+  if (!s || !s.version || verCmp(s.version, o.loaded) <= 0) return { act: "none" };
+  if (!o.force && (s.tries || 0) >= STORE_UPD_MAX_TRIES) return { act: "giveup", why: "v" + s.version + " did not install after " + STORE_UPD_MAX_TRIES + " tries — Chrome installs it at its next restart" };
+  if (!o.force && s.backoffUntil && o.now < s.backoffUntil) return { act: "rest", why: "a chat kept the bot busy — trying again later" };
+  if (!o.force && o.uiOpen) return { act: "wait", why: "Settings or the popup is open on this computer" };
+  if (o.busy) {
+    if (s.pauseAt && o.now - s.pauseAt > STORE_UPD_PAUSE_MAX_MS) return { act: "resume", why: "a chat kept the bot busy for 20 min" };
+    return { act: "pause", why: "a reply is being sent" };
+  }
+  if (!s.pauseAt || o.now - s.pauseAt < STORE_UPD_SETTLE_MS) return { act: "pause", why: "new chats on hold for a few seconds" };
+  return { act: "apply" };
+}
+/* ===== STORE UPDATE END ===== */
+let storeReload = () => chrome.runtime.reload(); // a variable so the boot test can watch it
+function storeUpdRead() {
+  return new Promise((r) => chrome.storage.local.get([STORE_UPD_KEY], (x) => { void chrome.runtime.lastError; r((x && x[STORE_UPD_KEY]) || {}); }));
+}
+async function storeUpdWrite(patch) {
+  const cur = await storeUpdRead();
+  const next = Object.assign({}, cur, patch);
+  await new Promise((r) => chrome.storage.local.set({ [STORE_UPD_KEY]: next }, () => { void chrome.runtime.lastError; r(); }));
+  return next;
+}
+function storeUpdBroadcast(type) {
+  try {
+    chrome.tabs.query({ url: STORE_UPD_TABS }, (tabs) => {
+      void chrome.runtime.lastError;
+      for (const t of tabs || []) { try { chrome.tabs.sendMessage(t.id, { type }, () => void chrome.runtime.lastError); } catch (e) { /* tab without script */ } }
+    });
+  } catch (e) { /* never let the updater break anything */ }
+}
+async function storeUpdTabsBusy() {
+  const tabs = await new Promise((r) => chrome.tabs.query({ url: STORE_UPD_TABS }, (t) => { void chrome.runtime.lastError; r(t || []); }));
+  for (const t of tabs) { const p = await pingTab(t.id); if (p && p.busy === true) return true; }
+  return false;
+}
+async function storeUpdUiOpen() {
+  try {
+    if (chrome.runtime.getContexts) {
+      const c = await chrome.runtime.getContexts({ contextTypes: ["TAB", "POPUP"] });
+      return Array.isArray(c) && c.length > 0;
+    }
+  } catch (e) { /* older Chrome: no way to know — go on */ }
+  return false;
+}
+let storeUpdTicking = false;
+async function storeUpdateTick(force) {
+  if (!STORE_BUILD || storeUpdTicking) return { act: "busy" };
+  storeUpdTicking = true;
+  try {
+    const s = await storeUpdRead();
+    const loaded = chrome.runtime.getManifest().version;
+    const now = Date.now();
+    if (s.version && verCmp(s.version, loaded) <= 0) {
+      // installed (this worker IS the new version) — or Chrome installed it by itself
+      await storeUpdWrite({ version: "", pauseAt: 0, tries: 0, backoffUntil: 0, appliedVersion: loaded, appliedAt: now });
+      chrome.alarms.clear(STORE_UPD_TICK, () => void chrome.runtime.lastError);
+      if (s.pauseAt) storeUpdBroadcast("RESUME_SCANS");
+      return { act: "none", installed: loaded };
+    }
+    const d = storeUpdateDecision(s, { now, loaded, busy: await storeUpdTabsBusy(), uiOpen: force ? false : await storeUpdUiOpen(), force: !!force });
+    if (d.act === "none" || d.act === "giveup") {
+      chrome.alarms.clear(STORE_UPD_TICK, () => void chrome.runtime.lastError);
+      if (s.pauseAt) { storeUpdBroadcast("RESUME_SCANS"); await storeUpdWrite({ pauseAt: 0 }); }
+    } else if (d.act === "wait" || d.act === "rest") {
+      if (s.pauseAt) { storeUpdBroadcast("RESUME_SCANS"); await storeUpdWrite({ pauseAt: 0 }); } // the bot keeps working while it waits
+    } else if (d.act === "resume") {
+      storeUpdBroadcast("RESUME_SCANS");
+      await storeUpdWrite({ pauseAt: 0, backoffUntil: now + STORE_UPD_REST_MS });
+      LOG("store update: v" + s.version + " — " + d.why + "; the bot resumes, next try in an hour");
+    } else if (d.act === "pause") {
+      storeUpdBroadcast("PAUSE_SCANS"); // re-sent every tick: the tab's own hold lapses after 10 min
+      if (!s.pauseAt) await storeUpdWrite({ pauseAt: now });
+    } else if (d.act === "apply") {
+      await storeUpdWrite({ tries: (s.tries || 0) + 1, triedAt: now });
+      LOG("store update: installing v" + s.version + " now (no reply in flight)");
+      storeReload(); // onInstalled re-injects every open Messenger tab
+    }
+    return Object.assign({ version: s.version || "" }, d);
+  } catch (e) {
+    return { act: "error", why: String((e && e.message) || e) };
+  } finally {
+    storeUpdTicking = false;
+  }
+}
+async function storeUpdateNoted(version) {
+  if (!STORE_BUILD || !version) return;
+  const s = await storeUpdRead();
+  if (s.version !== version) await storeUpdWrite({ version, readyAt: Date.now(), pauseAt: 0, tries: 0, backoffUntil: 0 });
+  try { chrome.alarms.create(STORE_UPD_TICK, { periodInMinutes: 0.5 }); } catch (e) { /* exists */ }
+  LOG("store update: v" + version + " is ready — installing it at the next quiet moment");
+  storeUpdateTick(false);
+}
+async function storeUpdateCheck(why) {
+  if (!STORE_BUILD || !chrome.runtime.requestUpdateCheck) return { status: "unsupported" };
+  let r = null;
+  try { r = await chrome.runtime.requestUpdateCheck(); } catch (e) { r = { status: "error", error: String((e && e.message) || e) }; }
+  const status = (r && r.status) || "error";
+  await storeUpdWrite({ checkedAt: Date.now(), checkStatus: status + (r && r.version ? " " + r.version : ""), checkWhy: why || "" });
+  return Object.assign({ status }, r || {});
+}
+/* The popup's "Update now": what is ready installs at once; otherwise ask Chrome. */
+async function storeUpdateNow() {
+  const loaded = chrome.runtime.getManifest().version;
+  const s = await storeUpdRead();
+  if (s.version && verCmp(s.version, loaded) > 0) {
+    const t = await storeUpdateTick(true);
+    return { store: true, version: s.version, loaded, applying: t.act === "apply", pausing: t.act === "pause", why: t.why || "" };
+  }
+  const c = await storeUpdateCheck("popup");
+  if (c.status === "update_available") return { store: true, version: c.version || "?", loaded, downloading: true };
+  if (c.status === "no_update") return { store: true, version: loaded, loaded, upToDate: true };
+  if (c.status === "throttled") return { store: true, version: loaded, loaded, throttled: true };
+  return { store: true, version: loaded, loaded, failed: true, why: c.error || c.status };
+}
+if (chrome.runtime.onUpdateAvailable) chrome.runtime.onUpdateAvailable.addListener((d) => { storeUpdateNoted(d && d.version); });
+ensureAlarm(STORE_UPD_ALARM, { periodInMinutes: 120 });
+chrome.alarms.onAlarm.addListener((alarm) => {
+  if (!alarm) return;
+  if (alarm.name === STORE_UPD_ALARM) storeUpdateCheck("every 2 h");
+  if (alarm.name === STORE_UPD_TICK) storeUpdateTick(false);
+});
+if (chrome.runtime.onStartup) chrome.runtime.onStartup.addListener(() => { storeUpdateCheck("start-up"); storeUpdateTick(false); });
+chrome.runtime.onInstalled.addListener(() => { storeUpdateTick(false); }); // records the installed version, lifts any hold
 
 /* ---------------- auto-recover open tabs after an extension reload ----------------
  * MV3: when the extension is updated/reloaded, every already-open Messenger tab is

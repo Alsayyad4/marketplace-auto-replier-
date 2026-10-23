@@ -17,7 +17,21 @@ all chrome.debugger/CDP work) + Supabase dashboard in docs/. Live branch:
   permissions ships OFF by default behind a cloud setting and goes to ONE machine first.
 - The operator wants zero manual steps in normal operation.
 
-## Known state (v0.21.88 LIVE on the Web Store since Oct 20 2026; v0.21.89 SUBMITTED Oct 21 2026 ~11:35, Pending review, auto-publish on)
+## Known state (v0.21.89 LIVE on the Web Store since Oct 22 2026; v0.21.90 = the store update installs itself)
+- A STORE UPDATE INSTALLS ITSELF (.90, Oct 23 2026, owner: "should be only from the link, I
+  don't want to play with developer modes"). Chrome installs a downloaded store update only
+  when the extension is IDLE; SubSell never is (the Messenger tab messages the worker every
+  8 s): .89 sat downloaded 22 h on the owner's PC, computers showed old versions, and a
+  Settings page opened during Chrome's own late swap read "ipompok… is blocked
+  ERR_BLOCKED_BY_CLIENT". background.js block `A STORE UPDATE INSTALLS ITSELF` (after
+  STORE-STRIP:END, so it ships in the store build; pure `storeUpdateDecision`,
+  `store/smoke-storeupdate.js`): `requestUpdateCheck` at start-up + every 2 h;
+  `onUpdateAvailable` → PAUSE_SCANS (send in flight finishes) → 10-s settle, no tab busy →
+  `storeReload()` = `chrome.runtime.reload()` (onInstalled re-injects content.js). Never
+  while Settings/popup is open (`getContexts`); popup "Update now" = force; busy 20 min →
+  resume + rest 1 h; 3 failed reloads → left to Chrome. smoke-store allows exactly this one
+  reload. 🩺 `sud: STORE(installs itself) upd=…`. Computers on ≤ .89 still wait for Chrome's
+  own idle swap (or a Chrome restart) to reach .90 — from .90 on, updates land within ~2 h.
 - WHERE THE TEACHING LIVES (.89, Oct 21 2026, submitted to the Web Store the same day; the
   dashboard part is live): the dashboard is the ACCOUNT's page (teaching, fleet line, account-wide Activity),
   the extension's Settings is ONE computer's page — keep it that way. The popup and Settings
