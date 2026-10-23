@@ -519,7 +519,7 @@ make background.js:2762 defer to the owner's wording.
   ONE work package and edits only its Board line in `lister/PLAN.md`.
 
 ## Open after v0.21.90 (session of Oct 23 2026)
-- RELEASE_90_PLACEHOLDER
+- **v0.21.90 SUBMITTED to the Web Store (Oct 23 2026 ~10:15 local), Pending review** — commit f083435; the owner re-verified his Google password in the 9223 Chrome ("Verify that it’s you"); Draft 0.21.90 = the same seven permissions as published 0.21.89, remote code = No. The confirm dialog’s auto-publish box could not be read this time (it was ticked on every earlier submission): if the Status tab says "Staged" after approval, press Publish. Submit for review is NOT on the Package tab — open Privacy or Store listing first, then press the button inside the confirm dialog.
 - **For the owner, no developer mode:** a computer gets SubSell only from the store link (https://chromewebstore.google.com/detail/ipompokpmlhgaioihnlbnmnhendcnejo). Already installed = nothing to do; from .90 on it installs new versions itself between two chats (popup → ⬇ Update now does it at once). A computer still on ≤ .89 reaches .90 when Chrome finds the extension idle, or at once when Chrome is fully closed and reopened. A card that says "Unpacked" in chrome://extensions is the old folder install (frozen on .82): remove it once the store one is logged in.
 
 ## Open after v0.21.89 (session of Oct 21 2026 — SUBMITTED to the Web Store, Pending review; the dashboard part is LIVE)
