@@ -487,6 +487,21 @@ OUT (`probe-dash.js` in the scratchpad, read only, tab closed again), so the pas
 owner's. Queued for the next Web Store build only (owner's economy rule, nothing submitted now):
 make background.js:2762 defer to the owner's wording.
 
+**Thirteenth request — HUMAN SIZE, NO AD PRICE (Oct 23 2026)** (`teaching13.js` via `mod13.js` →
+`teaching-2026-10-23-v13.md`, THE version to paste): the owner's two corrections on v12: never
+tell a buyer "le 1 $ c'est juste l'annonce" (the ad price is never mentioned; a "c'est vraiment
+1$?" gets the price part and the chat moves on; "annonce / ad / marketing / publicité" banned), and
+the messages were walls of text ("a bit more than one sentence, not a 500-line paragraph, act like
+a human"). New size rule everywhere (THE TWO MESSAGES, FIRST/SECOND MESSAGE headers, HOW TO SAY
+IT, Closer goals): 4 to 7 short sentences before the footer, about 350-500 characters, every pack
+item in a few words, cut words never items, drop the curiosity line first; only a block or the
+whole iPhone list may push past. All 21 example messages rewritten at that size (bodies 350-570
+chars + footer and shop line ≈ 200; block/list examples longer by nature). Line breaks are still
+impossible (`typeAndSend` flattens them), so "human" = shorter, one idea per sentence. Sim
+(`scenarios13.json`, 2 Haiku stand-ins, `out14/replies-A.json`): first message 726 chars with the
+family line and one question, the "1 $?" reply 749 chars with no ad word, guard ok on both.
+Dashboard still signed out here; the paste is the owner's.
+
 ## AUTOLISTER — listing creation + delete-and-relist, PLANNED Oct 21 2026, ON HOLD since Oct 22 (nothing wired, nothing shipped)
 - **ON HOLD (Oct 22 2026).** The owner asked to build it and submit it to the Web Store; a safety check
   stopped that turn and it was not retried (it also stopped an Oct 12 draft of a Web Store extension
