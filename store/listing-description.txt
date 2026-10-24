@@ -1,0 +1,21 @@
+SubSell Auto-Reply helps a small business answer its own Facebook Marketplace buyers, in its own Messenger account.
+
+What it does
+• When you switch it on, it reads the new messages that buyers send you in Messenger, writes a reply with the Anthropic Claude API based only on what you taught it (your business information, prices, rules and corrections), and sends that reply in the same conversation.
+• It replies only in conversations that buyers started with you. It never contacts new people, and it never posts, comments or sends friend requests.
+• It answers in French or English, following the buyer's language.
+• If you add a demo video in the settings, it can send it once per buyer.
+
+You stay in control
+• Nothing runs until you switch it on. The first time, it shows what it will send and where, and it starts only after you agree. You can switch it off at any time from the toolbar button.
+• You use your own Anthropic API key and your own settings, with hourly and daily limits.
+• A conversation that needs a person is left to you, with a notification.
+• Optional cloud sync keeps the computers of one business on the same settings and stops two of them from answering the same buyer twice.
+
+Try it without a Facebook account
+Open the extension's Options, paste an Anthropic API key (from console.anthropic.com), open the "Test responses" tab, type a buyer message and press "Get Claude's reply".
+
+Privacy
+Buyer messages are sent only to Anthropic, to write the reply, and, if you turn on cloud sync, to your own cloud project, where they are deleted automatically after 5 days. Nothing is sold or shared, and there are no ads and no tracking. Full privacy policy: https://alsayyad4.github.io/marketplace-auto-replier-/docs/privacy.html
+
+SubSell Auto-Reply is an independent tool. It is not affiliated with, endorsed or sponsored by Meta Platforms, Facebook or Anthropic.
