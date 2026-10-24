@@ -17,7 +17,7 @@ all chrome.debugger/CDP work) + Supabase dashboard in docs/. Live branch:
   permissions ships OFF by default behind a cloud setting and goes to ONE machine first.
 - The operator wants zero manual steps in normal operation.
 
-## Known state (v0.21.89 LIVE on the Web Store since Oct 22 2026; .90 = the store update installs itself; .91 = a clip never goes out without its text)
+## Known state (v0.21.90 LIVE on the Web Store, unlisted, by Oct 24 2026; v0.21.91 SUBMITTED Oct 24 ~18:50, Pending review, auto-publish = a clip never goes out without its text)
 - A CLIP, THEN SILENCE (.91, Oct 24 2026, owner: "some accounts are not sending messages but
   sending videos"; 🩺 PC-j2qrz: Jimmy "Jimmy: · 1h" replies=0 SUPP, Amel "Amel: 11pro · 20h"
   replies=1 SUPP, both vmark=sent). Four causes, one rule — the clip is the text's companion:
