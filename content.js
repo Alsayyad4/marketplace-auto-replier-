@@ -359,9 +359,14 @@
   function rememberSent(t) {
     const m = normMsg(t);
     if (!m) return;
-    recentSent.push(m);
+    // (v0.21.91) with its chat: an echo can only be of a text sent in THIS chat
+    recentSent.push({ t: m, id: safe(() => openLabel.id || openLabel.sid, "") || "" });
     while (recentSent.length > 60) recentSent.shift();
     safe(() => chrome.storage.local.set({ recentSent }));
+  }
+  // (v0.21.91) the ids the open chat is known by (sidebar id, adopted id); [] = unknown
+  function openThreadIds() {
+    return safe(() => [openLabel.id, openLabel.sid].filter(Boolean), []);
   }
   function persistDedup() {
     // keep the persisted maps from growing unbounded (cap ~400 threads)
@@ -390,11 +395,43 @@
     if (id) delete suspiciousReads[id];
     if (sid) delete suspiciousReads[sid];
   }
-  // (v0.21.91) the text of this buyer message is still owed (see textOwed / lane 1.2)
-  function oweText(id, sid, turn, why) {
-    if (!id || !turn || !turn.dedupeKey) return;
+  // (v0.21.91) the text of this buyer message is still owed (see textOwed / lane 1.2). The
+  // whole turn rides along: the pane may not show the message on the revisit (our clip is
+  // the last bubble then, the row reads "You sent a video."), so the revisit answers the
+  // turn remembered here. Returns the entry (tries counts the failed visits of one message).
+  function oweText(id, sid, turn, why, hint) {
+    if (!id || !turn || !turn.dedupeKey) return null;
     const k = sid || id;
-    if (!textOwed[k]) textOwed[k] = { at: Date.now(), key: turn.dedupeKey, id, why: String(why || "") };
+    const o = textOwed[k];
+    if (o && o.key === turn.dedupeKey) { o.tries = (o.tries || 1) + 1; o.why = String(why || ""); return o; }
+    textOwed[k] = { at: Date.now(), key: turn.dedupeKey, id, why: String(why || ""), turn, hint: hint || null, tries: 1 };
+    return textOwed[k];
+  }
+  // (v0.21.91) …and after three failed visits the message is let go (marked handled): a
+  // model that empties three times, or a send that fails three times, must not be asked
+  // every 90 s for 45 min. Returns true when it gave up.
+  function oweOrGiveUp(id, sid, turn, why, hint) {
+    const o = oweText(id, sid, turn, why, hint);
+    if (!o || o.tries < 3) return false;
+    lastHandled[id] = turn.dedupeKey;
+    clearWaiting(id, sid);
+    delete textOwed[sid || id]; delete textOwed[id];
+    persistDedup();
+    setStatus({ lastAction: "gave up on this message after 3 tries (" + String(why || "") + ")", currentThread: undefined });
+    return true;
+  }
+  // (v0.21.91) THE CLIP IS THE TEXT'S COMPANION on the hook-less passes too: a visit that
+  // settles a message without typing (already answered, echo, cap, idle) may run the clip
+  // engine only for a chat that already holds a text of ours — else a [HUMAN] / [SKIP] /
+  // capped FIRST message, refused a clip by the verdict rule, would get its set one visit
+  // later with no words (audit, Oct 24 2026). A queued tail is an owed clip of a visit
+  // that typed: it passes. `cloudTexts` = the Activity log's text rows (another computer).
+  function chatHasOurText(id, sid, turn, cloudTexts) {
+    if ((Number(cloudTexts) || 0) > 0) return true;
+    if ((replyCounts[id] || 0) > 0 || (sid && (replyCounts[sid] || 0) > 0)) return true;
+    if (videoPending[id] != null || (sid && videoPending[sid] != null)) return true;
+    const n = turn && typeof turn.youTexts === "number" ? turn.youTexts : ownTextCount(safe(() => readConversation(), []));
+    return n > 0;
   }
   // (v0.21.91) the fresh pre-send look at the chat: a turn taken from the sidebar row
   // carries the line the pane never showed, so its own transcript is the one to judge.
@@ -425,7 +462,23 @@
     // because WE once sent the same word in some other chat — that made the bot
     // ignore buyers who opened with one word. Bubble color stays the primary
     // anti-self-reply; this echo guard is for longer, distinctive texts only.
-    return recentSent.some((s) => (m.length >= 10 && s === m) || (m.length > 12 && (s.includes(m) || m.includes(s))));
+    // (v0.21.91) EXACT, OR NEAR-EXACT, AND LOCAL. The old rule also muted any buyer text
+    // longer than 12 chars that was CONTAINED in one of our last 60 texts (in ANY chat):
+    // a buyer typing "iPhone 17 Pro Max" while our pack messages name that model was read
+    // as our own bubble — painted "confirmed", beyond every rescue — and the chat got its
+    // clip and no words (audit, Oct 24 2026). Now a match is the whole text, or ≥ 90 % of
+    // the longer one (our bubble read back loses its emoji), and an entry that remembers
+    // its chat counts only in that chat; older entries (plain strings) still count anywhere.
+    const ids = openThreadIds();
+    return recentSent.some((e) => {
+      const s = typeof e === "string" ? e : e && e.t;
+      if (!s) return false;
+      if (typeof e !== "string" && e.id && ids.length && ids.indexOf(e.id) < 0) return false;
+      if (m.length >= 10 && s === m) return true;
+      if (m.length <= 12) return false;
+      const a = Math.min(s.length, m.length), b = Math.max(s.length, m.length);
+      return a >= 0.9 * b && (s.includes(m) || m.includes(s));
+    });
   }
 
   // Cross-tab single-flight: if the operator has >1 Messenger tab open in the SAME
@@ -743,7 +796,7 @@
     if (/^mark as sold$/.test(t)) return true;
     if (/^view buyer/.test(t)) return true; // "View buyer" / "View buyer profile"
     if (/automated suggestion/.test(t)) return true; // "This is an automated suggestion."
-    if (/waiting for your response/.test(t)) return true; // "X is waiting for your response."
+    if (/^.{1,60}\s+is waiting for your response\.?$/.test(t)) return true; // "X is waiting for your response." — (v0.21.91) the system form only; a buyer's "still waiting for your response" is a message
     if (/add video to listing|update listing/.test(t)) return true;
     if (/allow other buyers|part of your marketplace listing/.test(t)) return true;
     if (/^message sent$/.test(t)) return true;
@@ -871,7 +924,16 @@
     const composer = findComposer();
     if (!main || !composer) return []; // not a loaded thread → read nothing
     const c = composer.getBoundingClientRect();
-    const cLeft = c.left, cRight = c.right, top = c.top; // messages live above the input
+    // (v0.21.91) the horizontal bound is the PANE, not the textbox: the textbox sits to the
+    // right of the composer's toolbar (+ / attach / sticker…), so a short buyer bubble
+    // hugging the left edge ("11pro", "ok") had its centre left of `textbox.left - 60`
+    // and was dropped before any role logic (audit, Oct 24 2026). Only widened; the
+    // composer's top still bounds the bottom.
+    const mr = safe(() => main.getBoundingClientRect(), null);
+    const wide = !!(mr && mr.width > 200);
+    const cLeft = wide ? Math.min(c.left, mr.left) : c.left;
+    const cRight = wide ? Math.max(c.right, mr.right) : c.right;
+    const top = c.top; // messages live above the input
 
     // Pass 1 — collect candidate message text nodes (filtered) with their rects.
     const cands = [];
@@ -1051,7 +1113,10 @@
     // let them hide a buyer message whose TEXT reply still needs to go out.
     // (Kept when the sidebar says the buyer's LATEST message is media: then the
     // last attachment is theirs and the rescue below adopts it.)
-    if (!(hint && hint.media)) {
+    // (v0.21.91) a BLANK row ("Jimmy: · 1h", nothing readable) names no attachment: never
+    // adopt one on its word — the last attachment may be our own clip, sent earlier.
+    const mediaHint = !!(hint && hint.media && !hint.blank);
+    if (!mediaHint) {
       while (
         convo.length &&
         convo[convo.length - 1].role === "me" &&
@@ -1073,7 +1138,7 @@
       const hb = normMsg(hint.body || "");
       const matches = (e) =>
         (e.text !== "[attachment]" && hb.length >= 2 && (normMsg(e.text) === hb || normMsg(e.text).startsWith(hb))) ||
-        (!!hint.media && e.text === "[attachment]");
+        (mediaHint && e.text === "[attachment]" && e.hug !== "right"); // (v0.21.91) never an attachment hugging OUR side
       let found = -1;
       for (let i = convo.length - 1, steps = 0; i >= 0 && steps < 6; i--, steps++) {
         const e = convo[i];
@@ -5226,15 +5291,21 @@
       (settings.businessHoursText || "9AM–10PM, 7 days") +
       " 😊 On va bien s'occuper de toi! (Come by anytime — we'll take care of you!)";
   }
-  async function atConvoCap(id, name, sidebarId, turn, settings, cc, so, why, noVideo) {
+  async function atConvoCap(id, name, sidebarId, turn, settings, cc, so, why, noVideo, cloudTexts) {
     clearWaiting(id, sidebarId); // the cap settles this message — off the never-miss ledger
     cooldowns[id] = Date.now() + IDLE_COOLDOWN_MS;
     lastHandled[id] = turn.dedupeKey;
     noteSettled(sidebarId); // (v0.21.91) lane 2 leaves this row alone until its words change
-    if ((replyCounts[id] || 0) < so) replyCounts[id] = so; // what the cloud counted, remembered here too
+    // (v0.21.91) only a DELIVERED count is remembered (this computer's, or the Activity
+    // log's): a count read off the chat's bubbles is recomputed on every gate and must not
+    // be persisted — it kept a chat capped on this computer after the read improved.
+    const keep = Math.max(replyCounts[id] || 0, Math.floor(Number(cloudTexts) || 0));
+    if (keep > (replyCounts[id] || 0)) replyCounts[id] = keep;
     persistDedup();
-    if (!noVideo) {
-      // the demo clips are separate from the cap: the chat still gets its one-time set
+    if (!noVideo && chatHasOurText(id, sidebarId, turn, cloudTexts)) {
+      // the demo clips are separate from the cap: the chat still gets its one-time set —
+      // (v0.21.91) when the chat holds a text of ours; a cap reached with none (an
+      // over-count, stale rows) is not a reason to send a video with no words
       await maybeSendVideo(id, name, false, sidebarId);
       if (videoLocked.has(id)) clearVideoPending(sidebarId);
     }
@@ -5253,7 +5324,7 @@
       const closeLine = closeLineOf(settings);
       const fresh = await ask({ type: "MEMORY_PRESEND", threadId: id, threadName: name, buyerMessage: turn.buyerMessage, transcript: presendTranscript(turn), localReplies: so, youTexts: ownTextsNow(turn) });
       if (fresh && fresh.ok && fresh.skip && (!fresh.cap || (Number(fresh.replies) || 0) >= cc.cap)) {
-        if ((replyCounts[id] || 0) < (Number(fresh.replies) || 0)) { replyCounts[id] = Number(fresh.replies) || 0; persistDedup(); }
+        if ((replyCounts[id] || 0) < (Number(fresh.cloudTexts) || 0)) { replyCounts[id] = Number(fresh.cloudTexts) || 0; persistDedup(); } // (v0.21.91) the delivered count only
         setStatus({ lastAction: "reply cap — closing line not sent (" + (fresh.reason || "the chat moved on") + ")" + tag, currentThread: name });
         return;
       }
@@ -5409,6 +5480,18 @@
         setStatus({ lastAction: "buyer message confirmed via sidebar attribution", currentThread: name });
       }
     }
+    // (v0.21.91) A TEXT OWED from an earlier visit (its clip went out, or a claim / budget
+    // hold / failed send left it unanswered) whose message the pane cannot show any more —
+    // our clip is the last bubble now, the row reads "You sent a video." — is answered from
+    // the turn remembered then: same key, so once; the billed text replays from the memo.
+    if (!turn) {
+      const owed = textOwed[sidebarId] || textOwed[id];
+      if (owed && owed.turn && lastHandled[id] !== owed.key && Date.now() - owed.at <= 45 * 60 * 1000) {
+        turn = Object.assign({}, owed.turn, { owed: true });
+        rescueHint = owed.hint || null;
+        setStatus({ lastAction: "answering the text still owed here: " + trunc(turn.buyerMessage, 60), currentThread: name });
+      }
+    }
     if (!turn) {
       // SUSPICIOUS READ: the sidebar said a buyer message was waiting, but the open
       // chat reads as "you spoke last". On slow loads (Remote Desktop) the buyer's
@@ -5463,23 +5546,27 @@
         // chat has been quiet long enough. Both are once/limited per chat — no spam.
         // A visit that DELIVERS a queued/deferred set honors demoVideoDelaySec
         // (immediate only on genuinely idle revisits) — "instant burst on open" fix.
-        await maybeSendVideo(id, name, videoPending[id] == null && videoPending[sidebarId] == null, sidebarId);
-        if (videoLocked.has(id)) clearVideoPending(sidebarId); // terminal → clear sidebar-keyed pending
+        if (chatHasOurText(id, sidebarId, null)) { // (v0.21.91) a clip only where a text of ours already is
+          await maybeSendVideo(id, name, videoPending[id] == null && videoPending[sidebarId] == null, sidebarId);
+          if (videoLocked.has(id)) clearVideoPending(sidebarId); // terminal → clear sidebar-keyed pending
+        }
         await maybeFollowUp(id, name, anchor);
         setStatus({ lastAction: "skip — you spoke last (checked video + follow-up)", currentThread: name });
         return;
       }
     }
     delete suspiciousReads[id]; // got a real buyer turn — reset the misread counter
-    if (isOwnEcho(turn.buyerMessage)) {
+    if (!turn.fromSidebar && !turn.owed && isOwnEcho(turn.buyerMessage)) { // (v0.21.91) a turn Messenger's own row attributes to the buyer by name is theirs
       // The "last message" is actually OUR OWN (alignment mis-read) — never reply to
       // ourselves. Hard stop against self-reply spam.
       clearWaiting(id, sidebarId);
       cooldowns[id] = Date.now() + IDLE_COOLDOWN_MS;
       // (v0.21.41) same omission as the lastHandled branch had: give the chat its
       // video pass (idempotent) instead of a 10-min cooldown and nothing.
-      await maybeSendVideo(id, name, videoPending[id] == null && videoPending[sidebarId] == null, sidebarId);
-      if (videoLocked.has(id)) clearVideoPending(sidebarId);
+      if (chatHasOurText(id, sidebarId, turn)) { // (v0.21.91) a clip only where a text of ours already is
+        await maybeSendVideo(id, name, videoPending[id] == null && videoPending[sidebarId] == null, sidebarId);
+        if (videoLocked.has(id)) clearVideoPending(sidebarId);
+      }
       setStatus({ lastAction: "skip — that last message was ours, not the buyer (video checked)", currentThread: name });
       return;
     }
@@ -5493,10 +5580,13 @@
       if (lastHandled[id] !== turn.dedupeKey && lastHandled[id] !== turn.buyerMessage) { lastHandled[id] = turn.dedupeKey; persistDedup(); }
       clearWaiting(id, sidebarId); // already answered this exact message
       noteSettled(sidebarId); // (v0.21.91) lane 2 leaves this row alone until its words change
+      cooldowns[id] = Date.now() + IDLE_COOLDOWN_MS; // (v0.21.91) a settled message: not re-opened every 90 s
       // Audit fix: chats that keep landing here (our reply mis-read as not-last)
       // previously NEVER reached a video pass — give them one (idempotent).
-      await maybeSendVideo(id, name, videoPending[id] == null && videoPending[sidebarId] == null, sidebarId);
-      if (videoLocked.has(id)) clearVideoPending(sidebarId); // terminal → clear sidebar-keyed pending
+      if (chatHasOurText(id, sidebarId, turn)) { // (v0.21.91) …where a text of ours already is: a [SKIP]/[HUMAN]-settled first message keeps its clip for the first text
+        await maybeSendVideo(id, name, videoPending[id] == null && videoPending[sidebarId] == null, sidebarId);
+        if (videoLocked.has(id)) clearVideoPending(sidebarId); // terminal → clear sidebar-keyed pending
+      }
       setStatus({ lastAction: "skip — already replied to this message (video checked)", currentThread: name });
       return;
     }
@@ -5572,7 +5662,7 @@
     const reply = await replyPromise;
     if (!reply || !reply.ok) {
       setStatus({ lastError: "Claude error: " + (reply && reply.error) });
-      oweText(id, sidebarId, turn, "claude error");
+      oweOrGiveUp(id, sidebarId, turn, "claude error: " + (reply && reply.error), rescueHint);
       return; // nothing typed, no clip — both go together on the retry
     }
     if (reply.skip) {
@@ -5582,7 +5672,7 @@
         // same cap handling as the local check — nothing is typed past the cap; the
         // chat still gets its one-time clip set there (the clips are not replies).
         delete pendingReply[id];
-        await atConvoCap(id, name, sidebarId, turn, settings, convoCapOf(settings), Math.max(repliesSoFar, Number(reply.replies) || 0), "counted across computers", false);
+        await atConvoCap(id, name, sidebarId, turn, settings, convoCapOf(settings), Math.max(repliesSoFar, Number(reply.replies) || 0), "counted across computers", false, reply.cloudTexts);
         return;
       }
       if (reply.reason === "empty reply" || reply.memory === "answered" || reply.memory === "echo" || reply.title || reply.screen) { // (v0.21.85) screen = Facebook's own line, never a buyer's
@@ -5602,11 +5692,11 @@
         // (v0.21.91) …owed, so the look-again happens even when this chat's row no
         // longer reads buyer-last (the other computer's clip may already be there).
         cooldowns[id] = Date.now() + 2 * 60 * 1000;
-        oweText(id, sidebarId, turn, "claimed elsewhere");
+        oweText(id, sidebarId, turn, "claimed elsewhere", rescueHint);
         persistDedup();
       } else if (reply.held) {
         // (v0.21.86) the hourly / daily budget: parked, never dropped — (v0.21.91) owed
-        oweText(id, sidebarId, turn, reply.reason);
+        oweText(id, sidebarId, turn, reply.reason, rescueHint);
       }
       setStatus({ lastAction: "skip — " + reply.reason, currentThread: name });
       return;
@@ -5654,7 +5744,7 @@
       // already memoized above).
       if (!stillOnThread(id)) {
         setStatus({ lastAction: "aborted — you switched chats during the wait (will retry)", currentThread: name });
-        oweText(id, sidebarId, turn, "chat switched during the wait");
+        oweText(id, sidebarId, turn, "chat switched during the wait", rescueHint);
         return;
       }
       // (v0.21.71) THREAD MEMORY, fresh, right before typing: during the wait
@@ -5668,7 +5758,7 @@
         if (pre.cap) {
           // (v0.21.86) the chat reached its cap during our wait (another computer delivered)
           delete pendingReply[id];
-          await atConvoCap(id, name, sidebarId, turn, settings, convoCapOf(settings), Math.max(replyCounts[id] || 0, Number(pre.replies) || 0), "counted across computers", true);
+          await atConvoCap(id, name, sidebarId, turn, settings, convoCapOf(settings), Math.max(replyCounts[id] || 0, Number(pre.replies) || 0), "counted across computers", true, pre.cloudTexts);
           return;
         }
         if (pre.memory === "claimed") {
@@ -5693,7 +5783,11 @@
         // aborts, and the rescue still stops at any painted/right-hugging own
         // bubble, so a message WE sent during the wait aborts too.
         // (v0.21.91) a turn taken from the sidebar row is re-read from the row (the pane never showed it).
-        const recheck = buyerSpokeLast() || (rescueHint ? buyerSpokeLastConfirmed(rescueHint) : null) || (turn.fromSidebar ? sidebarTurnNow(id, sidebarId) : null);
+        const live = buyerSpokeLast();
+        let recheck = live || (rescueHint ? buyerSpokeLastConfirmed(rescueHint) : null) || (turn.fromSidebar ? sidebarTurnNow(id, sidebarId) : null);
+        // (v0.21.91) an owed turn: the pane never showed its message and the row has moved on
+        // to our clip — nothing to re-read; a NEW buyer bubble would have come back as `live`.
+        if (!recheck && !live && turn.owed) recheck = turn;
         if (!recheck || recheck.buyerMessage !== turn.buyerMessage) {
           setStatus({ lastAction: "aborted — conversation changed during the wait (will retry)", currentThread: name });
           return;
@@ -5709,7 +5803,7 @@
         // actually taken) — a second Enter here could ship a garbled fragment or a
         // duplicate. The billed reply stays memoized (replayed free next cycle).
         setStatus({ lastError: "typed the reply but couldn't send it (will retry)" });
-        oweText(id, sidebarId, turn, "send failed");
+        oweOrGiveUp(id, sidebarId, turn, "send failed", rescueHint);
         return;
       }
       rememberSent(reply.text); // so we never mistake this for a buyer message later
@@ -5783,7 +5877,9 @@
       setStatus({ lastAction: attachFailing ? "video attach failing on this machine (" + attachMiss.streak + " sets) — replying first, videos queued" : "rush: " + buyersWaitingCount(id, sidebarId) + " buyers waiting — replying first, videos queued", currentThread: name });
     } else if (!videoLocked.has(id)) {
       refreshThreadLock(sidebarId); // uploads can outlive the cross-tab lease
-      await maybeSendVideo(id, name, true, sidebarId, false, { onClipSent: () => shipReply(true) });
+      // (v0.21.91) onClipSent(-1) = the engine gave up with NO clip in the chat: the text goes
+      // out as on a text-only visit (full delay, the "conversation changed" recheck kept).
+      await maybeSendVideo(id, name, true, sidebarId, false, { onClipSent: (i) => shipReply(typeof i === "number" && i >= 0) });
       if (videoLocked.has(id)) clearVideoPending(sidebarId); // terminal → clear the sidebar-keyed pending too
     }
     // No clips configured / set already delivered / engine exited before a clip
@@ -5971,6 +6067,7 @@
         if (now - o.at > 45 * 60 * 1000 || lastHandled[o.id] === o.key || lastHandled[id] === o.key) { delete textOwed[id]; continue; }
         if (exclude.has(id)) continue;
         if (now - o.at < COOLDOWN_MS) continue;
+        if (now <= (cooldowns[id] || 0) || (o.id && now <= (cooldowns[o.id] || 0))) continue; // paced by the visit's own cooldown (90 s / 10 min), never an 8-s loop
         if (openFailCount(id) >= 3 && now <= (cooldowns[id] || 0)) continue;
         if (o.at < owedT) { owedT = o.at; owed = a; }
       }

@@ -2439,7 +2439,10 @@ const titleNorm = (s) => String(s == null ? "" : s).toLowerCase().replace(/\s+/g
 function isChatTitle(text, threadName) {
   const t = titleNorm(text), full = titleNorm(threadName);
   if (!t || full.length < 8 || full.indexOf("·") < 1) return false;
-  return t === full || (t.length >= 12 && full.startsWith(t)) || t.startsWith(full);
+  // (v0.21.91) a buyer who types their own display name ("Cheikh Ibreu") is not the title:
+  // a cut title must reach past the name into the headline.
+  const who = full.slice(0, full.indexOf("·")).trim();
+  return t === full || (t.length >= 12 && t.length > who.length + 2 && full.startsWith(t)) || t.startsWith(full);
 }
 function dropTitleLines(transcript, threadName) {
   if (!transcript || !threadName) return transcript;
@@ -2826,6 +2829,8 @@ function buildOwnerPrompt(settings) {
   // (v0.21.85) the model's word for silence. Without it, a model that judged there was
   // nothing to answer EXPLAINED that in prose — and the prose reached a buyer.
   L.push("- [SKIP], as your whole reply, when there is nothing to send: the latest line is not something the buyer wrote, or the buyer only closes the conversation (merci, ok, a thumbs-up) and nothing is left open, where a seller often just lets it end. Nothing is sent. This token is the only way to stay silent: any words you write instead, even a note about the chat, are typed into the chat and the buyer reads them.");
+  // (v0.21.91) emoji are read now (a lone 👍 reaches the model): a first message is never silence.
+  L.push("  Never [SKIP] a buyer's FIRST message in a chat, not even a lone emoji, a sticker or a bare \"ok\": greet them and ask what they are looking for. [SKIP] a closing only after you have already answered them.");
   L.push("A short demo video is sent to each buyer automatically, once per chat. You never send a video or a link yourself. If they ask to see the phone, say a short video is on its way and still answer their question.");
   if (settings.offPlatformGuard) {
     L.push("");
@@ -3408,7 +3413,7 @@ const SCREEN_RES = [
   /\b(appuie[zr]?|appuyez|touche[zr]?|clique[zr]?|s[ée]lectionne[zr]?|choisi(s|ssez)?)\s+(sur\s+)?(une|la)\s+r[ée]ponse\b/,
   /\b(envoyer|r[ée]pondre)\s+[àa]\s+l['’]acheteu/,
   /\bautomated suggestion|suggestion automatis/,
-  /\bwaiting for your (response|reply)\b|\battend (ta|votre) r[ée]ponse\b/,
+  /^[^:]{1,60}\s+is waiting for your (response|reply)\.?$|^[^:]{1,60}\s+attend (ta|votre) r[ée]ponse\.?$/, // (v0.21.91) the system form only ("X is waiting for your response.") — a buyer's "still waiting for your reply" is a message
   /\badd (a )?video to (the |your )?listing\b|^update listing$|\bajouter une vid[ée]o [àa] l['’]annonce|^mettre [àa] jour l['’]annonce$/,
   /\ballow other buyers\b|\bautorise[zr]? d['’]autres acheteu|\bpart of your marketplace listing\b|\bdans le cadre de votre annonce\b/,
 ];
@@ -5627,11 +5632,11 @@ chrome.runtime.onMessage.addListener((msg, _sender, sendResponse) => {
           // every install, within the log's 5-day retention).
           const cc = convoCapLimit(settings);
           let soFar = cc.cap ? Math.max(Math.floor(num0(msg.localReplies, 0)), youLinesOf(msg, dropTitleLines(msg.memContext, msg.threadName) || ctx)) : 0;
-          const capAnswer = () => {
+          const capAnswer = (cloud) => { // (v0.21.91) cloudTexts = the Activity log's delivered texts (0 before the memory is read): the only count the content script persists
             memNote({ capHit: 1 });
-            sendResponse({ ok: true, skip: true, cap: true, replies: soFar, max: cc.cap, mode: cc.mode, reason: "reply cap reached for this chat (" + soFar + "/" + cc.cap + " seller texts, counted across every computer)" });
+            sendResponse({ ok: true, skip: true, cap: true, replies: soFar, cloudTexts: Math.max(0, Math.floor(Number(cloud) || 0)), max: cc.cap, mode: cc.mode, reason: "reply cap reached for this chat (" + soFar + "/" + cc.cap + " seller texts, counted across every computer)" });
           };
-          if (cc.cap && soFar >= cc.limit) { capAnswer(); break; }
+          if (cc.cap && soFar >= cc.limit) { capAnswer(0); break; }
           // (v0.21.71) THREAD MEMORY, before anything is billed or typed: the chat's
           // Activity rows (any computer) decide whether this message is already
           // answered / is ours / is being answered elsewhere. Nothing new is sent
@@ -5657,7 +5662,7 @@ chrome.runtime.onMessage.addListener((msg, _sender, sendResponse) => {
               noteWarmEvidence(settings, memRows);
               if (cc.cap) {
                 soFar = Math.max(soFar, memTextCount(memRows));
-                if (soFar >= cc.limit) { memNote({ capCloud: 1 }); capAnswer(); break; }
+                if (soFar >= cc.limit) { memNote({ capCloud: 1 }); capAnswer(memTextCount(memRows)); break; }
               }
             }
             memOthers = await memRecentRows();
@@ -5702,19 +5707,34 @@ chrome.runtime.onMessage.addListener((msg, _sender, sendResponse) => {
             const why = "the bot held back a reply that was not a message to the buyer (" + parsed.reason + ")";
             notifyHuman(why, msg.threadName);
             await appendLog({ thread: msg.threadName, threadId: msg.threadId, buyer: msg.buyerMessage, action: "human", reply: "[HUMAN] " + why + ". Not sent: " + String(parsed.raw || "").replace(/\s+/g, " ").slice(0, 160) });
+            if (claimed) memUnclaim(msg.threadId, msg.threadName, msg.buyerMessage, machineId); // (v0.21.91) nothing delivered: the claim must not park the other computer 10 min
             sendResponse({ ok: true, human: true, reason: why });
             break;
           }
           if (parsed.kind === "human") {
             notifyHuman(parsed.reason, msg.threadName);
             await appendLog({ thread: msg.threadName, threadId: msg.threadId, buyer: msg.buyerMessage, action: "human", reply: "[HUMAN] " + parsed.reason });
+            if (claimed) memUnclaim(msg.threadId, msg.threadName, msg.buyerMessage, machineId); // (v0.21.91)
             sendResponse({ ok: true, human: true, reason: parsed.reason });
             break;
           }
           // A [VIDEO:url] just sends its caption as text in the simple build.
           const text = parsed.kind === "video" ? parsed.caption || "" : parsed.text;
           if (!text || !text.trim()) {
-            sendResponse({ ok: true, skip: true, reason: "empty reply" });
+            if (parsed.kind === "empty" && parsed.skip) {
+              // the model's deliberate silence ([SKIP]): the content script marks the message handled
+              if (claimed) memUnclaim(msg.threadId, msg.threadName, msg.buyerMessage, machineId); // (v0.21.91)
+              sendResponse({ ok: true, skip: true, reason: "empty reply" });
+              break;
+            }
+            // (v0.21.91) an ACCIDENTAL empty — no text block, a reply opening with a stray
+            // bracket, a caption-less video, a [VISIT]/[GAP] token alone — was the same
+            // terminal silence as [SKIP]: marked handled, the buyer never answered. It is an
+            // error now: the content script owes the text and asks again (three tries, then
+            // silence), and the claim is withdrawn like after any failed call.
+            claudeFailedAt = Date.now();
+            if (claimed) memUnclaim(msg.threadId, msg.threadName, msg.buyerMessage, machineId);
+            sendResponse({ ok: false, error: "empty model output (" + (parsed.kind || "?") + (parsed.visit ? ", visit:" + parsed.visit : "") + ")" });
             break;
           }
           // (v0.21.86) nothing is counted here: the ledger counts the reply when the
@@ -5750,7 +5770,7 @@ chrome.runtime.onMessage.addListener((msg, _sender, sendResponse) => {
               const so = Math.max(Math.floor(num0(msg.localReplies, 0)), youLinesOf(msg, dropTitleLines(msg.transcript, msg.threadName)), memTextCount(rows));
               if (so >= cc.limit) {
                 memNote({ capCloud: 1 });
-                sendResponse({ ok: true, skip: true, cap: true, replies: so, max: cc.cap, mode: cc.mode, reason: "reply cap reached for this chat (" + so + "/" + cc.cap + " bot texts, counted across every computer)" });
+                sendResponse({ ok: true, skip: true, cap: true, replies: so, cloudTexts: memTextCount(rows), max: cc.cap, mode: cc.mode, reason: "reply cap reached for this chat (" + so + "/" + cc.cap + " bot texts, counted across every computer)" }); // (v0.21.91) cloudTexts
                 break;
               }
             }

@@ -36,9 +36,19 @@ all chrome.debugger/CDP work) + Supabase dashboard in docs/. Live branch:
   echo; never a left-hugging unpainted "me") → `turn.youTexts` → background `youLinesOf`
   (falls back to the "You:" line count for an older content script). Also: the E2EE notice
   and the Marketplace Assistant are not a waiting buyer. 🩺 `rescue: sidebarTurns= textOwed=`.
-  `store/smoke-mute.js` (62), `store/build-fleet-zips.ps1`. The read's attribution itself is
-  unchanged (ambiguity → "me"); the idle verdict still sends the clip only when the row has no
-  words at all; atConvoCap still gives a capped chat its one clip set (owner's design).
+  The same-evening audit (3 readers + 6 refuters) added: `isOwnEcho` is exact-or-90 % and LOCAL
+  (`rememberSent` stores `{t, id}`; its substring rule read a buyer's "iPhone 17 Pro Max" as our
+  own bubble); a blank row never adopts an attachment (`mediaHint`); every hook-less clip pass
+  (dedupe / echo / idle / cap) is gated by `chatHasOurText` — no fresh set for a chat with no
+  text of ours; `textOwed` carries the turn (`turn.owed`, adopted on the revisit, 3 tries then
+  let go, lane 1.2 paced by the cooldown); `readConversation` bounds by the PANE's box, not the
+  textbox (short left-hugging bubbles were dropped); "waiting for your response" walls match
+  the system form only; `isChatTitle` ignores a buyer's own name; accidental empty model output
+  is an error (retried), [SKIP] stays silence; `memUnclaim` on every non-delivering verdict; the
+  owner prompt never [SKIP]s a first message; the cap persists only a DELIVERED count
+  (`cloudTexts`). `store/smoke-mute.js` (99), `store/build-fleet-zips.ps1`. The read's
+  attribution itself is unchanged (ambiguity → "me"); atConvoCap still gives a capped chat its
+  one clip set when the chat holds a text of ours (owner's design).
 - A STORE UPDATE INSTALLS ITSELF (.90, Oct 23 2026, owner: "should be only from the link, I
   don't want to play with developer modes"). Chrome installs a downloaded store update only
   when the extension is IDLE; SubSell never is (the Messenger tab messages the worker every

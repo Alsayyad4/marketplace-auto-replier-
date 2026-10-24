@@ -47,7 +47,7 @@ const HEART = String.fromCodePoint(0x2764, 0xfe0f); // ❤️
 // --- the page reader, the same slice smoke-teach runs (now with the emoji helpers) ----
 const readerSrc = between(cs, "  // Things that are NOT chat messages", "  function buyerSpokeLast() {");
 const ROW = { left: 300, right: 900 };
-function makeThread(label, ownEcho) {
+function makeThread(label, ownEcho, mainRect) {
   const state = { nodes: [], href: "https://www.messenger.com/marketplace/t/123456/", anchors: [], label };
   const rect = (left, right, top) => ({ left, right, top, bottom: top + 20, width: right - left, height: 20 });
   const row = { getBoundingClientRect: () => rect(ROW.left, ROW.right, 0) };
@@ -64,10 +64,11 @@ function makeThread(label, ownEcho) {
     return n;
   };
   const main = { querySelectorAll: (sel) => (sel.indexOf("img") >= 0 ? [] : state.nodes.slice()) };
+  if (mainRect) main.getBoundingClientRect = () => mainRect; // (the pane's box; absent = the old textbox bound)
   const composer = { getBoundingClientRect: () => rect(ROW.left, ROW.right, 800) };
   const api = new Function(
     "safe", "normMsg", "isOwnEcho", "getMain", "findComposer", "conversationAnchors", "threadId", "anchorName", "location", "getComputedStyle",
-    readerSrc + "\nreturn { readConversation, turnFromConvo, turnFromSidebar, ownTextCount, isEmojiAlt, emojiAlt, noteOpenThread, NO_TEXT_MSG };"
+    readerSrc + "\nreturn { readConversation, turnFromConvo, turnFromSidebar, ownTextCount, isEmojiAlt, emojiAlt, noteOpenThread, NO_TEXT_MSG, isNoise };"
   )(safe, normMsg, (t) => !!ownEcho && ownEcho === t, () => main, () => composer, () => state.anchors, (a) => a.id, (a) => a.name, { get href() { return state.href; } }, (n) => n._cs || {});
   if (label) api.noteOpenThread("123456", "123456", label);
   return { state, el, api };
@@ -174,18 +175,18 @@ console.log("\n— 5. wiring —");
 {
   const h = between(cs, "  async function handleThread(anchor) {", "  /* ---------------- main loop ---------------- */");
   const iVerdict = h.indexOf("const reply = await replyPromise;");
-  const iEngine = h.indexOf("await maybeSendVideo(id, name, true, sidebarId, false, { onClipSent: () => shipReply(true) });");
+  const iEngine = h.indexOf("await maybeSendVideo(id, name, true, sidebarId, false, { onClipSent: (i) => shipReply(typeof i === \"number\" && i >= 0) });");
   const iShip = h.indexOf("const shipReply = async (afterClip) => {");
   ok(iVerdict > 0 && iEngine > 0 && iVerdict < iShip && iShip < iEngine, "the reply's verdict is awaited BEFORE the clip engine runs (verdict → shipReply defined → videos-first)");
   const verdict = h.slice(iVerdict, iShip);
-  ok(/if \(!reply \|\| !reply\.ok\) \{[\s\S]{0,200}oweText\(id, sidebarId, turn, "claude error"\);\s*\n\s*return;/.test(verdict), "a Claude error: nothing typed, no clip, the text is owed");
+  ok(/if \(!reply \|\| !reply\.ok\) \{[\s\S]{0,200}oweOrGiveUp\(id, sidebarId, turn, "claude error: " \+ \(reply && reply\.error\), rescueHint\);\s*\n\s*return;/.test(verdict), "a Claude error: nothing typed, no clip, the text is owed (three tries, then let go)");
   ok(/if \(reply\.human\) \{[\s\S]{0,300}return; \/\/ \(v0\.21\.91\) no clip either/.test(verdict), "[HUMAN] / a held reply: no clip either");
-  ok(/else if \(reply\.held\) \{[\s\S]{0,200}oweText\(id, sidebarId, turn, reply\.reason\);/.test(verdict) && /else if \(reply\.memory === "claimed"\) \{[\s\S]{0,700}oweText\(id, sidebarId, turn, "claimed elsewhere"\);/.test(verdict), "a budget hold or a claim elsewhere owes the text");
+  ok(/else if \(reply\.held\) \{[\s\S]{0,200}oweText\(id, sidebarId, turn, reply\.reason, rescueHint\);/.test(verdict) && /else if \(reply\.memory === "claimed"\) \{[\s\S]{0,700}oweText\(id, sidebarId, turn, "claimed elsewhere", rescueHint\);/.test(verdict), "a budget hold or a claim elsewhere owes the text (with the row hint the revisit may need)");
   ok(/if \(reply\.reason === "empty reply" \|\| reply\.memory === "answered" \|\| reply\.memory === "echo" \|\| reply\.title \|\| reply\.screen\) \{/.test(verdict) && !/maybeSendVideo/.test(verdict), "a deliberate silence is marked handled, and no clip goes out in the verdict block");
-  ok(/"counted across computers", false\);\s*\n\s*return;\s*\n\s*\}/.test(verdict), "the cloud-counted cap takes the clip pass inside atConvoCap (the engine is not running yet)");
+  ok(/"counted across computers", false, reply\.cloudTexts\);\s*\n\s*return;\s*\n\s*\}/.test(verdict), "the cloud-counted cap takes the clip pass inside atConvoCap (the engine is not running yet)");
   ok(/if \(!memoOk\) pendingReply\[id\] = \{[^\n]*\n\n\s*\/\/ Ships the text reply exactly once/.test(h), "the billed text is memoized before the clip engine runs (an abort during the attach replays it free)");
   const ship = h.slice(iShip, iEngine);
-  ok(/oweText\(id, sidebarId, turn, "chat switched during the wait"\)/.test(ship) && /oweText\(id, sidebarId, turn, "send failed"\)/.test(ship) && /delete textOwed\[sidebarId \|\| id\]; delete textOwed\[id\];/.test(ship), "a switched chat or a failed send owes the text; a delivery settles it");
+  ok(/oweText\(id, sidebarId, turn, "chat switched during the wait", rescueHint\)/.test(ship) && /oweOrGiveUp\(id, sidebarId, turn, "send failed", rescueHint\)/.test(ship) && /delete textOwed\[sidebarId \|\| id\]; delete textOwed\[id\];/.test(ship), "a switched chat or a failed send owes the text; a delivery settles it");
   ok(/transcript: presendTranscript\(turn\), localReplies: replyCounts\[id\] \|\| 0, youTexts: ownTextsNow\(turn\)/.test(ship), "the pre-send look passes the right transcript and the chat's own seller count");
   ok(/\|\| \(turn\.fromSidebar \? sidebarTurnNow\(id, sidebarId\) : null\)/.test(ship), "the conversation recheck re-reads a sidebar-sourced turn from the row");
   const cap = between(cs, "  async function atConvoCap(", "  /* ---------------- handle ONE conversation ---------------- */");
@@ -200,7 +201,7 @@ console.log("\n— 5. wiring —");
   const iLane1 = pick.indexOf("return a; // first match = newest buyer");
   const iLane12 = pick.indexOf("LANE 1.2 — TEXT OWED");
   const iLane15 = pick.indexOf("LANE 1.5 — PENDING VIDEOS");
-  ok(iLane1 > 0 && iLane12 > iLane1 && iLane15 > iLane12 && /const o = textOwed\[id\];[\s\S]{0,400}if \(now - o\.at < COOLDOWN_MS\) continue;[\s\S]{0,300}if \(owed\) return owed;/.test(pick), "lane 1.2 serves an owed text after the newest buyer and before the pending videos, after its cooldown");
+  ok(iLane1 > 0 && iLane12 > iLane1 && iLane15 > iLane12 && /const o = textOwed\[id\];[\s\S]{0,400}if \(now - o\.at < COOLDOWN_MS\) continue;[\s\S]{0,700}if \(owed\) return owed;/.test(pick), "lane 1.2 serves an owed text after the newest buyer and before the pending videos, after its cooldown");
   ok(/lastHandled\[o\.id\] === o\.key \|\| lastHandled\[id\] === o\.key\) \{ delete textOwed\[id\]; continue; \}/.test(pick), "…and forgets a text settled another way (or older than 45 min)");
   ok(/youTexts: turn\.youTexts \}\); \/\/ \(v0\.21\.86\)/.test(h), "GET_REPLY_SIMPLE carries the chat's own seller count");
   ok(/youLinesOf\(msg, dropTitleLines\(msg\.memContext, msg\.threadName\) \|\| ctx\)/.test(bg) && /youLinesOf\(msg, dropTitleLines\(msg\.transcript, msg\.threadName\)\), memTextCount\(rows\)\)/.test(bg), "both background gates count through youLinesOf");
@@ -210,6 +211,76 @@ console.log("\n— 5. wiring —");
   ok(/lastHandled\[id\] = turn\.dedupeKey;\s*\n\s*noteSettled\(sidebarId\);/.test(cap), "…so does the reply cap");
   ok(/if \(settledSnip\[id\] && settledSnip\[id\] === safe\(\(\) => snipKey\(a\), ""\)\) continue;/.test(pick) && pick.indexOf("settledSnip[id]") > pick.indexOf("LANE 1.5 — PENDING VIDEOS"), "lane 2 (buyer-last rotation) skips a settled row whose words have not changed — lanes 0/1 and the owed lane are not affected");
   ok(/delete settledSnip\[sidebarId\];/.test(ship) && /function noteSettled\(sid\) \{[\s\S]{0,300}if \(ks\.length > 600\)/.test(cs), "a delivery forgets the row; the memory is bounded");
+}
+
+console.log("\n— 6. the audit's findings (Oct 24 2026) —");
+{
+  // THE ECHO GUARD, real code: exact or near-exact, and local to the chat
+  const echoSrc = between(cs, "  function isOwnEcho(msg) {", "  // Cross-tab single-flight");
+  const mk = (recent, ids) => new Function("recentSent", "normMsg", "openThreadIds", echoSrc + "\nreturn isOwnEcho;")(recent, normMsg, () => ids);
+  const ours = "oui, on en a! iphone 17 pro max en liquidation avec garantie, passe nous voir";
+  let E = mk([{ t: ours, id: "A" }], ["A"]);
+  ok(!E("iPhone 17 Pro Max") && !E("le 17 pro max svp") && !E("en liquidation avec garantie"), "a buyer naming a model or a phrase our text contains is NOT an echo any more (the old substring rule read it as our own bubble → clip, no text)");
+  ok(E("Oui, on en a! iPhone 17 Pro Max en liquidation avec garantie, passe nous voir") && E(ours + " !") , "our own text read back IS an echo (exact, or within 10 % — the same text with a stray character)");
+  ok(mk([{ t: ours + " " + THUMB, id: "A" }], ["A"])(ours), "…and our bubble read back WITHOUT its trailing emoji (Facebook draws it as a picture) is still ours");
+  ok(!mk([{ t: ours, id: "A" }], ["B"])(ours) && mk([{ t: ours, id: "A" }], [])(ours) && mk([ours], ["B"])(ours), "an entry remembers its chat: not an echo in another chat; unknown open chat or an older plain-string entry counts anywhere");
+  ok(!mk([{ t: "allo", id: "A" }], ["A"])("allo") && !mk([{ t: "ok merci", id: "A" }], ["A"])("ok merci"), "short greetings never (the 10-char floor stands)");
+  const remSrc = between(cs, "  function rememberSent(t) {", "  // (v0.21.91) the ids the open chat is known by");
+  const bag = []; const chromeStub = { storage: { local: { set: () => {} } } };
+  new Function("recentSent", "normMsg", "safe", "openLabel", "chrome", remSrc + "\nrememberSent('Oui, on en a!  iPhone 17 Pro Max');")(bag, normMsg, safe, { id: "123", sid: "" }, chromeStub);
+  ok(bag.length === 1 && bag[0].t === "oui, on en a! iphone 17 pro max" && bag[0].id === "123", "rememberSent stores the text with its chat id");
+  ok(/!turn\.fromSidebar && !turn\.owed && isOwnEcho\(turn\.buyerMessage\)/.test(cs), "a turn Messenger's own row attributes to the buyer by name is never judged an echo");
+
+  // A BLANK ROW NEVER ADOPTS OUR OWN CLIP
+  const T = makeThread("Jimmy · tablet");
+  const ourClip = [{ role: "me", text: "Allô! Oui, la tablette est dispo.", paint: true, hug: "right", top: 1 }, { role: "me", text: "[attachment]", paint: null, hug: "right", top: 2 }];
+  ok(T.api.turnFromConvo(ourClip.map((e) => Object.assign({}, e)), { body: "", media: true, blank: true }) === null, "a blank row (\"Jimmy: · 1h\") does not adopt the trailing attachment — it is our own clip");
+  ok(T.api.turnFromConvo(ourClip.map((e) => Object.assign({}, e)), { body: "", media: true }) === null, "nor does an explicit media row adopt an attachment hugging OUR side");
+  // an attachment with no geometry at all: the explicit "sent a photo." row vouches for it (Messenger's order — it is the buyer's), the blank row does not
+  const noGeo = () => [{ role: "me", text: "Allô!", paint: true, hug: "right", top: 1 }, { role: "me", text: "[attachment]", paint: null, hug: null, top: 2 }];
+  ok(T.api.turnFromConvo(noGeo(), { body: "", media: true, blank: true }) === null && !!T.api.turnFromConvo(noGeo(), { body: "", media: true }), "with no geometry to read, only the explicit media row adopts the attachment — a blank row never does");
+  const theirs = [{ role: "me", text: "Allô!", paint: true, hug: "right", top: 1 }, { role: "me", text: "[attachment]", paint: null, hug: "left", top: 2 }];
+  const adopted = T.api.turnFromConvo(theirs, { body: "", media: true });
+  ok(!!adopted && adopted.buyerMessage === "(the buyer sent a photo/video attachment with no text)", "a left-hugging attachment under \"Mohand sent a photo.\" is still adopted as the buyer's (unchanged)");
+  ok(T.api.turnFromSidebar([], { body: "", media: true, blank: true }).buyerMessage === T.api.NO_TEXT_MSG, "…the blank row is answered from the row instead (no readable text)");
+
+  // THE PANE, NOT THE TEXTBOX, BOUNDS THE READ
+  const near = makeThread("Amel · iPhone");
+  near.el("11pro", 110, 170, 200, "gray"); // a short buyer bubble at the far left, centre 140 < textbox.left (300) - 60
+  ok(near.api.readConversation().length === 0, "(before: a short left-hugging bubble was dropped by the textbox's own left edge)");
+  const wide = makeThread("Amel · iPhone", null, { left: 100, right: 900, top: 0, bottom: 800, width: 800, height: 800 });
+  wide.el("11pro", 110, 170, 200, "gray");
+  const wc = wide.api.readConversation();
+  ok(wc.length === 1 && wc[0].role === "buyer" && wc[0].text === "11pro", "with the pane's box the same bubble is read, the buyer's");
+  ok(near.api.isNoise("Jimmy is waiting for your response.") && !near.api.isNoise("still waiting for your response") && !near.api.isNoise("I'm waiting for your response!!"), "isNoise: only Facebook's own \"X is waiting for your response.\" is noise — a buyer who says they are waiting is a message");
+
+  // OWED TURNS, HOOK-LESS PASSES, THE ENGINE HOOK
+  const h = between(cs, "  async function handleThread(anchor) {", "  /* ---------------- main loop ---------------- */");
+  ok(/const owed = textOwed\[sidebarId\] \|\| textOwed\[id\];\s*\n\s*if \(owed && owed\.turn && lastHandled\[id\] !== owed\.key && Date\.now\(\) - owed\.at <= 45 \* 60 \* 1000\) \{\s*\n\s*turn = Object\.assign\(\{\}, owed\.turn, \{ owed: true \}\);/.test(h), "a revisit whose pane cannot show the message answers the turn remembered when the text was owed");
+  ok(/if \(!recheck && !live && turn\.owed\) recheck = turn;/.test(h), "…and the pre-send recheck accepts it when no new buyer bubble is live");
+  ok(/oweOrGiveUp\(id, sidebarId, turn, "claude error: " \+ \(reply && reply\.error\), rescueHint\);/.test(h) && /oweOrGiveUp\(id, sidebarId, turn, "send failed", rescueHint\);/.test(h) && /function oweOrGiveUp\(id, sid, turn, why, hint\) \{[\s\S]{0,200}if \(!o \|\| o\.tries < 3\) return false;/.test(cs), "a Claude error or a failed send is owed with the hint; the third failure lets the message go");
+  const pick = between(cs, "  function pickTarget(anchors, now, exclude, videoAtt) {", "  // DEEP-SCAN:");
+  ok(/if \(now <= \(cooldowns\[id\] \|\| 0\) \|\| \(o\.id && now <= \(cooldowns\[o\.id\] \|\| 0\)\)\) continue;/.test(pick), "lane 1.2 is paced by the visit's own cooldown (no 8-s loop)");
+  const gated = (h.match(/if \(chatHasOurText\(id, sidebarId, (turn|null)\)\) \{/g) || []).length;
+  const cap = between(cs, "  async function atConvoCap(", "  /* ---------------- handle ONE conversation ---------------- */");
+  ok(gated === 3 && /if \(!noVideo && chatHasOurText\(id, sidebarId, turn, cloudTexts\)\) \{/.test(cap), "the hook-less clip passes (already answered, echo, idle, the cap) run only for a chat that holds a text of ours (" + gated + " + cap)");
+  ok(/const keep = Math\.max\(replyCounts\[id\] \|\| 0, Math\.floor\(Number\(cloudTexts\) \|\| 0\)\);/.test(cap) && /replyCounts\[id\] = Number\(fresh\.cloudTexts\) \|\| 0;/.test(cap), "the cap persists only a DELIVERED count (this computer's or the Activity log's), never one read off the bubbles");
+  ok(/"counted across computers", false, reply\.cloudTexts\);/.test(h) && /"counted across computers", true, pre\.cloudTexts\);/.test(h), "both cap verdicts hand the cloud count to atConvoCap");
+  ok(/onClipSent: \(i\) => shipReply\(typeof i === "number" && i >= 0\)/.test(h), "the engine's give-up hook (-1) ships the text as a text-only visit (full delay, recheck kept)");
+
+  // BACKGROUND: the cap answer, the screen wall, accidental empties, the claim, the title, the prompt
+  const g = between(bg, 'case "GET_REPLY_SIMPLE": {', 'case "MEMORY_PRESEND": {');
+  ok(/const capAnswer = \(cloud\) => \{/.test(g) && /cloudTexts: Math\.max\(0, Math\.floor\(Number\(cloud\) \|\| 0\)\)/.test(g) && /capAnswer\(0\); break;/.test(g) && /capAnswer\(memTextCount\(memRows\)\); break;/.test(g) && /cloudTexts: memTextCount\(rows\), max: cc\.cap/.test(bg), "the cap answers carry cloudTexts (0 before the memory is read, the log's text rows after)");
+  const screenSrc = between(bg, "const SCREEN_RES = [", "// The buyer's message without Facebook's lines");
+  const screenText = new Function(screenSrc + "\nreturn screenText;")();
+  ok(screenText("Jimmy is waiting for your response.") && screenText("Amel attend ta réponse") && !screenText("still waiting for your response") && !screenText("I'm waiting for your reply since yesterday") && !screenText("j'attends votre réponse"), "the screen wall drops only Facebook's \"X is waiting for your response.\" — a buyer who says they are waiting gets an answer");
+  ok(/if \(parsed\.kind === "empty" && parsed\.skip\) \{[\s\S]{0,300}sendResponse\(\{ ok: true, skip: true, reason: "empty reply" \}\);/.test(g) && /sendResponse\(\{ ok: false, error: "empty model output \(" \+ \(parsed\.kind \|\| "\?"\)/.test(g), "[SKIP] stays the model's deliberate silence; an ACCIDENTAL empty is an error the content script retries (owed)");
+  ok((g.match(/if \(claimed\) memUnclaim\(msg\.threadId, msg\.threadName, msg\.buyerMessage, machineId\);/g) || []).length >= 5, "every verdict that delivers nothing withdraws the claim (error, held, human, [SKIP], accidental empty)");
+  const titleSrc = between(bg, "const titleNorm = ", "function dropTitleLines");
+  const isChatTitle = new Function(titleSrc + "\nreturn isChatTitle;")();
+  const TT = "Cheikh Ibreu · Magnifique iPhone 17 Pro Max 256";
+  ok(!isChatTitle("Cheikh Ibreu", TT) && !isChatTitle("cheikh ibreu ", TT) && isChatTitle("Cheikh Ibreu · Magnifique", TT) && isChatTitle(TT, TT) && isChatTitle(TT + " · CA$1", TT), "isChatTitle: a buyer typing their own name is a message; a cut title reaching into the headline is still the title");
+  ok(/Never \[SKIP\] a buyer's FIRST message in a chat, not even a lone emoji/.test(bg), "the owner prompt: a first message is never silence (a lone 👍 reaches the model now)");
 }
 
 console.log(failed ? "\n" + failed + " check(s) FAILED" : "\nall checks passed");
