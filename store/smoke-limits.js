@@ -35,7 +35,7 @@ function between(src, a, b) {
 
 const slice = between(bg, "/* ===== (v0.21.86) THE MESSAGE LEDGER", "/* ===== LEDGER END ===== */");
 ok(!/chrome\./.test(slice.replace(/\/\*[\s\S]*?\*\//g, "").replace(/\/\/[^\n]*/g, "")), "the LEDGER slice is free of chrome.* (pure, testable)");
-const L = new Function(slice + "\nreturn { ledgerUnits, ledgerPrune, ledgerCounts, warmDayOf, effectiveDailyCap, warmEvidence, convoCapLimit, memTextCount, youLineCount, cadenceBreakMs, budgetVerdict, LEDGER_MAX };")();
+const L = new Function(slice + "\nreturn { ledgerUnits, ledgerPrune, ledgerCounts, warmDayOf, effectiveDailyCap, warmEvidence, convoCapLimit, memTextCount, youLineCount, youLinesOf, cadenceBreakMs, budgetVerdict, LEDGER_MAX };")();
 
 const H = 3600 * 1000, D = 86400 * 1000;
 const NOW = Date.parse("2026-10-14T15:00:00Z");
@@ -122,6 +122,10 @@ console.log("\n— 4. the per-chat cap —");
   const tx = "Buyer: salut\nYou: allô! oui dispo\nYou: [attachment]\nYou: [attachment]\nBuyer: prix?\nYou: on en parle au shop\n  you: ok à+  \nBuyer: You: not ours\nYou:\n";
   ok(L.youLineCount(tx) === 3, "the chat itself: 'You:' lines are seller texts (3), clips and an empty line are not, a buyer line quoting 'You:' is the buyer's");
   ok(L.youLineCount("") === 0 && L.youLineCount(null) === 0 && L.youLineCount("Buyer: hi") === 0, "no transcript or no seller line = 0");
+  // (v0.21.91) the content script's own count of confirmed seller bubbles wins over the line count
+  ok(L.youLinesOf({ youTexts: 1 }, tx) === 1 && L.youLinesOf({ youTexts: 0 }, tx) === 0, "youTexts from the content script (confirmed own bubbles) replaces the 'You:' line count — a misread buyer bubble no longer fills the cap");
+  ok(L.youLinesOf({}, tx) === 3 && L.youLinesOf({ youTexts: null }, tx) === 3 && L.youLinesOf({ youTexts: NaN }, tx) === 3 && L.youLinesOf({ youTexts: -2 }, tx) === 3 && L.youLinesOf({ youTexts: "2" }, tx) === 3, "an older content script (no count, or a bad one) keeps the line count");
+  ok(L.youLinesOf({ youTexts: 2.7 }, tx) === 2, "a fractional count is floored");
 }
 
 console.log("\n— 5. the cadence roll —");
@@ -143,9 +147,9 @@ ok(!/incrementCounters\(|checkRateLimit\(|rollWindows\(|getCounters\(/.test(bg),
 ok(/case "LOG_EVENT": \{[\s\S]{0,600}await ledgerNote\(entry\);[\s\S]{0,200}if \(entry\.action === "text"\) await cadenceAfterReply\(await getSettings\(\)\);/.test(bg), "LOG_EVENT feeds the ledger and rolls the break after a delivered reply");
 ok((bg.match(/const (?:budget|fbudget) = await budgetState\(settings\);/g) || []).length >= 4, "GET_STATUS, GET_REPLY_SIMPLE, GET_FOLLOWUP and the alarm handler all ask budgetState — " + (bg.match(/await budgetState\(settings\)/g) || []).length + " call sites");
 ok(/case "GET_REPLY_SIMPLE": \{[\s\S]{0,3000}const budget = await budgetState\(settings\);\s*\n\s*if \(!budget\.ok\) \{\s*\n\s*if \(budget\.warming\) noteWarmHold\(budget\);[^\n]*\n\s*sendResponse\(\{ ok: true, skip: true, held: true, reason: budget\.reason \}\);/.test(bg), "the reply path refuses on the ledger's verdict, before anything is billed — and a warm-up hold is named in the Activity feed once a day");
-ok(/const cc = convoCapLimit\(settings\);\s*\n\s*let soFar = cc\.cap \? Math\.max\(Math\.floor\(num0\(msg\.localReplies, 0\)\), youLineCount\(dropTitleLines\(msg\.memContext, msg\.threadName\) \|\| ctx\)\) : 0;[\s\S]{0,600}if \(cc\.cap && soFar >= cc\.limit\) \{ capAnswer\(\); break; \}/.test(bg), "the reply path caps from this computer's count and the chat's own 'You:' lines BEFORE the memory read (no login needed)");
+ok(/const cc = convoCapLimit\(settings\);\s*\n\s*let soFar = cc\.cap \? Math\.max\(Math\.floor\(num0\(msg\.localReplies, 0\)\), youLinesOf\(msg, dropTitleLines\(msg\.memContext, msg\.threadName\) \|\| ctx\)\) : 0;[\s\S]{0,600}if \(cc\.cap && soFar >= cc\.limit\) \{ capAnswer\(\); break; \}/.test(bg), "the reply path caps from this computer's count and the chat's own seller texts (youTexts, else 'You:' lines) BEFORE the memory read (no login needed)"); // (v0.21.91) youLinesOf
 ok(/noteWarmEvidence\(settings, memRows\);\s*\n\s*if \(cc\.cap\) \{\s*\n\s*soFar = Math\.max\(soFar, memTextCount\(memRows\)\);\s*\n\s*if \(soFar >= cc\.limit\) \{ memNote\(\{ capCloud: 1 \}\); capAnswer\(\); break; \}/.test(bg), "…then raises the count with the chat's cloud rows and reads the account's age from the same rows");
-ok(/case "MEMORY_PRESEND": \{[\s\S]{0,2500}youLineCount\(dropTitleLines\(msg\.transcript, msg\.threadName\)\), memTextCount\(rows\)\);[\s\S]{0,400}cap: true/.test(bg), "the pre-send recheck applies the cap too, from the fresh rows and the chat's own lines");
+ok(/case "MEMORY_PRESEND": \{[\s\S]{0,2500}youLinesOf\(msg, dropTitleLines\(msg\.transcript, msg\.threadName\)\), memTextCount\(rows\)\);[\s\S]{0,400}cap: true/.test(bg), "the pre-send recheck applies the cap too, from the fresh rows and the chat's own seller texts"); // (v0.21.91) youLinesOf
 ok(/warmEvidence\(rows, installTs \+ memSkewMs, memNow\(\)\)/.test(bg), "the cloud evidence compares the install stamp on SERVER time (memSkewMs)");
 ok(/if \(!budget\.ok \|\| budget\.breakUntil\) \{[\s\S]{0,500}chrome\.alarms\.create\(alarm\.name, \{ when \}\);/.test(bg) && !/LOG\("alarm skipped:", rl\.reason\)/.test(bg), "a follow-up / visit alarm due during a cap or a break is parked, not dropped");
 ok(/case "CAP_NOTIFY": \{[\s\S]{0,900}notifyHuman\(why, msg\.threadName\);[\s\S]{0,300}action: "human"/.test(bg), "CAP_NOTIFY tells the owner once per chat (notification + [HUMAN] row)");
@@ -160,11 +164,11 @@ ok(!/replyCap \+ 1/.test(ct) && !/courtesy close/i.test(ct.replace(/the old cour
 ok(/function convoCapOf\(settings\)/.test(ct) && /async function atConvoCap\(id, name, sidebarId, turn, settings, cc, so, why, noVideo\)/.test(ct), "one cap handler for every path (convoCapOf + atConvoCap)");
 ok(/if \(replyCap > 0 && repliesSoFar >= cc\.limit\) \{\s*\n\s*await atConvoCap\(id, name, sidebarId, turn, settings, cc, repliesSoFar, "", false\);\s*\n\s*return;/.test(ct), "the local check runs before the model is asked");
 ok(/type: "GET_REPLY_SIMPLE"[^\n]*localReplies: repliesSoFar/.test(ct) && /type: "MEMORY_PRESEND"[^\n]*localReplies: replyCounts\[id\] \|\| 0/.test(ct), "the content script sends its own count with both asks");
-ok(/if \(reply\.cap\) \{[\s\S]{0,700}await atConvoCap\(id, name, sidebarId, turn, settings, convoCapOf\(settings\), Math\.max\(repliesSoFar, Number\(reply\.replies\) \|\| 0\), "counted across computers", true\);/.test(ct), "a cloud-counted cap is handled like the local one, without re-entering the video engine");
+ok(/if \(reply\.cap\) \{[\s\S]{0,700}await atConvoCap\(id, name, sidebarId, turn, settings, convoCapOf\(settings\), Math\.max\(repliesSoFar, Number\(reply\.replies\) \|\| 0\), "counted across computers", false\);/.test(ct), "a cloud-counted cap is handled like the local one — (v0.21.91) the verdict comes before the clip engine, so atConvoCap takes the one clip pass itself");
 ok(/if \(pre\.cap\) \{[\s\S]{0,400}await atConvoCap\(/.test(ct), "…and so is a cap reached during the wait");
 ok(/if \(cc\.mode === "close" && so < cc\.cap && stillOnThread\(id\)\)[\s\S]{0,2500}replyCounts\[id\] = cc\.cap;/.test(ct), "close mode: the closing line is the cap's last message and fills the count");
 ok(/const stC = await ask\(\{ type: "GET_STATUS" \}\);\s*\n\s*if \(stC && stC\.ok && stC\.budget && !stC\.budget\.ok\) \{[\s\S]{0,200}return;/.test(ct), "…it keeps to the hour / day caps (held to the next message otherwise)");
-ok(/const fresh = await ask\(\{ type: "MEMORY_PRESEND", threadId: id, threadName: name, buyerMessage: turn\.buyerMessage, transcript: [^\n]*localReplies: so \}\);\s*\n\s*if \(fresh && fresh\.ok && fresh\.skip && \(!fresh\.cap \|\| \(Number\(fresh\.replies\) \|\| 0\) >= cc\.cap\)\) \{/.test(ct), "…takes the reply path's fresh look at the chat's memory first (another computer may have closed it)");
+ok(/const fresh = await ask\(\{ type: "MEMORY_PRESEND", threadId: id, threadName: name, buyerMessage: turn\.buyerMessage, transcript: [^\n]*localReplies: so, youTexts: ownTextsNow\(turn\) \}\);\s*\n\s*if \(fresh && fresh\.ok && fresh\.skip && \(!fresh\.cap \|\| \(Number\(fresh\.replies\) \|\| 0\) >= cc\.cap\)\) \{/.test(ct), "…takes the reply path's fresh look at the chat's memory first (another computer may have closed it), with the chat's own seller count"); // (v0.21.91) youTexts
 ok(/const paceC = typingPaceMs\(closeLine, settings\);\s*\n\s*if \(paceC > 0\) await sleep\(paceC\);/.test(ct), "…and waits its typing pace like a reply");
 ok(/if \(cc\.mode === "notify"\) \{\s*\n\s*ask\(\{ type: "CAP_NOTIFY"/.test(ct), "notify mode asks the background to tell the owner once");
 ok(/const b = st\.budget;\s*\n\s*if \(b && !b\.ok\) \{\s*\n\s*setStatus\(\{ lastAction: "paused — " \+ b\.reason \+ " \(chats stay unread\)" \}\);\s*\n\s*return;/.test(ct), "the scan gate pauses on the ledger's verdict (chats stay unread, as before)");

@@ -233,7 +233,7 @@ const V = (rows, buyerMessage, transcript, phase) => memVerdict(rows, { buyerMes
   ok(/const hrefAtSend = location\.href;/.test(ct) && /if \(location\.href !== hrefAtSend\) return false;/.test(ct), "typeAndSend never clicks Send in a chat the operator switched to");
   const ship = slice(ct, "const shipReply = async (afterClip) =>", "const composerNow = findComposer()");
   ok(ship.indexOf('setStatus({ lastAction: "aborted — you switched chats during the wait') < ship.indexOf('type: "MEMORY_PRESEND"'), "the pre-send memory check runs AFTER the navigation abort (the transcript is this chat's)");
-  ok(/transcript: fullTranscript\(40\)/.test(ship) && /memContext: turn\.memTranscript/.test(ct), "the memory reads 40 bubbles, the model keeps 12");
+  ok(/transcript: presendTranscript\(turn\)/.test(ship) && /return fullTranscript\(40\) \|\| \(turn && \(turn\.memTranscript \|\| turn\.transcript\)\) \|\| "";/.test(ct) && /memContext: turn\.memTranscript/.test(ct), "the memory reads 40 bubbles, the model keeps 12"); // (v0.21.91) through presendTranscript (a sidebar-sourced turn carries its own line)
   ok(/const convoLine = \(m\) =>[^\n]*replace\(\/\\s\*\\n\\s\*\/g, " "\)/.test(ct), "one bubble = one transcript line (newlines flattened)");
   ok(/e\.via !== "cloud"\) vDoneNoSent\+\+/.test(bg), "the diagnostic does not count cloud marks as done-without-send");
 }

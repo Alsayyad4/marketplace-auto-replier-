@@ -17,7 +17,28 @@ all chrome.debugger/CDP work) + Supabase dashboard in docs/. Live branch:
   permissions ships OFF by default behind a cloud setting and goes to ONE machine first.
 - The operator wants zero manual steps in normal operation.
 
-## Known state (v0.21.89 LIVE on the Web Store since Oct 22 2026; v0.21.90 = the store update installs itself)
+## Known state (v0.21.89 LIVE on the Web Store since Oct 22 2026; .90 = the store update installs itself; .91 = a clip never goes out without its text)
+- A CLIP, THEN SILENCE (.91, Oct 24 2026, owner: "some accounts are not sending messages but
+  sending videos"; 🩺 PC-j2qrz: Jimmy "Jimmy: · 1h" replies=0 SUPP, Amel "Amel: 11pro · 20h"
+  replies=1 SUPP, both vmark=sent). Four causes, one rule — the clip is the text's companion:
+  (1) VERDICT BEFORE THE CLIP: handleThread awaits GET_REPLY_SIMPLE BEFORE the video engine;
+  a Claude error / budget hold / [SKIP] / answered elsewhere / guard hold / [HUMAN] sends NO
+  clip; the billed text is memoized before the attach; a text that cannot go out is OWED
+  (`textOwed`, `oweText`, content lane 1.2 after lane 1 — the row reads "You sent a video."
+  by then, so no other lane came back) and replayed free; (2) EMOJI ARE PICTURES: Facebook
+  draws every emoji as <img alt>, so an emoji-only bubble / preview read as nothing →
+  `isEmojiAlt`/`emojiAlt` (reader pass 1 + pass 1.2, `sidebarSnippetBody` → `{emoji:true}`,
+  an empty "Name:" body → `{media:true, blank:true}`); (3) THE SIDEBAR IS THE WITNESS: after
+  the 3rd read that cannot find the message the row attributes to the buyer, `turnFromSidebar`
+  answers the row's own words (transcript ends with that line, key = one more buyer bubble,
+  `fromSidebar`, `sidebarTurnNow` for the pre-send recheck) instead of the idle verdict
+  (6 h SUPP + clip); (4) THE CAP COUNTS OUR BUBBLES: `ownTextCount` (painted / right-hugging /
+  echo; never a left-hugging unpainted "me") → `turn.youTexts` → background `youLinesOf`
+  (falls back to the "You:" line count for an older content script). Also: the E2EE notice
+  and the Marketplace Assistant are not a waiting buyer. 🩺 `rescue: sidebarTurns= textOwed=`.
+  `store/smoke-mute.js` (62), `store/build-fleet-zips.ps1`. The read's attribution itself is
+  unchanged (ambiguity → "me"); the idle verdict still sends the clip only when the row has no
+  words at all; atConvoCap still gives a capped chat its one clip set (owner's design).
 - A STORE UPDATE INSTALLS ITSELF (.90, Oct 23 2026, owner: "should be only from the link, I
   don't want to play with developer modes"). Chrome installs a downloaded store update only
   when the extension is IDLE; SubSell never is (the Messenger tab messages the worker every

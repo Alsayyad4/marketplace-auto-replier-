@@ -2139,6 +2139,17 @@ function youLineCount(transcript) {
   }
   return n;
 }
+/* (v0.21.91) The seller texts the chat holds, as the content script COUNTED them
+ * (`youTexts`: its painted / right-hugging own bubbles — a bubble it labelled "You:"
+ * only because the paint was unreadable while it hugs the buyer's side is not ours).
+ * The transcript's "You:" lines counted those too, and a chat whose buyer bubbles
+ * paint-read as unknown reached the cap on the buyer's own second message: clip, then
+ * silence. Older content scripts send no count: the line count stands for them. */
+function youLinesOf(msg, transcript) {
+  const n = msg && msg.youTexts;
+  if (typeof n === "number" && isFinite(n) && n >= 0) return Math.floor(n);
+  return youLineCount(transcript);
+}
 /* The break roll after a reply: 0 = no break; else its length in ms. `rnd`/`rnd2` are
  * for the test; live they are Math.random(). */
 function cadenceBreakMs(settings, rnd, rnd2) {
@@ -5615,7 +5626,7 @@ chrome.runtime.onMessage.addListener((msg, _sender, sendResponse) => {
           // the memory is read below, the chat's text rows in the Activity log (every computer,
           // every install, within the log's 5-day retention).
           const cc = convoCapLimit(settings);
-          let soFar = cc.cap ? Math.max(Math.floor(num0(msg.localReplies, 0)), youLineCount(dropTitleLines(msg.memContext, msg.threadName) || ctx)) : 0;
+          let soFar = cc.cap ? Math.max(Math.floor(num0(msg.localReplies, 0)), youLinesOf(msg, dropTitleLines(msg.memContext, msg.threadName) || ctx)) : 0;
           const capAnswer = () => {
             memNote({ capHit: 1 });
             sendResponse({ ok: true, skip: true, cap: true, replies: soFar, max: cc.cap, mode: cc.mode, reason: "reply cap reached for this chat (" + soFar + "/" + cc.cap + " seller texts, counted across every computer)" });
@@ -5736,7 +5747,7 @@ chrome.runtime.onMessage.addListener((msg, _sender, sendResponse) => {
           {
             const cc = convoCapLimit(settings);
             if (cc.cap) {
-              const so = Math.max(Math.floor(num0(msg.localReplies, 0)), youLineCount(dropTitleLines(msg.transcript, msg.threadName)), memTextCount(rows));
+              const so = Math.max(Math.floor(num0(msg.localReplies, 0)), youLinesOf(msg, dropTitleLines(msg.transcript, msg.threadName)), memTextCount(rows));
               if (so >= cc.limit) {
                 memNote({ capCloud: 1 });
                 sendResponse({ ok: true, skip: true, cap: true, replies: so, max: cc.cap, mode: cc.mode, reason: "reply cap reached for this chat (" + so + "/" + cc.cap + " bot texts, counted across every computer)" });
