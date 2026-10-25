@@ -3416,6 +3416,9 @@ const SCREEN_RES = [
   /^[^:]{1,60}\s+is waiting for your (response|reply)\.?$|^[^:]{1,60}\s+attend (ta|votre) r[ée]ponse\.?$/, // (v0.21.91) the system form only ("X is waiting for your response.") — a buyer's "still waiting for your reply" is a message
   /\badd (a )?video to (the |your )?listing\b|^update listing$|\bajouter une vid[ée]o [àa] l['’]annonce|^mettre [àa] jour l['’]annonce$/,
   /\ballow other buyers\b|\bautorise[zr]? d['’]autres acheteu|\bpart of your marketplace listing\b|\bdans le cadre de votre annonce\b/,
+  // (v0.21.92) Meta's notices printed inside the thread, EN and FR (the scam notice, the empty chat's encryption line)
+  /^(to help identify|afin d['’]aider [àa] identifier|pour (vous |t['’])?aider [àa] identifier)\b|\bmeta (may use|peut utiliser) (technology|la technologie)\b|\br[ée]duire les arnaques\b/,
+  /\bsecured with end-to-end encryption\b|\bchiffr[ée]e?s? de bout en bout\b/,
 ];
 function screenText(line) {
   const t = String(line == null ? "" : line).toLowerCase().replace(/\s+/g, " ").trim();

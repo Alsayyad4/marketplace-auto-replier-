@@ -68,7 +68,7 @@ function makeThread(label, ownEcho, mainRect) {
   const composer = { getBoundingClientRect: () => rect(ROW.left, ROW.right, 800) };
   const api = new Function(
     "safe", "normMsg", "isOwnEcho", "getMain", "findComposer", "conversationAnchors", "threadId", "anchorName", "location", "getComputedStyle",
-    readerSrc + "\nreturn { readConversation, turnFromConvo, turnFromSidebar, ownTextCount, isEmojiAlt, emojiAlt, noteOpenThread, NO_TEXT_MSG, isNoise };"
+    readerSrc + "\nreturn { readConversation, turnFromConvo, turnFromSidebar, ownTextCount, isEmojiAlt, emojiAlt, noteOpenThread, NO_TEXT_MSG, isNoise, repairReplyCounts };"
   )(safe, normMsg, (t) => !!ownEcho && ownEcho === t, () => main, () => composer, () => state.anchors, (a) => a.id, (a) => a.name, { get href() { return state.href; } }, (n) => n._cs || {});
   if (label) api.noteOpenThread("123456", "123456", label);
   return { state, el, api };
@@ -142,7 +142,7 @@ console.log("\n— 3. the per-chat cap counts OUR bubbles —");
   const C = t.api.ownTextCount;
   const e = (role, text, paint, hug) => ({ role, text, paint, hug });
   ok(C([e("me", "allo", true, "right"), e("me", "le prix", true, null), e("me", "echo", true, "left")]) === 3, "painted own bubbles count (an echo of what we sent even when it hugs left)");
-  ok(C([e("me", "unpainted right", null, "right"), e("me", "no row box", null, null), e("me", "no row box 2", false, undefined)]) === 3, "an unpainted bubble hugging the right, or one with no geometry, still counts (the safe side of the limit)");
+  ok(C([e("me", "unpainted right", null, "right"), e("me", "no row box", null, null), e("me", "no row box 2", false, undefined)]) === 1, "an unpainted bubble hugging the right counts; (v0.21.92) one with no geometry does not — Facebook's own notices are exactly that");
   ok(C([e("me", "the buyer's words, unreadable paint", null, "left"), e("me", "same again", null, "left"), e("buyer", "hi", false, "left")]) === 0, "a LEFT-hugging unpainted bubble labelled \"me\" by default is not a seller text — it used to fill the cap on the buyer's own second message");
   ok(C([e("me", "[attachment]", null, "right"), e("me", "ok", true, "right")]) === 1 && C([]) === 0 && C(null) === 0, "clips and nothing count as nothing");
   // from a real read: a first-contact chat whose buyer bubbles paint-read as unknown (a
@@ -281,6 +281,37 @@ console.log("\n— 6. the audit's findings (Oct 24 2026) —");
   const TT = "Cheikh Ibreu · Magnifique iPhone 17 Pro Max 256";
   ok(!isChatTitle("Cheikh Ibreu", TT) && !isChatTitle("cheikh ibreu ", TT) && isChatTitle("Cheikh Ibreu · Magnifique", TT) && isChatTitle(TT, TT) && isChatTitle(TT + " · CA$1", TT), "isChatTitle: a buyer typing their own name is a message; a cut title reaching into the headline is still the title");
   ok(/Never \[SKIP\] a buyer's FIRST message in a chat, not even a lone emoji/.test(bg), "the owner prompt: a first message is never silence (a lone 👍 reaches the model now)");
+}
+
+console.log("\n— 7. Facebook's French notices and the phantom counts (Oct 25 2026) —");
+{
+  const t = makeThread("Hady · Samsung Galaxy S25 Ultra");
+  const N = t.api.isNoise;
+  ok(N("Afin d’aider à identifier et réduire les arnaques, Meta peut utiliser la technologie pour examiner les messages de cette conversation.") && N("Pour vous aider à identifier et réduire les arnaques, Meta peut utiliser…") && N("To help identify and reduce scams, Meta may use technology to review messages in this chat.") && N("Les messages et les appels sont chiffrés de bout en bout.") && N("Messages and calls are secured with end-to-end encryption."), "isNoise: Meta's scam notice and the encryption line, EN and FR, are not messages");
+  ok(!N("c'est une arnaque ton prix?") && !N("il est chiffré le téléphone?") && !N("aide moi à identifier le modèle") && !N("tu peux réduire le prix?"), "…but a buyer who writes 'arnaque', 'chiffré', 'identifier' or 'réduire' is a message");
+  // a French first-contact chat: the two notices (unpainted, spanning the column), then the buyer's gray bubble
+  const fr = makeThread("Hady · Samsung Galaxy S25 Ultra");
+  fr.el("Afin d’aider à identifier et réduire les arnaques, Meta peut utiliser la technologie pour examiner les messages.", 300, 880, 60, null);
+  fr.el("Les messages et les appels sont chiffrés de bout en bout.", 300, 860, 90, null);
+  fr.el("As tu le s25 ultra rt combien ?", 300, 560, 200, "gray");
+  const frc = fr.api.readConversation();
+  const frt = fr.api.turnFromConvo(frc, null);
+  ok(frc.length === 1 && !!frt && frt.buyerMessage === "As tu le s25 ultra rt combien ?" && frt.youTexts === 0, "the notices leave the read; the buyer's question is the turn and the chat holds 0 seller texts (before: two 'You:' lines = the two-reply cap → clip, silence)");
+  ok(!S.snippetSuggestsBuyerLast(rowOf("Kaba Jeremie\nAfin d’aider à identifier et réduire les arnaque")) && !S.snippetSuggestsBuyerLast(rowOf("X\nTo help identify and reduce scams, Meta may use…")), "a row whose preview is the scam notice is not a waiting buyer (it was a lane-0 ghost)");
+  const screenSrc = between(bg, "const SCREEN_RES = [", "// The buyer's message without Facebook's lines");
+  const screenText = new Function(screenSrc + "\nreturn screenText;")();
+  ok(screenText("Afin d’aider à identifier et réduire les arnaques, Meta peut utiliser la technologie pour examiner les messages de cette conversation.") && screenText("Les messages et les appels sont chiffrés de bout en bout.") && !screenText("c'est une arnaque ton prix?"), "the background's screen wall drops the same notices from transcripts and buyer messages");
+  // the one-time repair of the persisted counts
+  const R = t.api.repairReplyCounts;
+  const counts = { a: 2, b: 2, c: 1, d: 0 };
+  const logArr = [{ action: "text", threadId: "a" }, { action: "video", threadId: "b" }, { action: "text", threadId: "c" }, { action: "followup", threadId: "c" }, { action: "text", threadId: "zz" }];
+  const n = R(counts, logArr);
+  ok(n === 2 && JSON.stringify(counts) === JSON.stringify({ a: 1, b: 0, c: 1, d: 0 }), "repairReplyCounts: a count above this install's delivered texts is cut to them (clips and follow-ups are not texts), the rest untouched — " + JSON.stringify(counts));
+  ok(R({}, null) === 0 && R({ a: 3 }, undefined) === 1, "no log = no delivered texts → the count falls to 0; nothing to repair = 0");
+  ok(/if \(!\(r && r\.replyCountsRepaired92\)\) \{\s*\n\s*const n = safe\(\(\) => repairReplyCounts\(replyCounts, r && r\.replyLog\), 0\);/.test(cs) && /replyCountsRepaired92: Date\.now\(\)/.test(cs) && /"replyLog", "replyCountsRepaired92"\]/.test(cs), "the repair runs once per install at load, from the install's own log, and is stamped");
+  // the trail and the pre-send claim
+  ok(/actionTrail\.push\(\{ t: Date\.now\(\), a: patch\.lastAction\.slice\(0, 110\)/.test(cs) && /if \(actionTrail\.length > 40\) actionTrail\.shift\(\);/.test(cs) && /L\.push\("actions \(last 24, oldest first\): "/.test(cs), "🩺 carries the last 24 distinct actions with their time and chat");
+  ok(/if \(pre\.memory === "claimed"\) \{[\s\S]{0,300}oweText\(id, sidebarId, turn, "claimed elsewhere before typing", rescueHint\);/.test(cs), "a claim seen right before typing (the clip may be out already) owes the text");
 }
 
 console.log(failed ? "\n" + failed + " check(s) FAILED" : "\nall checks passed");

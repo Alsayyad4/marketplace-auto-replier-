@@ -128,6 +128,12 @@
   // on the Oct 24 2026 🩺): visits that served nobody while new buyers waited their turn.
   const settledSnip = {};
   let openSnip = ""; // the row's words of the chat handleThread opened last
+  let repairNote = null; // (v0.21.92) the one-time replyCounts repair: { at, n }
+  // (v0.21.92) THE ACTION TRAIL for the 🩺: the last 40 distinct status lines with their time
+  // and chat — a diagnostic used to show only the CURRENT action, and a computer that opened
+  // five overdue buyers for 90 min without a text left no trace of what each visit did.
+  const actionTrail = [];
+  let lastTrailAction = "";
   function noteSettled(sid) {
     if (!sid || !openSnip) return;
     settledSnip[sid] = openSnip;
@@ -214,13 +220,19 @@
   let sidebarVideoSeen = {};
   // Hydrate persisted state at boot.
   safe(() =>
-    chrome.storage.local.get(["recentSent", "cooldowns", "lastHandled", "replyCounts", "waitingSince", "videoPending", "videoCatchUp", "attachMiss", "sidebarVideoSeen"], (r) => {
+    chrome.storage.local.get(["recentSent", "cooldowns", "lastHandled", "replyCounts", "waitingSince", "videoPending", "videoCatchUp", "attachMiss", "sidebarVideoSeen", "replyLog", "replyCountsRepaired92"], (r) => {
       if (r && Array.isArray(r.recentSent)) recentSent = r.recentSent;
       if (r && r.sidebarVideoSeen && typeof r.sidebarVideoSeen === "object") sidebarVideoSeen = r.sidebarVideoSeen;
       if (r && r.attachMiss && typeof r.attachMiss === "object") attachMiss = r.attachMiss;
       if (r && r.cooldowns && typeof r.cooldowns === "object") cooldowns = r.cooldowns;
       if (r && r.lastHandled && typeof r.lastHandled === "object") lastHandled = r.lastHandled;
       if (r && r.replyCounts && typeof r.replyCounts === "object") replyCounts = r.replyCounts;
+      // (v0.21.92) once per install: the phantom counts of the builds before .91 (see repairReplyCounts)
+      if (!(r && r.replyCountsRepaired92)) {
+        const n = safe(() => repairReplyCounts(replyCounts, r && r.replyLog), 0);
+        repairNote = { at: Date.now(), n };
+        safe(() => chrome.storage.local.set({ replyCounts, replyCountsRepaired92: Date.now(), replyCountsRepairedN: n }));
+      } else if (r && typeof r.replyCountsRepairedN === "number") repairNote = { at: r.replyCountsRepaired92, n: r.replyCountsRepairedN };
       if (r && r.waitingSince && typeof r.waitingSince === "object") waitingSince = r.waitingSince;
       // TTL sweep (boot): ledger entries older than 24h are unservable ghosts —
       // buried, deleted, or pre-0.21.14 phantom system rows — that no visit can
@@ -522,6 +534,11 @@
 
   /* ---------------- popup status ---------------- */
   function setStatus(patch) {
+    if (patch && typeof patch.lastAction === "string" && patch.lastAction && patch.lastAction !== lastTrailAction) { // (v0.21.92) the trail
+      lastTrailAction = patch.lastAction;
+      actionTrail.push({ t: Date.now(), a: patch.lastAction.slice(0, 110), c: String(patch.currentThread || (tick && tick.currentThread) || "").slice(0, 14) });
+      if (actionTrail.length > 40) actionTrail.shift();
+    }
     tick = Object.assign(
       {
         lastScanTime: null,
@@ -605,6 +622,7 @@
     // (v0.21.91) Messenger's own notices are nobody's message: the end-to-end
     // encryption line an empty chat shows, and the "Marketplace Assistant" thread.
     if (/secured with end-to-end|end-to-end encrypt|de bout en bout/i.test(prev)) return false;
+    if (/to help identif|afin d['’]aider|r[ée]duire les arnaques|meta (may use|peut utiliser)/i.test(prev)) return false; // (v0.21.92) Meta's scam notice (EN/FR) as the row's "latest message"
     if (/marketplace assistant|assistant marketplace/i.test(lines[0] || "")) return false;
     // OUR last message / system & UI lines → not a waiting buyer.
     // NOTE (audit 2026-08-09): terms must survive SIDEBAR TRUNCATION — "This is an
@@ -787,7 +805,14 @@
     if (/^(mon(day)?|tue(s(day)?)?|wed(nesday)?|thu(rs(day)?)?|fri(day)?|sat(urday)?|sun(day)?)\s*,?\s+(at\s+)?\d{1,2}\s*(:\s*\d{2}\s*(a\.?m\.?|p\.?m\.?)?|h\s+\d{2})$/.test(t)) return true; // "Sat 7:11 PM" headers — "saturday works for me" survives
     if (/^(yesterday|today|hier|aujourd['’]hui)\s*(at|à)?\s*\d{1,2}\s*[:h]\s*\d{2}/.test(t)) return true; // "Today at 7:11" / "aujourd’hui à 19 h 11"
     if (/^(yesterday|today|hier|aujourd['’]hui)$/.test(t)) return true; // bare relative-date header
-    if (/^to help identify/.test(t) || t.includes("meta may use technology")) return true; // Meta footer
+    // Meta's notices, EN and (v0.21.92) FR: Facebook prints them INSIDE the thread as plain
+    // blocks — "To help identify and reduce scams, Meta may use technology…" / "Afin d'aider à
+    // identifier et réduire les arnaques, Meta peut utiliser la technologie…", the empty chat's
+    // "Messages and calls are secured with end-to-end encryption." / "Les messages et les
+    // appels sont chiffrés de bout en bout.". Read as bubbles of OURS, two of them filled a
+    // two-reply cap on a French account before the buyer said a word (🩺 PC-uj2vq, Oct 25 2026).
+    if (/^(to help identify|afin d['’]aider [àa] identifier|pour (vous |t['’])?aider [àa] identifier)/.test(t) || /meta (may use|peut utiliser)/.test(t) || /r[ée]duire les arnaques/.test(t)) return true;
+    if (/secured with end-to-end encryption|chiffr[ée]e?s? de bout en bout/.test(t)) return true;
     // Facebook system / rating prompts — NOT real buyer messages (don't reply to these).
     if (/^you can now rate/.test(t)) return true; // "You can now rate each other"
     if (/^people (may|can) rate/.test(t)) return true; // "People may rate one another based on…"
@@ -1213,21 +1238,40 @@
   // buyer bubble "Salut\nYou: …" would read as a line of OURS to everything that
   // parses these transcripts (the memory line, the answered check).
   const convoLine = (m) => (m.role === "buyer" ? "Buyer: " : "You: ") + String(m.text || "").replace(/\s*\n\s*/g, " ");
-  // (v0.21.91) THE SELLER TEXTS THE CHAT HOLDS, for the per-chat cap. Our painted or
-  // right-hugging text bubbles, and echoes of what we sent. A bubble the read called
-  // "me" ONLY because its paint was unreadable while it hugs the LEFT of its own row is
-  // the buyer's by construction (ours hug the right) — the old count took every "You:"
-  // line of the transcript, so on a chat whose buyer bubbles paint-read as unknown the
-  // buyer's own second message filled the cap: clip, then silence. Geometry unknown
-  // (no row box) still counts, the safe side of the limit. Pure.
+  // (v0.21.91) THE SELLER TEXTS THE CHAT HOLDS, for the per-chat cap: our CONFIRMED text
+  // bubbles only — painted ours (blue / gradient, or an echo of what we sent) or hugging
+  // the right of their own row. (v0.21.92) An unpainted block with no geometry no longer
+  // counts either: Facebook's own notices and a buyer's bubble under a transparent wrapper
+  // are exactly that, and "the safe side of the limit" filled a two-reply cap with two such
+  // blocks before the buyer said a word — clip, then silence (🩺 PC-uj2vq, Oct 25 2026). The
+  // limit's real floors are this computer's delivered count and the Activity log's rows. Pure.
   function ownTextCount(convo) {
     let n = 0;
     for (const e of convo || []) {
       if (!e || e.role !== "me" || e.text === "[attachment]") continue;
-      if (e.paint !== true && e.hug === "left") continue;
-      n++;
+      if (e.paint === true || e.hug === "right") n++;
     }
     return n;
+  }
+  // (v0.21.92) ONE-TIME REPAIR of the per-chat counts an install persisted before .91:
+  // atConvoCap ratcheted `replyCounts` from the chat's "You:" LINE count, and on a French
+  // account Facebook's notices read as two texts of ours — 68 of 87 chats "capped" on a
+  // computer that had sent two texts in a day, each of them mute and off the buyer lanes
+  // for good. The count is rebuilt from this install's own delivered texts (replyLog rows of
+  // action "text"); the Activity log's rows raise it again at the chat's next visit, BEFORE
+  // any model call — nothing past a cap, and a buyer silenced by a phantom count is served
+  // again. Returns how many chats changed. Pure.
+  function repairReplyCounts(counts, logArr) {
+    const delivered = {};
+    for (const e of Array.isArray(logArr) ? logArr : []) {
+      if (e && e.action === "text" && e.threadId) delivered[e.threadId] = (delivered[e.threadId] || 0) + 1;
+    }
+    let repaired = 0;
+    for (const k of Object.keys(counts || {})) {
+      const real = delivered[k] || 0;
+      if ((Number(counts[k]) || 0) > real) { counts[k] = real; repaired++; }
+    }
+    return repaired;
   }
   // (v0.21.91) THE SIDEBAR IS THE WITNESS. Messenger's own row names the buyer's last
   // message ("Amel: 11pro", "Jimmy: 👍", "Mohand sent a photo."); when three reads of
@@ -5763,6 +5807,7 @@
         }
         if (pre.memory === "claimed") {
           cooldowns[id] = Date.now() + 2 * 60 * 1000; // the earlier claim delivers; look again soon (memo kept — replayed free if it never lands)
+          oweText(id, sidebarId, turn, "claimed elsewhere before typing", rescueHint); // (v0.21.92) the clip may be out already — the look-again must happen
         } else {
           lastHandled[id] = turn.dedupeKey;
           clearWaiting(id, sidebarId);
@@ -6568,8 +6613,11 @@
             " vidPending=" + Object.keys(videoPending).length +
             " sessionLocked=" + videoLocked.size +
             " cooldowns=" + Object.keys(cooldowns).length +
-            " | rescue: sidebarTurns=" + rescueStats.sidebar + " textOwed=" + Object.keys(textOwed).length + " settled=" + Object.keys(settledSnip).length // (v0.21.91)
+            " | rescue: sidebarTurns=" + rescueStats.sidebar + " textOwed=" + Object.keys(textOwed).length + " settled=" + Object.keys(settledSnip).length + // (v0.21.91)
+            (repairNote ? " | counts repaired=" + repairNote.n + "(" + ageM(repairNote.at) + ")" : "") // (v0.21.92)
           );
+          // (v0.21.92) what the last visits did — the current action alone hid 90 min of aborted visits
+          L.push("actions (last 24, oldest first): " + actionTrail.slice(-24).map((e) => safe(() => new Date(e.t).toISOString().slice(11, 16), "?") + " " + (e.c ? "[" + e.c + "] " : "") + e.a).join(" ⟶ "));
           L.push("sidebar: anchors=" + anchors.length + " overdueNow=" + overdue + " — rows (first 12):");
           anchors.slice(0, 12).forEach((a, i) => {
             const id = threadId(a);

@@ -17,7 +17,18 @@ all chrome.debugger/CDP work) + Supabase dashboard in docs/. Live branch:
   permissions ships OFF by default behind a cloud setting and goes to ONE machine first.
 - The operator wants zero manual steps in normal operation.
 
-## Known state (v0.21.90 LIVE on the Web Store, unlisted, by Oct 24 2026; v0.21.91 SUBMITTED Oct 24 ~18:50, Pending review, auto-publish = a clip never goes out without its text)
+## Known state (v0.21.91 LIVE on the fleet since Oct 24 2026 evening; v0.21.92 = Facebook's French notices no longer fill the cap, Oct 25 2026)
+- FACEBOOK'S FRENCH NOTICES FILLED THE CAP (.92, Oct 25 2026, owner: "same account, same issue";
+  🩺 PC-uj2vq on .91: calls=1 vs 7 video rows overnight, replyCapped=68/87 with texts24h=2, a row
+  whose "latest message" was "Afin d'aider à identifier et réduire les arnaques…"). The reader
+  knew only the EN Meta notice; the FR scam notice + the encryption line read as two bubbles of
+  OURS → a new chat was at the two-reply cap before the buyer spoke → `atConvoCap`: question
+  stamped, clip sent, nothing typed; .90 had persisted that count for 68 chats. Fixes: `isNoise`
+  / `SCREEN_RES` / `snippetSuggestsBuyerLast` know the FR/EN notices; `ownTextCount` counts
+  confirmed own bubbles only (painted / echo / right-hugging — no-geometry blocks never);
+  `repairReplyCounts` once per install at load (`replyCountsRepaired92`, 🩺 `counts repaired=`);
+  a pre-send "claimed" owes the text; 🩺 `actions (last 24…)` = the status trail (the current
+  action alone hid 90 min of visits). `store/smoke-mute.js` section 7. Cap value/mode untouched.
 - A CLIP, THEN SILENCE (.91, Oct 24 2026, owner: "some accounts are not sending messages but
   sending videos"; 🩺 PC-j2qrz: Jimmy "Jimmy: · 1h" replies=0 SUPP, Amel "Amel: 11pro · 20h"
   replies=1 SUPP, both vmark=sent). Four causes, one rule — the clip is the text's companion:
