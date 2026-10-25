@@ -17,7 +17,7 @@ all chrome.debugger/CDP work) + Supabase dashboard in docs/. Live branch:
   permissions ships OFF by default behind a cloud setting and goes to ONE machine first.
 - The operator wants zero manual steps in normal operation.
 
-## Known state (v0.21.91 LIVE on the fleet since Oct 24 2026 evening; v0.21.92 SUBMITTED Oct 25 07:39, Pending review, auto-publish = Facebook's French notices no longer fill the cap)
+## Known state (v0.21.92 PUBLISHED on the Web Store Oct 25 2026 09:09 = Facebook's French notices no longer fill the cap; store computers pick it up within ~2 h)
 - FACEBOOK'S FRENCH NOTICES FILLED THE CAP (.92, Oct 25 2026, owner: "same account, same issue";
   🩺 PC-uj2vq on .91: calls=1 vs 7 video rows overnight, replyCapped=68/87 with texts24h=2, a row
   whose "latest message" was "Afin d'aider à identifier et réduire les arnaques…"). The reader
