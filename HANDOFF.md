@@ -512,6 +512,21 @@ impossible (`typeAndSend` flattens them), so "human" = shorter, one idea per sen
 family line and one question, the "1 $?" reply 749 chars with no ad word, guard ok on both.
 Dashboard still signed out here; the paste is the owner's.
 
+**Fourteenth request — THE EXPLANATION WAITS FOR THE SECOND MESSAGE (Oct 25 2026)**
+(`teaching14.js` via `mod14.js` → `teaching-2026-10-25-v14.md`, THE version to paste): the owner's
+order on v13: the first message = the block / family line as the starting prices + the pack, with
+NO explanation of what the exact price depends on; the second message, when the price is asked
+again, starts by reminding the buyer that the starting prices were sent "just above" (never the
+word "message", banned for buyers), then "the exact price depends on your choice (capacity, used
+or brand new, other details)", then the promise in his words, "we help you, we make you the
+liquidation price and we find you the best option at the price you are looking for", negotiable,
+trade-in; the footer is where the first message says "no reservations by phone or online, first
+come first served", once, lightly; the end of each message must leave the buyer at ease enough to
+simply come in. Every second-message example now carries the reminder + the promise (bodies
+440-690 chars; the size rule says the second message may run to ~650), the A26 first message lost
+its "depends on" sentence, the toolbox's first line is the promise. Wording only, no simulation
+this pass (same structure as v13, which was simulated).
+
 ## AUTOLISTER — listing creation + delete-and-relist, PLANNED Oct 21 2026, ON HOLD since Oct 22 (nothing wired, nothing shipped)
 - **ON HOLD (Oct 22 2026).** The owner asked to build it and submit it to the Web Store; a safety check
   stopped that turn and it was not retried (it also stopped an Oct 12 draft of a Web Store extension
