@@ -546,6 +546,19 @@ again, say it in new words, never the same sentence)"; the playbook wording is u
 `node --check` + `store/smoke-memory.js` pass. Sim (`scenarios15.json`, `out15/`): the second
 message WITH the real memory note, and an EN first message at 18:30.
 
+**Sixteenth request — SOUND LIKE A PERSON (Oct 25 2026)** (`teaching16.js` via `mod16.js` →
+`teaching-2026-10-25-v16.md`, THE version to paste): the owner: "keep all same, is there a way you
+can seem less ai". Same facts, same checklist, same fixed parts (price line, block, footer, shop
+line); what changes is the SHAPE: a new section SOUND LIKE A PERSON, NOT A SCRIPT (rotate the order
+of the middle items from one buyer to the next, react to the buyer's own words in one short
+sentence first, openers that rotate and are often absent, the offers carried by a verb in one or
+two sentences instead of a comma list, the trade-in as a spoken line, uneven sentence lengths, one
+or two Québec texting markers, the time question and the close reworded every time, the second
+message reusing no sentence of the first); the FIRST/SECOND MESSAGE headers say "the usual order,
+rotate the middle"; every example rewritten so no two share a shape, all 21 still pass the
+checklist regex (monthly now also matches "par mois"). Sim (`scenarios16.json`, `out16/`): a FR
+first message and an EN second message under the real memory note ("Laval is far, is 450 final?").
+
 ## AUTOLISTER — listing creation + delete-and-relist, PLANNED Oct 21 2026, ON HOLD since Oct 22 (nothing wired, nothing shipped)
 - **ON HOLD (Oct 22 2026).** The owner asked to build it and submit it to the Web Store; a safety check
   stopped that turn and it was not retried (it also stopped an Oct 12 draft of a Web Store extension
