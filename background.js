@@ -1313,7 +1313,10 @@ function memoryLine(settings, transcript, rows, recentRows, threadId) {
   const ord = (k) => (k === 1 ? "1st" : k === 2 ? "2nd" : k === 3 ? "3rd" : k + "th");
   const parts = [];
   if (n > 0) parts.push("this will be your " + ord(n + 1) + " message to this buyer, so no greeting and no re-introduction");
-  if (facts.length) parts.push("you already told them " + facts.join(", ") + " (do not repeat any of it unless they ask again)");
+  // (v0.21.93) In owner-teaching mode the owner's sections decide what is said again (a two-message
+  // pack repeats the address, the hours and the offers on purpose): the note lists the facts and asks
+  // for new words, it no longer forbids them. The old wording stays for the playbook prompt.
+  if (facts.length) parts.push("you already told them " + facts.join(", ") + (settings && settings.ownerTeachingOnly !== false ? " (if the owner's instructions have you say any of it again, say it in new words, never the same sentence)" : " (do not repeat any of it unless they ask again)"));
   if (mineOpeners.length) parts.push("openers you already used in this chat, do not reuse them: " + q(mineOpeners));
   if (otherOpeners.length) parts.push("openers you just used with other buyers, vary from these too: " + q(otherOpeners));
   if (video) parts.push("a demo video was already sent to them: never offer, promise or mention sending one");

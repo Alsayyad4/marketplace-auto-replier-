@@ -527,6 +527,25 @@ simply come in. Every second-message example now carries the reminder + the prom
 its "depends on" sentence, the toolbox's first line is the promise. Wording only, no simulation
 this pass (same structure as v13, which was simulated).
 
+**Fifteenth request — EVERYTHING IN BOTH MESSAGES (Oct 25 2026)** (`teaching15.js` via `mod15.js` →
+`teaching-2026-10-25-v15.md`, THE version to paste): the owner: "in two messages you are not
+including everything… missing the address and hours or other information; after the first
+message the customer should want to come, after the second he is 100 % coming". ROOT CAUSE IN THE
+CODE: `memoryLine` (background.js ~1316) adds to every second message "you already told them the
+address, the hours, the trade-in line, the liquidation line, the warranty, a price, the metro, how
+to pay (do not repeat any of it unless they ask again)" — the v12-v14 sims never carried that note
+(build.js takes `memory` from the scenario), so the pack-in-both-messages design was never tested
+against it. Two fixes: (1) TEACHING (reaches the fleet now): a 12-item CHECKLIST that wins over the
+size rule, an explicit THE MEMORY NOTE override (obey it only for the greeting and the openers; a
+number already given becomes "the starting prices are just above"), the shop line in both messages
+in full, the first message must make them want to come, the second must leave them sure; every
+example now passes a checklist regex (monthly payments and the named discount audiences were
+missing in nine of them). (2) CODE (rides the NEXT store build, nothing submitted by this session):
+in owner-teaching mode the note now reads "(if the owner's instructions have you say any of it
+again, say it in new words, never the same sentence)"; the playbook wording is unchanged;
+`node --check` + `store/smoke-memory.js` pass. Sim (`scenarios15.json`, `out15/`): the second
+message WITH the real memory note, and an EN first message at 18:30.
+
 ## AUTOLISTER — listing creation + delete-and-relist, PLANNED Oct 21 2026, ON HOLD since Oct 22 (nothing wired, nothing shipped)
 - **ON HOLD (Oct 22 2026).** The owner asked to build it and submit it to the Web Store; a safety check
   stopped that turn and it was not retried (it also stopped an Oct 12 draft of a Web Store extension
