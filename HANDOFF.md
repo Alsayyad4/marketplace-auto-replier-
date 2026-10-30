@@ -559,6 +559,19 @@ rotate the middle"; every example rewritten so no two share a shape, all 21 stil
 checklist regex (monthly now also matches "par mois"). Sim (`scenarios16.json`, `out16/`): a FR
 first message and an EN second message under the real memory note ("Laval is far, is 450 final?").
 
+**Seventeenth request — LIQUIDATION WEEK + NEW iPHONE LIST (Oct 30 2026)** (`teaching17.js` via
+`mod17.js` → `teaching-2026-10-30-v17.md`, THE version to paste): the owner: every first message
+says it is liquidation week ("c'est la semaine de liquidation" / "it's liquidation week") and that we
+will bring the price down for them or help them with it ("on te baisse le prix", "we'll bring it
+down for you"); nothing else moved. Pack item 1 and 4, checklist items 1 and 4, FIRST MESSAGE items
+1 and 3, Business info, Closer goals, a toolbox line, and all nine first-message examples carry
+it. The owner's new iPhone list replaces the old one everywhere (constants + every literal
+mention): 11 series 180 / 220 / 280 (was 150 / 180 / 220), 14 Pro Max 530 (was 500), 15 Pro 580
+(was 550), 15 Pro Max 750 (was 700); XR/XS Max, 12, 13, 16, 17, 18 unchanged; his messy paste was
+normalised to the family-line format the bot copies verbatim. Checklist regex: 0 missing (the
+seller's first message is the seller pack, flagged by design), 0 old prices left. Wording only,
+no simulation (v16 structure).
+
 ## AUTOLISTER — listing creation + delete-and-relist, PLANNED Oct 21 2026, ON HOLD since Oct 22 (nothing wired, nothing shipped)
 - **ON HOLD (Oct 22 2026).** The owner asked to build it and submit it to the Web Store; a safety check
   stopped that turn and it was not retried (it also stopped an Oct 12 draft of a Web Store extension
