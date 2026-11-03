@@ -17,7 +17,27 @@ all chrome.debugger/CDP work) + Supabase dashboard in docs/. Live branch:
   permissions ships OFF by default behind a cloud setting and goes to ONE machine first.
 - The operator wants zero manual steps in normal operation.
 
-## Known state (v0.21.92 PUBLISHED on the Web Store Oct 25 2026 09:09 = Facebook's French notices no longer fill the cap; store computers pick it up within ~2 h)
+## Known state (v0.21.93 BUILT Nov 3 2026 = the API line + an outage never silences a buyer for good — submission state in HANDOFF "Open after v0.21.93"; v0.21.92 PUBLISHED on the Web Store Oct 25 2026 09:09)
+- THE API LINE (.93, Nov 3 2026, owner's two popup photos: "API key set ✓ · Replying yes ✓ ·
+  Last 24 h 0 / 500" on two computers while a dozen buyers waited up to 4 h; "api connection
+  failed"). The STATUS box had no line for the outcome of the Anthropic call ("last error" sits
+  below the slider), and content `oweOrGiveUp` stamped a buyer handled after three refused API
+  calls of ANY cause — an outage's buyers stayed silent after the API came back. Now: background
+  pure block `THE API LINE` (`apiFold`/`apiErrorHint`/`apiStatusLine`/`apiDiagLine`/
+  `apiReportDue`) + `apiNote` hook from `postClaude` (typeof-guarded: the Try-it slice stays
+  chrome-free) → popup row "Claude" (✓ answered at HH:MM / ✗ not answering for N min — what +
+  fix from Anthropic's error type), 🩺 `api:` line, hidden row kind `apierr` (streak start,
+  hourly, recovery) + one notification per hour; GET_REPLY_SIMPLE answers `api: true` on a
+  failed model call (an empty output does not). Content: `apiParkMessage` keeps the owed turn
+  with no try spent (`oweText(…, {noTry:true})`, an API-opened entry starts at 0) and parks the
+  chat 10 min; `freshLookAtStamp` drops, once per chat (`stampRepaired`), a stamp with no text
+  of ours behind it (no count, no clip pending, 0 confirmed own bubbles; fails closed) so the
+  outage's buyers get answered after the update. Dashboard: `apierr` hidden, `apiHealthLines` →
+  `#fleetApi` on the Activity tab (the refused computers + the fix). `store/smoke-api.js` (99),
+  16/16 mutants, headless-Edge boot of the store build with a stubbed Anthropic (19). From this
+  PC the account's key answers on claude-haiku-4-5 with the v17 teaching (prompt ~22.7k tokens):
+  the fleet's cause needs a 🩺 — HANDOFF "Open after v0.21.93". Never stamp a message handled
+  on an API refusal again; never let a status box hide the API outcome.
 - FACEBOOK'S FRENCH NOTICES FILLED THE CAP (.92, Oct 25 2026, owner: "same account, same issue";
   🩺 PC-uj2vq on .91: calls=1 vs 7 video rows overnight, replyCapped=68/87 with texts24h=2, a row
   whose "latest message" was "Afin d'aider à identifier et réduire les arnaques…"). The reader
