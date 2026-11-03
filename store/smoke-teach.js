@@ -503,7 +503,7 @@ const withWrote = (cfg) => {
     ok(!h.cached && Math.abs(h.cost - 3.0) < 1e-9 && hBig.cached && Math.abs(hBig.cost - 0.92) < 1e-9 && so.cached && Math.abs(so.cost - 2.25) < 1e-9, "the estimate knows each model's cache minimum: a 2,500-token sheet is full price on Haiku 4.5 and cached on Sonnet 4.6 (" + h.cost.toFixed(2) + " / " + hBig.cost.toFixed(2) + " / " + so.cost.toFixed(2) + " $ per 1,000)");
     ok(A.per1000("some-other-model", 2500, 200, 60) === null, "a model with no price on file gets no estimate");
   }
-  ok(/const HIDDEN_KINDS = \["claim", "teach", "gap", "usage"\];/.test(app) && count(app, "messagesOnly(client") >= 4, "the feed, its two counts and the fleet line all skip the computers' bookkeeping rows");
+  ok(/const HIDDEN_KINDS = \["claim", "teach", "gap", "usage", "apierr"\];/.test(app) && count(app, "messagesOnly(client") >= 4, "the feed, its two counts and the fleet line all skip the computers' bookkeeping rows");
   ok(/if \(better === String\(r\.bot_text \|\| ""\)\.trim\(\)\)/.test(app), "a 👎 saved with the bot's own words unchanged is refused (or kept as a rule when only the rule box was filled)");
 
   console.log(failed ? "\n" + failed + " check(s) FAILED" : "\nall checks passed");

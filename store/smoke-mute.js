@@ -179,7 +179,7 @@ console.log("\n— 5. wiring —");
   const iShip = h.indexOf("const shipReply = async (afterClip) => {");
   ok(iVerdict > 0 && iEngine > 0 && iVerdict < iShip && iShip < iEngine, "the reply's verdict is awaited BEFORE the clip engine runs (verdict → shipReply defined → videos-first)");
   const verdict = h.slice(iVerdict, iShip);
-  ok(/if \(!reply \|\| !reply\.ok\) \{[\s\S]{0,200}oweOrGiveUp\(id, sidebarId, turn, "claude error: " \+ \(reply && reply\.error\), rescueHint\);\s*\n\s*return;/.test(verdict), "a Claude error: nothing typed, no clip, the text is owed (three tries, then let go)");
+  ok(/if \(!reply \|\| !reply\.ok\) \{[\s\S]{0,400}oweOrGiveUp\(id, sidebarId, turn, "claude error: " \+ \(reply && reply\.error\), rescueHint\);\s*\n\s*return;/.test(verdict), "a Claude error: nothing typed, no clip, the text is owed (three tries, then let go; (v0.21.93) an API refusal is parked before that — smoke-api.js)");
   ok(/if \(reply\.human\) \{[\s\S]{0,300}return; \/\/ \(v0\.21\.91\) no clip either/.test(verdict), "[HUMAN] / a held reply: no clip either");
   ok(/else if \(reply\.held\) \{[\s\S]{0,200}oweText\(id, sidebarId, turn, reply\.reason, rescueHint\);/.test(verdict) && /else if \(reply\.memory === "claimed"\) \{[\s\S]{0,700}oweText\(id, sidebarId, turn, "claimed elsewhere", rescueHint\);/.test(verdict), "a budget hold or a claim elsewhere owes the text (with the row hint the revisit may need)");
   ok(/if \(reply\.reason === "empty reply" \|\| reply\.memory === "answered" \|\| reply\.memory === "echo" \|\| reply\.title \|\| reply\.screen\) \{/.test(verdict) && !/maybeSendVideo/.test(verdict), "a deliberate silence is marked handled, and no clip goes out in the verdict block");
@@ -308,7 +308,7 @@ console.log("\n— 7. Facebook's French notices and the phantom counts (Oct 25 2
   const n = R(counts, logArr);
   ok(n === 2 && JSON.stringify(counts) === JSON.stringify({ a: 1, b: 0, c: 1, d: 0 }), "repairReplyCounts: a count above this install's delivered texts is cut to them (clips and follow-ups are not texts), the rest untouched — " + JSON.stringify(counts));
   ok(R({}, null) === 0 && R({ a: 3 }, undefined) === 1, "no log = no delivered texts → the count falls to 0; nothing to repair = 0");
-  ok(/if \(!\(r && r\.replyCountsRepaired92\)\) \{\s*\n\s*const n = safe\(\(\) => repairReplyCounts\(replyCounts, r && r\.replyLog\), 0\);/.test(cs) && /replyCountsRepaired92: Date\.now\(\)/.test(cs) && /"replyLog", "replyCountsRepaired92"\]/.test(cs), "the repair runs once per install at load, from the install's own log, and is stamped");
+  ok(/if \(!\(r && r\.replyCountsRepaired92\)\) \{\s*\n\s*const n = safe\(\(\) => repairReplyCounts\(replyCounts, r && r\.replyLog\), 0\);/.test(cs) && /replyCountsRepaired92: Date\.now\(\)/.test(cs) && /"replyLog", "replyCountsRepaired92", "replyCountsRepairedN", "stampRepaired"\]/.test(cs), "the repair runs once per install at load, from the install's own log, and is stamped");
   // the trail and the pre-send claim
   ok(/actionTrail\.push\(\{ t: Date\.now\(\), a: patch\.lastAction\.slice\(0, 110\)/.test(cs) && /if \(actionTrail\.length > 40\) actionTrail\.shift\(\);/.test(cs) && /L\.push\("actions \(last 24, oldest first\): "/.test(cs), "🩺 carries the last 24 distinct actions with their time and chat");
   ok(/if \(pre\.memory === "claimed"\) \{[\s\S]{0,300}oweText\(id, sidebarId, turn, "claimed elsewhere before typing", rescueHint\);/.test(cs), "a claim seen right before typing (the clip may be out already) owes the text");

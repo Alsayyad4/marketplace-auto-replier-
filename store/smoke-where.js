@@ -108,7 +108,7 @@ ok(/function showTab\(name\)/.test(app) && /function applyHashTab\(\)/.test(app)
 ok(/loadConfig\(\)\.then\(applyHashTab, applyHashTab\);/.test(app), "the hash tab is applied once the row is read after the login");
 ok(/if \(name === "activity"\) loadActivity\(\);/.test(app), "#activity loads the log");
 ok(/history\.replaceState\(null, "", "#" \+ t\.dataset\.tab\);/.test(app), "a click writes the hash back");
-ok(/app\.js\?v=20261021/.test(html), "the dashboard cache-buster is bumped");
+ok(/app\.js\?v=20261103/.test(html), "the dashboard cache-buster is bumped");
 ok(/^0\.21\.(89|9[0-9])$/.test(manifest.version), "manifest v0.21.89 or later — " + manifest.version); // (v0.21.90) the release after carries this page unchanged
 ok(/"options\.html", "options\.js", "popup\.html", "popup\.js"/.test(ps1), "the store zip carries the four page files (nothing new to add)");
 

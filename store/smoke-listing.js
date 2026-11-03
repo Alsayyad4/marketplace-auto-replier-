@@ -246,7 +246,7 @@ console.log("\n— 5. the user turn —");
   ok(/kind: "good", buyer: truncTxt\(r\.buyer_text, 200\), reply: truncTxt\(r\.bot_text, 300\), item: itemBound\(r\.buyer_text, r\.bot_text, rowItem\)/.test(app) && /item: itemBound\(r\.buyer_text, better, rowItem\)/.test(app), "👍 and a correction on the Activity tab carry the listing when the question is about the item");
   ok(/\(a\.item \|\| ""\) === \(item\.item \|\| ""\)/.test(app), "two lessons that differ only by listing are two lessons");
   ok(/select\("created_at, buyer_text, bot_text, thread_name"\)/.test(app), "the gap list reads the listing from the row");
-  ok(/id="tryListing"/.test(html) && /threadName: tryName/.test(app) && /const CORE_VER = "20261019"/.test(app), "Try it has a listing box, passes it, and fetches the new core");
+  ok(/id="tryListing"/.test(html) && /threadName: tryName/.test(app) && /const CORE_VER = "20261103"/.test(app), "Try it has a listing box, passes it, and fetches the new core");
   ok(/which listing the buyer is writing from \(the post's title, with the price taken out\)/.test(app), "the teaching preview tells the owner");
   ok(/about: \$\{truncTxt\(c\.item, 40\)\}/.test(app) && /\(about the listing "\$\{one\(c\.item, 80\)\}"\)/.test(bg), "the lesson list and the sheet show the listing a lesson is tied to");
 

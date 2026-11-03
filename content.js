@@ -203,6 +203,7 @@
   // survives convo-switching, page reloads and content-script restarts — once a chat
   // hits the cap it stays capped even when the buyer keeps asking questions.
   let replyCounts = {};
+  let stampRepaired = {}; // (v0.21.93) threadId -> when it got its one fresh look at a stamp with no text of ours behind it (persisted)
   let tick = {}; // live status shown in the popup
 
   // Texts WE recently sent — a hard guard so the bot never replies to its own
@@ -220,13 +221,14 @@
   let sidebarVideoSeen = {};
   // Hydrate persisted state at boot.
   safe(() =>
-    chrome.storage.local.get(["recentSent", "cooldowns", "lastHandled", "replyCounts", "waitingSince", "videoPending", "videoCatchUp", "attachMiss", "sidebarVideoSeen", "replyLog", "replyCountsRepaired92"], (r) => {
+    chrome.storage.local.get(["recentSent", "cooldowns", "lastHandled", "replyCounts", "waitingSince", "videoPending", "videoCatchUp", "attachMiss", "sidebarVideoSeen", "replyLog", "replyCountsRepaired92", "replyCountsRepairedN", "stampRepaired"], (r) => { // (v0.21.93) + the repair's count (never fetched before: the 🩺 line lost it after the first load) and stampRepaired
       if (r && Array.isArray(r.recentSent)) recentSent = r.recentSent;
       if (r && r.sidebarVideoSeen && typeof r.sidebarVideoSeen === "object") sidebarVideoSeen = r.sidebarVideoSeen;
       if (r && r.attachMiss && typeof r.attachMiss === "object") attachMiss = r.attachMiss;
       if (r && r.cooldowns && typeof r.cooldowns === "object") cooldowns = r.cooldowns;
       if (r && r.lastHandled && typeof r.lastHandled === "object") lastHandled = r.lastHandled;
       if (r && r.replyCounts && typeof r.replyCounts === "object") replyCounts = r.replyCounts;
+      if (r && r.stampRepaired && typeof r.stampRepaired === "object") stampRepaired = r.stampRepaired; // (v0.21.93)
       // (v0.21.92) once per install: the phantom counts of the builds before .91 (see repairReplyCounts)
       if (!(r && r.replyCountsRepaired92)) {
         const n = safe(() => repairReplyCounts(replyCounts, r && r.replyLog), 0);
@@ -392,7 +394,7 @@
       const pk = Object.keys(videoPending);
       if (pk.length > 2000) for (const k of pk.slice(2000)) delete videoPending[k];
     }
-    safe(() => chrome.storage.local.set({ cooldowns, lastHandled, replyCounts, waitingSince, videoPending, videoCatchUp, sidebarVideoSeen }));
+    safe(() => chrome.storage.local.set({ cooldowns, lastHandled, replyCounts, waitingSince, videoPending, videoCatchUp, sidebarVideoSeen, stampRepaired })); // (v0.21.93) + stampRepaired
   }
   function clearVideoPending(id) {
     if (id && videoPending[id] != null) {
@@ -411,12 +413,12 @@
   // whole turn rides along: the pane may not show the message on the revisit (our clip is
   // the last bubble then, the row reads "You sent a video."), so the revisit answers the
   // turn remembered here. Returns the entry (tries counts the failed visits of one message).
-  function oweText(id, sid, turn, why, hint) {
+  function oweText(id, sid, turn, why, hint, opts) {
     if (!id || !turn || !turn.dedupeKey) return null;
     const k = sid || id;
     const o = textOwed[k];
-    if (o && o.key === turn.dedupeKey) { o.tries = (o.tries || 1) + 1; o.why = String(why || ""); return o; }
-    textOwed[k] = { at: Date.now(), key: turn.dedupeKey, id, why: String(why || ""), turn, hint: hint || null, tries: 1 };
+    if (o && o.key === turn.dedupeKey) { if (!(opts && opts.noTry)) o.tries = (Number(o.tries) || 0) + 1; o.why = String(why || ""); return o; } // (v0.21.93) noTry: a refused API call spends no try
+    textOwed[k] = { at: Date.now(), key: turn.dedupeKey, id, why: String(why || ""), turn, hint: hint || null, tries: opts && opts.noTry ? 0 : 1 }; // (v0.21.93) an entry an API refusal opens starts at 0: three ORDINARY failures still let it go
     return textOwed[k];
   }
   // (v0.21.91) …and after three failed visits the message is let go (marked handled): a
@@ -430,6 +432,41 @@
     delete textOwed[sid || id]; delete textOwed[id];
     persistDedup();
     setStatus({ lastAction: "gave up on this message after 3 tries (" + String(why || "") + ")", currentThread: undefined });
+    return true;
+  }
+  // (v0.21.93) THE API IS DOWN, THE BUYER IS NOT GONE. A call Anthropic refused or never
+  // answered (a dead key, no credits, a blocked network) says nothing about the message:
+  // on Nov 3 2026 every computer had stamped its waiting buyers "handled" after three such
+  // tries, so nobody was answered once the API came back. Now the message is kept (owed,
+  // no try spent, its 45-min life restarted), the chat waits API_PARK_MS instead of 90 s,
+  // and the owed turn goes out at the first call that answers. Nothing typed, no clip.
+  const API_PARK_MS = 10 * 60 * 1000;
+  function apiParkMessage(id, sid, turn, err, hint) {
+    const o = oweText(id, sid, turn, "api: " + String(err || "").slice(0, 80), hint, { noTry: true });
+    if (o) o.at = Date.now();
+    const until = Date.now() + API_PARK_MS;
+    cooldowns[id] = until;
+    if (sid && sid !== id) cooldowns[sid] = until;
+    persistDedup();
+    setStatus({ lastAction: "Claude's API did not answer (" + String(err || "").slice(0, 70) + ") — message kept, next try in " + Math.round(API_PARK_MS / 60000) + " min", currentThread: undefined });
+    return o;
+  }
+  // (v0.21.93) ONE FRESH LOOK PER CHAT at a stamp with nothing behind it. The .92 builds
+  // stamped a buyer message "handled" after three refused API calls, so the buyers of an
+  // outage stayed unanswered for good once the API answered again. A row that still reads
+  // buyer-last while the chat holds no text of ours (this computer's count, the chat's own
+  // confirmed bubbles, no clip pending) is asked once more; the memory check, the screen
+  // wall and the model's own [SKIP] catch a deliberate silence again, so a notice or a
+  // message answered elsewhere costs at most one look. Persisted per chat: never twice.
+  function freshLookAtStamp(id, sid, turn, name) {
+    if (!id || !turn || stampRepaired[id]) return false;
+    if ((replyCounts[id] || 0) > 0 || (sid && (replyCounts[sid] || 0) > 0)) return false;
+    if (videoPending[id] != null || (sid && videoPending[sid] != null)) return false;
+    if (safe(() => ownTextsNow(turn), 1) !== 0) return false;
+    stampRepaired[id] = Date.now();
+    delete lastHandled[id];
+    persistDedup();
+    setStatus({ lastAction: "this message was stamped handled, but the chat holds no text of ours — asking once more", currentThread: name });
     return true;
   }
   // (v0.21.91) THE CLIP IS THE TEXT'S COMPANION on the hook-less passes too: a visit that
@@ -5618,7 +5655,7 @@
     // by older builds as the plain buyer text. The composite key lets a buyer who
     // REPEATS the same words later ("ok", "?") get answered again — the plain-text
     // key skipped them forever.
-    if (lastHandled[id] === turn.dedupeKey || lastHandled[id] === turn.buyerMessage || (turn.legacyKey && lastHandled[id] === turn.legacyKey)) {
+    if ((lastHandled[id] === turn.dedupeKey || lastHandled[id] === turn.buyerMessage || (turn.legacyKey && lastHandled[id] === turn.legacyKey)) && !freshLookAtStamp(id, sidebarId, turn, name)) { // (v0.21.93) …unless the stamp has no text of ours behind it (one fresh look per chat)
       // (v0.21.73) a key written before the title block left the read: same message,
       // already answered. Re-stamp it in today's form so the match is direct from now on.
       if (lastHandled[id] !== turn.dedupeKey && lastHandled[id] !== turn.buyerMessage) { lastHandled[id] = turn.dedupeKey; persistDedup(); }
@@ -5706,6 +5743,7 @@
     const reply = await replyPromise;
     if (!reply || !reply.ok) {
       setStatus({ lastError: "Claude error: " + (reply && reply.error) });
+      if (reply && reply.api) { apiParkMessage(id, sidebarId, turn, reply.error, rescueHint); return; } // (v0.21.93) the API itself failed: kept, no try spent
       oweOrGiveUp(id, sidebarId, turn, "claude error: " + (reply && reply.error), rescueHint);
       return; // nothing typed, no clip — both go together on the retry
     }

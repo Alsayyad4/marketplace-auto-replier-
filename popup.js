@@ -31,6 +31,9 @@
       renderStatePill(s.enabled);
       $("apiKey").textContent = s.apiKeySet ? "set ✓" : "NOT set";
       $("apiKey").className = s.apiKeySet ? "ok" : "bad";
+      // (v0.21.93) the last Anthropic call: answered, or why not — the line the Nov 3 2026 photos were missing
+      const ap = $("api");
+      if (ap) { const a = s.apiLine || { text: "—", cls: "muted" }; ap.textContent = a.text; ap.className = a.cls; }
       // (v0.21.86) the message ledger: what went out in the last 60 min / 24 h (sliding
       // windows, every computer counts its own account) against the cap in force —
       // the warm-up ramp included, now that it is enforced. 0 = unlimited.

@@ -932,6 +932,110 @@ function aiUsageNote(settings, u) {
 function aiTtlRefused() {
   try { chrome.storage.local.set({ cacheTtlRefusedAt: Date.now() }, () => void chrome.runtime.lastError); } catch (err) { /* ignore */ }
 }
+
+/* ===== (v0.21.93) THE API LINE (pure) =====
+ * Nov 3 2026: two popups read "API key set ✓ · Replying yes ✓" while no computer had
+ * delivered a message in 24 h and a dozen buyers waited — whether the Anthropic call
+ * itself was answered was shown nowhere above the fold ("last error" sat below the
+ * slider, and "set ✓" only says a key is present). One record of the LAST CALL — answered,
+ * or the exact refusal, since when, how many — feeds the popup's "Claude" row, the 🩺
+ * `api:` line, one hidden Activity row (kind "apierr") when a streak starts, once an hour
+ * while it lasts and once when it ends (the dashboard's fleet line reads them), and one
+ * notification per hour on the computer. Pure: no chrome.*; store/smoke-api.js. */
+const API_REPORT_MS = 60 * 60 * 1000; // one row + one notification per hour while the API refuses
+// Fold one call's outcome into the record. A streak keeps its `since` and counts its calls.
+function apiFold(prev, ok, err, model, now) {
+  now = typeof now === "number" ? now : Date.now();
+  const p = prev && typeof prev === "object" ? prev : null;
+  if (ok) return { ok: true, at: now, model: String(model || ""), error: "", since: 0, n: 0, okAt: now };
+  const streak = !!(p && p.ok === false);
+  return {
+    ok: false,
+    at: now,
+    model: String(model || ""),
+    error: String(err || "no answer").replace(/\s+/g, " ").trim().slice(0, 240),
+    since: streak && p.since ? p.since : now,
+    n: (streak ? Number(p.n) || 0 : 0) + 1,
+    okAt: p && p.okAt ? p.okAt : 0, // the last time it did answer
+  };
+}
+// What the refusal means and what to do about it, from Anthropic's own words.
+function apiErrorHint(err) {
+  const e = String(err || "");
+  const st = (e.match(/^Anthropic (\d{3})/) || [])[1] || "";
+  if (/fetch failed|failed to fetch|networkerror|network error|err_[a-z_]+|load failed/i.test(e))
+    return { kind: "network", what: "api.anthropic.com did not answer at all (the request never got a reply).", fix: "This computer's internet, VPN, proxy or firewall is not letting it reach Anthropic — Messenger and the Activity log still work, so only that address is blocked: check the connection on this computer." };
+  if (st === "401" || /authentication_error|invalid x-api-key|invalid api key/i.test(e))
+    return { kind: "auth", what: "Anthropic refuses the API key (invalid or revoked).", fix: "Paste a working key in the dashboard's API key box (from console.anthropic.com → API keys): every computer takes it within a minute, nothing to do on the computers." };
+  if (st === "402" || /billing_error|credit balance|purchase credits|plans & billing/i.test(e))
+    return { kind: "billing", what: "The Anthropic account has no credits left — every reply is refused.", fix: "Add credits at console.anthropic.com → Plans & Billing. Nothing to change in SubSell: replies resume by themselves within minutes." };
+  if (st === "403" || /permission_error/i.test(e))
+    return { kind: "forbidden", what: "Anthropic refuses this request (403).", fix: "The key is not allowed to do this, or Anthropic refuses this computer's network or region. Try the same key in the dashboard's Try it box: if it works there, the problem is this computer's connection." };
+  if (st === "404" || /not_found_error/i.test(e))
+    return { kind: "model", what: "Anthropic does not accept the model name (" + ((e.match(/model:\s*([\w.-]+)/) || [])[1] || "see the error") + ").", fix: "Pick a model from the list in the dashboard; the fleet takes it within a minute." };
+  if (st === "429" || /rate_limit_error/i.test(e))
+    return { kind: "limit", what: "Anthropic's rate limit for this key is reached.", fix: "Nothing to do: the bot waits and tries again by itself. If it stays like this for hours, raise the limit at console.anthropic.com → Limits." };
+  if (st === "529" || /overloaded_error|api_error/i.test(e) || /^5\d\d$/.test(st))
+    return { kind: "anthropic", what: "Anthropic is overloaded or down right now.", fix: "Nothing to do: the bot tries again by itself (status.claude.com shows their incidents)." };
+  if (st === "400" || /invalid_request_error/i.test(e))
+    return { kind: "request", what: "Anthropic refused the request itself: " + e.replace(/^Anthropic \d{3}:\s*/, "").slice(0, 120), fix: "A setting this build sends is not accepted (model, max tokens, cache marker) — send the diagnostic from this computer." };
+  return { kind: "unknown", what: "Claude did not answer: " + e.slice(0, 120), fix: "Send the diagnostic (popup → Diagnostic) so the exact answer can be read." };
+}
+function apiClock(t) { try { return new Date(t).toLocaleTimeString([], { hour: "2-digit", minute: "2-digit" }); } catch (e) { return "?"; } }
+// The popup's "Claude" row: {text, cls}
+function apiStatusLine(api, now) {
+  now = typeof now === "number" ? now : Date.now();
+  if (!api || typeof api !== "object" || !api.at) return { text: "no call yet since this Chrome started", cls: "muted" };
+  if (api.ok) return { text: "✓ answered at " + apiClock(api.at) + (api.model ? " (" + api.model + ")" : ""), cls: "ok" };
+  const h = apiErrorHint(api.error);
+  const mins = Math.max(0, Math.round((now - (api.since || api.at)) / 60000));
+  const dur = mins >= 120 ? Math.round(mins / 60) + " h" : mins + " min";
+  const n = Number(api.n) || 1;
+  return { text: "✗ not answering for " + dur + " (" + n + " call" + (n === 1 ? "" : "s") + " refused since " + apiClock(api.since || api.at) + ") — " + h.what + " " + h.fix, cls: "bad" };
+}
+// The 🩺 line and the hidden Activity row's text — one source, greppable ("api ok" / "api FAIL")
+function apiDiagLine(api, now) {
+  now = typeof now === "number" ? now : Date.now();
+  const age = (t) => (t ? Math.max(0, Math.round((now - t) / 60000)) + "m" : "-");
+  if (!api || typeof api !== "object" || !api.at) return "api: no call yet";
+  if (api.ok) return "api: ok " + age(api.at) + (api.model ? " " + api.model : "");
+  return "api: FAIL since " + age(api.since || api.at) + " n=" + (Number(api.n) || 1) + " last=" + age(api.at) + " ok=" + age(api.okAt) + (api.model ? " " + api.model : "") + " — " + apiErrorHint(api.error).kind + ": " + String(api.error || "").slice(0, 160);
+}
+// When to tell the world: the first refusal of a streak, then once an hour while it lasts,
+// and once when it answers again after a streak. Never for a computer that just works.
+function apiReportDue(prev, next, lastReportAt, now) {
+  now = typeof now === "number" ? now : Date.now();
+  if (!next || typeof next !== "object") return false;
+  const wasFailing = !!(prev && prev.ok === false);
+  if (!next.ok) return !wasFailing || !(lastReportAt > 0) || now - lastReportAt >= API_REPORT_MS;
+  return wasFailing; // recovered
+}
+/* ===== end api line (pure) ===== */
+let apiLast = null; // the worker's copy of the record (storage holds it across restarts)
+try { chrome.storage.local.get(["apiLast"], (x) => { if (!chrome.runtime.lastError && x && x.apiLast && typeof x.apiLast === "object" && !(apiLast && apiLast.at > x.apiLast.at)) apiLast = x.apiLast; }); } catch (e) { /* no storage yet */ }
+// The hook postClaude calls (typeof-guarded there: the dashboard's Try it runs that slice
+// without chrome.*). Read-fold-write; the reply path never waits for it.
+function apiNote(ok, err, model) {
+  try {
+    chrome.storage.local.get(["apiLast", "apiReportAt"], (x) => {
+      if (chrome.runtime.lastError) return;
+      const now = Date.now();
+      const prev = x && x.apiLast && typeof x.apiLast === "object" ? x.apiLast : apiLast;
+      const next = apiFold(prev, ok, err, model, now);
+      apiLast = next;
+      const put = { apiLast: next };
+      if (apiReportDue(prev, next, Number(x && x.apiReportAt) || 0, now)) {
+        put.apiReportAt = now;
+        try { mirrorToCloud({ action: "apierr", thread: null, threadId: null, buyer: null, reply: apiDiagLine(next, now) }); } catch (e) { /* the row is a courtesy */ }
+        if (!next.ok) {
+          const h = apiErrorHint(next.error);
+          try { chrome.notifications.create({ type: "basic", iconUrl: "icon128.png", title: "SubSell — Claude is not answering on this computer", message: (h.what + " " + h.fix).slice(0, 500), priority: 2 }); } catch (e) { /* no notifications */ }
+        }
+      }
+      chrome.storage.local.set(put, () => void chrome.runtime.lastError);
+    });
+  } catch (err2) { /* never break a reply */ }
+}
 try {
   chrome.storage.local.get(["cacheTtlRefusedAt"], (x) => {
     if (chrome.runtime.lastError) return;
@@ -3222,9 +3326,14 @@ async function postClaude(settings, body, errLen) {
       resp = await send();
       t = resp.ok ? null : await resp.text();
     }
-    if (t !== null) return { error: `Anthropic ${resp.status}: ${t.slice(0, errLen)}` };
+    if (t !== null) {
+      const err = `Anthropic ${resp.status}: ${t.slice(0, errLen)}`;
+      if (typeof apiNote === "function") apiNote(false, err, body.model); // (v0.21.93) the API line (background only; the dashboard's "Try it" has none)
+      return { error: err };
+    }
   }
   const data = await resp.json();
+  if (typeof apiNote === "function") apiNote(true, "", body.model); // (v0.21.93) it answered
   if (typeof aiUsageNote === "function") aiUsageNote(settings, data.usage); // the meter (background only; the dashboard's "Try it" has none)
   const text = (data.content || [])
     .filter((b) => b.type === "text")
@@ -3272,7 +3381,9 @@ async function callClaude(settings, buyerMessage, extraContext, memory, retry, t
   try {
     return await postClaude(settings, body, 300);
   } catch (e) {
-    return { error: "Fetch failed: " + e.message };
+    const err = "Fetch failed: " + e.message;
+    if (typeof apiNote === "function") apiNote(false, err, body.model); // (v0.21.93) the API line: the request never got an answer
+    return { error: err };
   }
 }
 
@@ -3327,7 +3438,9 @@ async function callClaudeFollowup(settings, context, threadName, memory) {
   try {
     return await postClaude(settings, body, 200);
   } catch (e) {
-    return { error: "Fetch failed: " + e.message };
+    const err = "Fetch failed: " + e.message;
+    if (typeof apiNote === "function") apiNote(false, err, body.model); // (v0.21.93) the API line: the request never got an answer
+    return { error: err };
   }
 }
 
@@ -5139,6 +5252,7 @@ async function buildDiagnostic() {
         "videoClips", // (v0.21.72) the per-chat clip ledger
         "teachSeen", // (v0.21.73) the teaching fingerprint this computer last reported
         "aiUsage", "cacheTtlRefusedAt", // (v0.21.74) the meter, and whether the API refused the 1-hour cache marker
+        "apiLast", // (v0.21.93) the last Anthropic call
       ],
       (x) => r(x || {})
     )
@@ -5179,6 +5293,7 @@ async function buildDiagnostic() {
       : "-") +
     " sync=" + (hadSync ? "Y" : "n")
   );
+  L.push(apiDiagLine(st.apiLast || apiLast, now)); // (v0.21.93) did Claude answer the last call — and if not, what it said
   L.push(
     "settings: on=" + (settings.enabled ? "Y" : "OFF") + " api=" + (settings.apiKey ? "set" : "NOT-SET") +
     " model=" + settings.model + " caps=" + settings.hourlyCap + "/h " + settings.dailyCap + "/d" +
@@ -5573,6 +5688,7 @@ chrome.runtime.onMessage.addListener((msg, _sender, sendResponse) => {
             cloudHoldLine: authHoldLine(cloudHold),
             enabled: settings.enabled,
             apiKeySet: !!settings.apiKey,
+            api: apiLast, apiLine: apiStatusLine(apiLast, Date.now()), // (v0.21.93) the last Anthropic call: answered, or why not
             budget, // (v0.21.86) {ok, reason, hour, day, hourCap, dayCap, fullDayCap, kinds, countVideos, warming, warmDay, warmDays, warmDone, breakUntil}
             hourCount: budget.hour, // the older names, same numbers (a popup of another build)
             dayCount: budget.day,
@@ -5701,7 +5817,7 @@ chrome.runtime.onMessage.addListener((msg, _sender, sendResponse) => {
           if (parsed.error) {
             claudeFailedAt = Date.now();
             if (claimed) memUnclaim(msg.threadId, msg.threadName, msg.buyerMessage, machineId);
-            sendResponse({ ok: false, error: parsed.error });
+            sendResponse({ ok: false, error: parsed.error, api: true }); // (v0.21.93) the API itself failed (key, credits, network): the content keeps the message, no try spent
             break;
           }
           claudeFailedAt = 0;

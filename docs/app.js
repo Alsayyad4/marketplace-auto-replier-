@@ -1158,6 +1158,7 @@
         .gte("created_at", since).order("created_at", { ascending: false }).limit(300);
       renderFleet(fleetStatus(t.data || [], s.error ? [] : s.data || [], cur, Date.now(), Date.parse(row.data.updated_at || "") || 0), cur);
       loadStuck(); // (v0.21.80) the computers whose self-update cannot run
+      loadApiHealth(); // (v0.21.93) is Claude answering on every computer?
     } catch (e) { /* a status line must never break the page */ }
   }
   /* (v0.21.80) STUCK COMPUTERS. A computer whose updater cannot find its own folder, or
@@ -1165,6 +1166,51 @@
    * (kind video-status, since .37) — and nobody read them: on Oct 8 2026 twelve computers
    * had been saying so for days while the owner believed the fleet updated itself. Named
    * here, each with its one-time cure. */
+  /* (v0.21.93) IS CLAUDE ANSWERING? Each computer writes one hidden row (kind "apierr") when
+   * an Anthropic call is first refused, one more per hour while it keeps failing, and one
+   * when it answers again — "api FAIL since 12m n=3 … — auth: Anthropic 401: …" / "api ok …"
+   * (background.js apiDiagLine). The newest row per computer in the last 24 h says which
+   * computers are refused right now and why; the first line here is what to do about it.
+   * Nov 3 2026: two popups read "API key set ✓" while no computer had answered in 24 h. */
+  const API_FIX = {
+    auth: "Anthropic refuses the API key (invalid or revoked). Paste a working key in the API key box of this page (console.anthropic.com → API keys); every computer takes it within a minute.",
+    billing: "The Anthropic account has no credits left. Add credits at console.anthropic.com → Plans & Billing; replies resume by themselves within minutes, nothing to change here.",
+    network: "Those computers cannot reach api.anthropic.com at all (their internet, VPN, proxy or firewall) while Messenger and this log still work — check the connection on those computers.",
+    forbidden: "Anthropic refuses the request (403): the key is not allowed, or those computers' network or region is refused. Try the key in the Try it box: if it works here, the problem is on the computers.",
+    model: "Anthropic does not accept the model name saved here — pick one from the Model list.",
+    limit: "Anthropic's rate limit for the key is reached; the bots wait and retry by themselves (raise it at console.anthropic.com → Limits if it lasts).",
+    anthropic: "Anthropic is overloaded or down; the bots retry by themselves (status.claude.com).",
+    request: "Anthropic refused the request itself (a setting the build sends) — send a computer's diagnostic.",
+    unknown: "Claude is not answering — send a computer's diagnostic (popup → Diagnostic).",
+  };
+  // Pure: the newest apierr row per computer (rows newest first) → the lines to show, [] when every computer answers.
+  function apiHealthLines(rows, now) {
+    const byKey = {};
+    for (const row of rows || []) { const k = machineKey(row.machine); if (!k || byKey[k]) continue; byKey[k] = row; }
+    const failing = Object.values(byKey).filter((r) => /^api FAIL/.test(String(r.bot_text || "")) && now - (Date.parse(r.created_at) || 0) < 3 * 3600 * 1000);
+    if (!failing.length) return [];
+    const kinds = {};
+    for (const r of failing) { const k = (String(r.bot_text).match(/ — ([a-z]+): /) || [])[1] || "unknown"; kinds[k] = (kinds[k] || 0) + 1; }
+    const top = Object.keys(kinds).sort((a, b) => kinds[b] - kinds[a])[0];
+    const since = Math.min.apply(null, failing.map((r) => (Date.parse(r.created_at) || now) - (Number((String(r.bot_text).match(/since (\d+)m/) || [])[1]) || 0) * 60000));
+    const lines = ["⚠ Claude is NOT answering on " + failing.length + " computer(s) — " + (API_FIX[top] || API_FIX.unknown) + " (refused since about " + new Date(since).toLocaleString() + ")"];
+    for (const r of failing) lines.push("• " + machineShow(r.machine) + ": " + String(r.bot_text).replace(/^api FAIL /, "").slice(0, 200) + " (reported " + new Date(r.created_at).toLocaleString() + ")");
+    return lines;
+  }
+  async function loadApiHealth() {
+    const el = $("fleetApi");
+    if (!el || !client) return;
+    try {
+      const since = new Date(Date.now() - 24 * 3600 * 1000).toISOString();
+      const r = await client.from("subsell_messages").select("created_at, machine, bot_text")
+        .eq("kind", "apierr").gte("created_at", since).order("created_at", { ascending: false }).limit(300);
+      if (r.error) return;
+      const lines = apiHealthLines(r.data || [], Date.now());
+      el.style.whiteSpace = "pre-line";
+      el.className = lines.length ? "err" : "hint";
+      el.textContent = lines.join("\n");
+    } catch (e) { /* never break the page */ }
+  }
   async function loadStuck() {
     const el = $("fleetStuck");
     if (!el || !client) return;
@@ -1204,7 +1250,7 @@
    * 3. THE BILL. What the computers actually spent (hidden rows, kind "usage"),
    *    and what 1,000 replies cost on each model for the teaching saved now. */
   // Rows the computers write for bookkeeping — never messages, never in the feed or its counts.
-  const HIDDEN_KINDS = ["claim", "teach", "gap", "usage"];
+  const HIDDEN_KINDS = ["claim", "teach", "gap", "usage", "apierr"]; // (v0.21.93) apierr = a computer's Anthropic calls refused / answering again
   const messagesOnly = (q) => HIDDEN_KINDS.reduce((x, k) => x.neq("kind", k), q);
   // Same normalisation as the bots' lessonNorm: a question counts as taught when a lesson was saved on these words.
   const gapKey = (t) => String(t == null ? "" : t).toLowerCase().normalize("NFD").replace(/\p{M}+/gu, "").replace(/[^\p{L}\p{N}$]+/gu, " ").trim();
@@ -1301,7 +1347,7 @@
   // same site). The two markers are comments in that file; store/smoke-teach.js fails if they move.
   const CORE_BEGIN = "/* ===================== (v0.21.73) THE OWNER IS THE ONLY TEACHER";
   const CORE_END = "/* ---------------- video fetch ---------------- */";
-  const CORE_VER = "20261019"; // (v0.21.88) the listing line + the owner's entry for the item
+  const CORE_VER = "20261103"; // (v0.21.93) the API line; (v0.21.88) the listing line + the owner's entry for the item
   let teachCore = null, teachCoreErr = "";
   async function loadTeachCore() {
     if (teachCore) return teachCore;
