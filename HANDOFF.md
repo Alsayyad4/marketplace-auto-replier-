@@ -573,6 +573,26 @@ normalised to the family-line format the bot copies verbatim. Checklist regex: 0
 seller's first message is the seller pack, flagged by design), 0 old prices left. Wording only,
 no simulation (v16 structure).
 
+**Eighteenth request — THE MENU, THE NEW SAMSUNG LIST, THE iPAD BLOCK (Nov 5 2026)**
+(`teaching18.js` via `mod18.js` → `teaching-2026-11-05-v18.md`, THE version to paste): the owner:
+(1) say what the price depends on as grades + capacities, "refurbished / used / brand new" and
+"128 / 256 / 512 GB", in the best places, without scaring (no "bad phones at the stated price"),
+never promising an exact grade, battery or capacity → THE MENU: said as a choice the buyer makes
+at the counter ("on a les trois, remis à neuf, usagé ou neuf, en 128, 256 ou 512 Go, pis le prix
+suit ce que tu choisis"), in the second message only (v14 rule kept), the reassurance lines, the
+Q→A, the price-part bullet, the checklist item 3, Closer goals; the word ban on "condition / état /
+grade" is KEPT (his Oct 21 rule, same reason), the grades are named instead. (2) Samsung: his NEW
+list replaces the block (S24 / S25 FE / S25 Plus line, Z Flip/Fold from 350, S22-S25 Ultra line;
+header "Liquidation Samsung :"); his last line "pas de réservation… certaines conditions" is NOT
+in the block because the footer already closes every message with it; the asked model (S25 /
+S26 Ultra…) is named as there and in liquidation week in one sentence BEFORE the list. (3) iPad
+and tablets are their own block ("Tablettes et iPad :" Tablette Neuf 75$ · Tablette Samsung
+60-150 · iPad from 80 · iPad air / pro 80-160) and brand-new sealed iPads are a fact to say. Two
+new examples (S25 Ultra FR two messages, iPad EN two messages). Checklist regex: 25 messages,
+0 missing, 0 old menu wordings, 0 banned words. Sim (`scenarios18.json`, `out18/`): S25 Ultra
+first message FR, a "580 c'est pour un neuf ou usagé? la batterie? je veux pas un scrap" second
+message under the real memory note, an iPad "sealed? price?" first message EN.
+
 ## AUTOLISTER — listing creation + delete-and-relist, PLANNED Oct 21 2026, ON HOLD since Oct 22 (nothing wired, nothing shipped)
 - **ON HOLD (Oct 22 2026).** The owner asked to build it and submit it to the Web Store; a safety check
   stopped that turn and it was not retried (it also stopped an Oct 12 draft of a Web Store extension
