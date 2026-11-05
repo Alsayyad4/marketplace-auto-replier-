@@ -1,114 +1,148 @@
-# Publishing SubSell to the Chrome Web Store
+# Publishing SubSell to the Chrome Web Store (v0.21.81, Oct 2026)
 
-This gets you a real **"Add to Chrome"** button. Plan for ~30 minutes of setup
-plus **1–3 business days** of Google review. One-time cost: **$5** for a
-developer account.
+Why: an extension installed from the Web Store is **updated by Chrome itself**, on
+every computer, whatever folder it was installed from. The unpacked fleet build
+updates itself only when its folder sits where the updater looks and Chrome may
+write there — on Oct 8 2026 a dozen computers had been reporting "cannot
+self-update" for days. The store item is **Unlisted**: only people with the link
+can install it; it never shows in search.
 
-> You don't have to wait for this to use the bot — the web app's **"Download the
-> extension (.zip) → Load unpacked"** path works today. The Web Store is just the
-> nicer, one-click install for other people / your other machines.
-
----
-
-## Step 0 — What you need
-- A Google account.
-- **$5** (one-time) for the Chrome Web Store developer registration.
-- A **hosted privacy policy URL** (you already have one — see Step 2).
-- 1–5 screenshots of the extension (1280×800 or 640×400 PNG/JPG).
-- A 128×128 icon (the repo ships `icon128.png`; replace it with a crisp 128×128
-  PNG before submitting — the bundled one is a tiny placeholder).
+Plan for ~20 minutes of clicking plus **1–3 business days** of Google review.
+One-time cost: **$5** for the developer account.
 
 ---
 
-## Step 1 — Build the store ZIP
-The store package must contain **only the extension**, not the web app / backend /
-docs. Run:
+## Step 1 — Build the store ZIP (done by the repo, no manual edits)
 
-```bash
-bash store/build-extension-zip.sh
+```
+powershell -ExecutionPolicy Bypass -File store\build-webstore-zip.ps1
 ```
 
-This creates **`dist/subsell-extension.zip`** containing only:
-`manifest.json, background.js, content.js, popup.html, popup.js, options.html,
-options.js, managed_schema.json, icon16/48/128.png` — and it **strips the `key`
-field** from the manifest (the Web Store assigns its own extension ID).
+→ **`dist/subsell-webstore.zip`**: the extension's runtime files only, flat, with
+the store manifest (`store/webstore-manifest.js`): **no `key`** (the Store issues
+its own extension ID), host permissions narrowed to the four hosts the single
+purpose needs (`*.messenger.com`, `*.facebook.com`, `api.anthropic.com`,
+`*.supabase.co`), and **no `debugger` and no `activeTab`** permission. Same version
+as the fleet build. The fleet zips (`dist/subsell-extension.zip`,
+`dist/subsell-installer.zip`) keep the key and every permission and are untouched.
 
-> Why strip `key`? The `key` pins the unpacked/fleet ID
-> (`jdbjbonhdnfkkfihbodmhpmccoiajflm`). The Web Store issues its **own** ID, so the
-> store build shouldn't carry the old key. Your self-hosted/fleet build keeps it.
+What the store build gives up by dropping `debugger`: the file-API video channels
+(`input`, and the opt-in `chooser` / `drop` / trusted Enter) and the diagnostic's
+CDP lines. The production channel (`btn`, Messenger's own picker caught in the
+page, the one fixed in v0.21.77) and the `dom` / `paste` channels need no debugger;
+`content.js` parks the file-API channels for good when the permission is absent, so
+nothing probes or parks in cycles. No "SubSell is debugging this browser" bar, ever.
+
+The code tells the two installs apart at run time: a store install carries an
+`update_url` in its manifest (Chrome adds it), and then `STORE_BUILD` is true in
+`background.js` — the folder-based self-updater never runs, the popup's
+"Update now" says the Store updates it, the diagnostic's `sud:` line says `STORE`.
 
 ---
 
-## Step 2 — Host the privacy policy
-The Web Store **requires** a privacy policy URL because this extension handles an
-API key and reads message content. One is included at **`docs/privacy.html`**.
+## Step 2 — The privacy policy URL (already live)
 
-1. Open `docs/privacy.html` and replace `you@example.com` with a real contact email.
-2. When GitHub Pages is enabled for `docs/` (see Step 6 of the main README), it's
-   live at:
-   `https://<your-github-username>.github.io/marketplace-auto-replier-/privacy.html`
-3. Keep that URL — you'll paste it into the store listing.
+`https://alsayyad4.github.io/marketplace-auto-replier-/docs/privacy.html`
+
+(`docs/privacy.html`, served by GitHub Pages with the dashboard; contact email
+already filled in.)
 
 ---
 
-## Step 3 — Register as a developer
-1. Go to the **Chrome Web Store Developer Dashboard**:
-   https://chrome.google.com/webstore/devconsole
-2. Sign in, accept the agreement, pay the **one-time $5** fee.
+## Step 3 — Register as a developer (once)
+1. https://chrome.google.com/webstore/devconsole → sign in with the Google account
+   that will own the item (the shop's, not an employee's).
+2. Accept the agreement, pay the **one-time $5** fee.
 
 ---
 
 ## Step 4 — Create the item & upload
-1. Dashboard → **Add new item** → upload `dist/subsell-extension.zip`.
-2. Fill the **Store listing** tab (copy is ready in [`listing.md`](./listing.md)):
-   name, summary, description, category (**Productivity**), language, screenshots,
-   128×128 icon.
-3. **Privacy practices** tab — this is where most reviews stall, so be precise:
+1. Dashboard → **Add new item** → upload **`dist/subsell-webstore.zip`**.
+2. **Store listing** tab — copy from [`listing.md`](./listing.md): name, summary,
+   description, category **Productivity**, language, the screenshots in this folder
+   (`screenshot-1280x800.png`, `promo-small-440x280.png`,
+   `promo-marquee-1400x560.png`), icon `icon-store-128.png`.
+3. **Privacy practices** tab — the part reviews stall on; paste exactly:
    - **Single purpose:** "Auto-replies to the operator's own Facebook Marketplace
-     buyer messages using the Anthropic Claude API."
-   - **Permission justifications** — see the table below; paste them in.
-   - **Data usage:** declare that you handle *Personal communications* (message
-     content) and *Authentication information* (the API key) and that data is **not
-     sold** and **not used for anything but the single purpose**. Tick that you
-     comply with the Developer Program Policies.
-   - **Privacy policy URL:** the one from Step 2.
-4. Set **Visibility**. For a tool only you and your team use, choose **Unlisted**
-   (anyone with the link can install; it won't show in search) — usually a faster,
-   smoother review than Public.
-5. **Submit for review.**
+     buyer messages, in the operator's own Messenger account, using the operator's
+     own Anthropic Claude API key and the operator's own settings."
+   - **Permission justifications** — the table below.
+   - **Data usage:** handles *Personal communications* (the buyer messages it
+     replies to) and *Authentication information* (the operator's API key and
+     cloud login); not sold, not used for anything but the single purpose; complies
+     with the Developer Program Policies.
+   - **Privacy policy URL:** Step 2.
+4. **Distribution** → Visibility **Unlisted**.
+5. **Submit for review.** Keep the item's link (Store listing → "View in store" or
+   `https://chromewebstore.google.com/detail/<id>`): that link is what every
+   computer installs from.
 
----
-
-## Permission justifications (paste these)
+### Permission justifications (paste these)
 
 | Permission | Why it's needed |
 |---|---|
-| `storage`, `unlimitedStorage` | Save the operator's settings, API key, activity log, and locally-stored demo videos. |
-| `alarms` | Schedule follow-up messages and the periodic remote-config refresh. |
-| `notifications` | Alert the operator when a conversation needs a human (`[HUMAN]`). |
-| `tabs`, `activeTab` | Find/focus the operator's open Messenger tab to operate on it. |
-| Host: `*.messenger.com`, `*.facebook.com` | The extension only auto-replies inside the operator's own Marketplace/Messenger chats. |
-| Host: `api.anthropic.com` | Calls the Anthropic Claude API to generate replies (operator's own key). |
-| Host: `*.supabase.co` | Fetches the operator's own settings from the Supabase project they control (cloud sync). |
-
-> **Permissions are already slimmed for the Store.** `build-extension-zip.sh` removes
-> the broad `<all_urls>` host permission from the store build (it forces an in-depth
-> review and raises rejection odds), keeping only the four hosts above. The
-> self-hosted / fleet build keeps `<all_urls>` for remote-config-from-any-URL and
-> remote video fetch; the Store build trades those for a cleaner review.
+| `storage`, `unlimitedStorage` | The operator's settings, API key, per-chat memory and the demo videos kept on disk. |
+| `alarms` | The minute heartbeat (scan, cloud sync), follow-ups and the remote-config refresh. |
+| `notifications` | Tells the operator when a conversation needs a human. |
+| `tabs` | Finds the operator's open Messenger tab to work in it and keeps it from being discarded. |
+| `scripting` | Injects the page-side helper that hands the demo video to Messenger's own file picker, and re-injects the content script into an already-open Messenger tab after an update, so the operator never has to reload pages. |
+| `downloads` | Keeps the operator's own demo video clips on disk (Downloads/SubSell-videos). |
+| Host `*.messenger.com`, `*.facebook.com` | The extension only works inside the operator's own Marketplace/Messenger chats. |
+| Host `api.anthropic.com` | Generates the replies with the operator's own API key. |
+| Host `*.supabase.co` | The operator's own settings/cloud sync project (configured by the operator). |
 
 ---
 
-## Step 5 — After it's approved
-1. Copy your listing URL — it looks like
-   `https://chromewebstore.google.com/detail/<name>/<extension-id>`.
-2. Paste it into **`docs/config.js`** as `SUBSELL_WEBSTORE_URL`.
-3. Commit/push. The web app's **"Add to Chrome"** button now sends people straight
-   to your store listing.
+## Step 5 — Each computer, once (the migration)
+1. Open the item's link on that computer → **Add to Chrome**.
+2. Extension → **Options** → Cloud sync → **Log in** (the shop's email + password).
+   The API key, the teaching and the videos arrive within a minute.
+3. `chrome://extensions` → **Remove** the old unpacked "SubSell Marketplace
+   Auto-Reply" entry (the one with a folder path). Two copies on one computer would
+   both answer; the cloud memory settles most of it, but remove the old one anyway.
+4. Pin the new icon. Done — from now on Chrome updates it by itself (the popup's
+   "Update now" confirms: "the Chrome Web Store updates it by itself").
+
+The old computers that could not self-update get this instead of a folder reinstall.
 
 ---
 
-## Updating later
-Bump `version` in `manifest.json`, re-run `bash store/build-extension-zip.sh`, and
-upload the new ZIP in the dashboard → your item → **Package**. Re-submit; updates
-usually review faster than the first submission.
+## Updating later (every release)
+1. Bump `version` in `manifest.json` as usual, push the fleet build.
+2. `powershell -ExecutionPolicy Bypass -File store\build-webstore-zip.ps1`
+3. Developer dashboard → the item → **Package** → upload `dist/subsell-webstore.zip`
+   → **Submit for review**. Updates review faster than the first submission; Chrome
+   installs them on every computer within a few hours of approval.
+
+---
+
+## The review: what to write so it passes (a first submission was rejected once)
+Reviewers cannot log into Messenger, so a Facebook-dependent extension is rejected
+as "functionality could not be verified" unless they can see it work. In the item's
+**Test instructions / notes for the reviewer** field (Privacy practices tab or the
+upload page, depending on the dashboard version) paste:
+
+> SubSell replies to the developer's OWN Facebook Marketplace buyer messages. It
+> only runs on messenger.com / facebook.com and only acts in the account of the
+> person who installed it. To see it work: install, open Options, enter an
+> Anthropic API key, switch it ON in the popup and open messenger.com/marketplace
+> with an account that has Marketplace conversations. Demo video: <link>.
+> A test Messenger account can be provided on request.
+
+Record a 60-second screen video (the popup ON, a buyer message arriving, the reply
+being typed, the Options page) and upload it unlisted to YouTube or Drive; put the
+link in that field. This is the single most effective thing against a rejection.
+
+Typical rejection names and the answer:
+- **Blue Argon** (functionality not working / cannot be verified): the note and the
+  video above; offer a test account.
+- **Purple Potassium** (unused or excessive permissions): the store build carries only
+  the seven permissions in the table; `debugger`, `activeTab` and `<all_urls>` are not
+  in it. Paste the table.
+- **Yellow Magnesium / Purple Lithium** (privacy): the policy URL above is live and
+  names the data handled (message content, API key, cloud login) and that nothing is
+  sold or shared.
+- **Red Nickel / spam & placement**: the listing describes exactly what it does; the
+  item is Unlisted and used by one business.
+- **Remote code**: none — every line ships in the package; the dashboard's "Try it"
+  box fetches `background.js` from the dashboard's own site, not the other way round.

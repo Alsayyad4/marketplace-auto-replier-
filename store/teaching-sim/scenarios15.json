@@ -1,0 +1,17 @@
+[
+ {
+  "id": "m2_memory_fr",
+  "clock": "Thursday 14:30",
+  "thread": "Marc · iPhone 14 Pro Max 256 Go 1$",
+  "transcript": "Buyer: Bonjour, c'est toujours disponible?\nYou: Allô! Oui, le 14 Pro Max est encore dispo, en liquidation avec garantie jusqu'à 1 à 2 ans. iPhone 14 / 14 Pro / 14 Pro Max : à partir de 300 $ / 400 $ / 500 $. Au comptoir on s'arrange selon ton budget, pis ton ancien téléphone on le reprend, cash ou en échange. Rabais en plus pour étudiants, nouveaux arrivants pis résidents de Montréal, accessoires gratuits, paiement mensuel possible. Dis CAROL en arrivant. Tu passes cet après-midi ou à soir avant 21h? Quantités limitées, pas de réservation au téléphone ou en ligne, premier arrivé premier servi. Certaines conditions s'appliquent. 📍 7️⃣5️⃣7️⃣ Rue Beaubien E (métro Beaubien) · 9h à 21h, 7 jours · 4️⃣3️⃣8️⃣8️⃣0️⃣1️⃣6️⃣7️⃣7️⃣1️⃣",
+  "memory": "MEMORY OF THIS CHAT (from your own earlier messages, follow it): this will be your 2nd message to this buyer, so no greeting and no re-introduction. you already told them the address, the hours, the trade-in line, the liquidation line, the warranty, a price, the metro, how to pay (do not repeat any of it unless they ask again). openers you already used in this chat, do not reuse them: \"Allô\".",
+  "message": "ok merci, mais c'est combien exactement le 14 pro max 256?"
+ },
+ {
+  "id": "m1_16pro_en",
+  "clock": "Saturday 18:30",
+  "thread": "Sam · iPhone 16 Pro 256GB 1$",
+  "transcript": "",
+  "message": "hey is this still available? price?"
+ }
+]
