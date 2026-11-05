@@ -17,7 +17,7 @@ all chrome.debugger/CDP work) + Supabase dashboard in docs/. Live branch:
   permissions ships OFF by default behind a cloud setting and goes to ONE machine first.
 - The operator wants zero manual steps in normal operation.
 
-## Known state (v0.21.93 SUBMITTED to the Web Store Nov 5 2026 ~15:03 local, Pending review with auto-publish — the API line + an outage never silences a buyer for good — state in HANDOFF "Open after v0.21.93"; the submit button is the owner's click, Auto mode refuses it; v0.21.92 PUBLISHED on the Web Store Oct 25 2026 09:09)
+## Known state (v0.21.93 PUBLISHED on the Web Store Nov 5 2026 ~15:22 local — the API line + an outage never silences a buyer for good; the fleet installs it by itself within ~2 h — state in HANDOFF "Open after v0.21.93"; the submit button is the owner's click, Auto mode refuses it; v0.21.92 was PUBLISHED Oct 25 2026 09:09)
 - THE API LINE (.93, Nov 3 2026, owner's two popup photos: "API key set ✓ · Replying yes ✓ ·
   Last 24 h 0 / 500" on two computers while a dozen buyers waited up to 4 h; "api connection
   failed"). The STATUS box had no line for the outcome of the Anthropic call ("last error" sits
