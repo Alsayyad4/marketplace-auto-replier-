@@ -593,6 +593,42 @@ new examples (S25 Ultra FR two messages, iPad EN two messages). Checklist regex:
 first message FR, a "580 c'est pour un neuf ou usagé? la batterie? je veux pas un scrap" second
 message under the real memory note, an iPad "sealed? price?" first message EN.
 
+**Nineteenth exchange — THE STRATEGY QUESTION, no rewrite (Nov 6 2026)**
+The owner asked: with the starting prices shown and the grades mentioned, what incentive does a
+buyer have to come, how is the close guaranteed without "yes it's free" / "yes brand new at this
+price", and what strategy makes the buyer "overlook everything and come to find out what we have";
+then "not convinced, you are missing lots of my main points" to a first answer built on generic
+sales psychology. The second answer was built from his 56 verbatim messages of this session (scratch
+strat/owner-messages.md) and checked by a 3-critic workflow (coverage / fidelity / owner's eyes).
+THE DOCTRINE, in his words: the incentive is HIS stack, downward and concrete, "promise them we will
+help them with the prices and apply them liquidation and give them warranty, and offer to take their
+old phone back and they will pay even cheaper" + the student/newcomer/Montréal discount + the free
+earphones/charger/power bank + code CAROL which applies the liquidation price and the warranty up to
+1 to 2 years: the chat sends the attractive starting price, everything that makes it cheaper happens
+at the counter, the serious buyer comes to find out how much cheaper. The close is his own
+definition, "closing means making customer come to the shop and promising them liquidation prices",
+every promise about the shop and never about one unit, plus his msg-35 script on a price push
+(already sent you the price; exact depends on capacity and remis à neuf / usagé / neuf; I help you
+find the best price and choose the best option; negotiable; trade your old phone; no reservation,
+first come first served). Curiosity is "curious to find liquidation prices, the promo code, the
+warranty phones" + the list "so they may see a different phone" (family line for iPhone, whole block
+otherwise) + the block's unresolved ranges ("I need to cause some curiosity, I can make things
+clear, 90$ is too cheap for A26": the bot never confirms nor denies). "Hundreds of requests, so
+exact details are confirmed at the shop where we show all the models and colours" is the honest
+reason, never bait. WITHDRAWN (they contradict his Oct 21-25 rules; do not re-propose): the whole
+iPhone list on a price push (msg 20: the family line only; a price push = his script), "no
+reservation" moved into the body (msg 31: at the end, as is, once, "not in the way"), "viens voir ce
+qu'on a dans les A" as the answer to a price question (the bait shape of msg 35; v18's A26 answer
+already names it available + the block), "ton prix à toi n'existe qu'au comptoir" (a two-price
+theory = bait in new words), and the first answer's visit-script / nothing-to-lose / private-seller
+sentences. CANDIDATE v19 EDITS, each replacing a sentence, never adding (his msg 39: more than one
+sentence, not 500 lines): (1) the "hundreds of requests → details confirmed at the shop, all models
+and colours" line as a FIXED item of the second message (today a rotating toolbox line; say
+"demandes", never "messages", a banned word); (2) replace v18's "strong batteries" (the assistant's
+line; msg 51 bans battery-health promises) with his msg-24 wording "best quality available,
+warranty, je te trouve une bonne qualité, pas de souci, pis je t'arrange le prix"; (3) optional, his
+msg-42 "only in person": "en personne seulement" inside the footer. Not built: waiting for his "go".
+
 ## AUTOLISTER — listing creation + delete-and-relist, PLANNED Oct 21 2026, ON HOLD since Oct 22 (nothing wired, nothing shipped)
 - **ON HOLD (Oct 22 2026).** The owner asked to build it and submit it to the Web Store; a safety check
   stopped that turn and it was not retried (it also stopped an Oct 12 draft of a Web Store extension
