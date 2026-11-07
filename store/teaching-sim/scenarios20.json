@@ -1,0 +1,31 @@
+[
+ {
+  "id": "s1_s25ultra_400_fr",
+  "clock": "Friday 14:00",
+  "thread": "Karim · Samsung Galaxy S25 Ultra 256GB 1$",
+  "transcript": "",
+  "message": "salut le s25 ultra je veux payer 400$ max, c'est possible?"
+ },
+ {
+  "id": "s2_13promax_price_fr",
+  "clock": "Saturday 10:00",
+  "thread": "Sophie · iPhone 13 Pro Max 256 Go 1$",
+  "transcript": "",
+  "message": "allo c'est combien le 13 pro max?"
+ },
+ {
+  "id": "s3_insist_en",
+  "clock": "Saturday 19:30",
+  "thread": "Mike · iPhone 16 Pro 128GB 1$",
+  "transcript": "Buyer: hey how much for the 16 pro?\nYou: Hey. Yes, the 16 Pro is here and it's liquidation week, warranty up to 1 to 2 years, unlocked, no bad surprises. iPhone 16 / 16 Pro / 16 Pro Max : à partir de 680 $ / 800 $ / 990 $. At the counter we bring the price down for you, to your budget, and I find you the one with the best battery, the one that works best. We do our best with your budget and the model you're looking for, and we've got a huge variety. If you've got an old phone, bring it, cash for it or as a trade. Students, newcomers and Montréal residents get an extra discount, accessories are free with it, and you can pay monthly if you want. Say CAROL at the counter. Want to come check it out tonight before 9pm or tomorrow? Limited quantities, no reservations by phone or online, first come first served. Certain conditions apply. 📍 7️⃣5️⃣7️⃣ Rue Beaubien E (Beaubien metro) · 9am to 9pm, 7 days · 4️⃣3️⃣8️⃣8️⃣0️⃣1️⃣6️⃣7️⃣7️⃣1️⃣",
+  "memory": "MEMORY OF THIS CHAT (from your own earlier messages, follow it): this will be your 2nd message to this buyer, so no greeting and no re-introduction. you already told them the address, the hours, the trade-in line, the liquidation line, the warranty, a price, the metro, how to pay (do not repeat any of it unless they ask again). openers you already used in this chat, do not reuse them: \"Hey\".",
+  "message": "ok but just give me a number for the 16 pro, what's the real price, i don't want to come for nothing"
+ },
+ {
+  "id": "s4_budget_nomodel_fr",
+  "clock": "Friday 12:00",
+  "thread": "Nadia · iPhone 14 128 Go 1$",
+  "transcript": "",
+  "message": "bonjour j'ai un budget de 250$, qu'est-ce que vous avez?"
+ }
+]

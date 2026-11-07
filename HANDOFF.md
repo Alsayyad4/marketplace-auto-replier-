@@ -666,6 +666,54 @@ unlocked, best battery, pack, shop line, 0 questions); iPad 11 EN 922 after the
 no-rhetorical-question line (921 before it had "Old phone or tablet? Bring it" = 2 questions, guard
 still ok). All guard ok. The footer and the Visit-confirm box are unchanged.
 
+**Twenty-first request — "WE DO OUR BEST WITH YOUR BUDGET AND THE MODEL YOU'RE LOOKING FOR", HUGE VARIETY, THE EXACT PRICE NEVER REFUSED, NEW iPHONE PRICES (Nov 7 2026)**
+(`teaching20.js` via `mod20.js` → `teaching-2026-11-07-v20.md`, THE version to paste, replaces v19;
+scenarios20.json + out20/replies-A.json): two additions, nothing replaced. (1) In BOTH messages: "we
+do our best with the budget you have and the model you are looking for", said in those general words
+— never the model's name and never their number inside that sentence ("on fait de notre mieux avec
+ton budget pis le modèle que tu cherches" / "we do our best with your budget and the model you're
+looking for") — plus "we have a huge variety" ("on a une grande variété"). His framing, now in
+Business info (new paragraph WHAT THE TWO MESSAGES DO WITH THE EXACT PRICE), Instructions (pack item
+4, checklist 4, WORDS THAT NEVER GO, the asked-twice bullet, the BUDGET + MODEL bullet,
+first-message step 3, second-message step 2, a toolbox line, both SITUATIONS entries) and Closer
+goals: the goal is never to tell the buyer we cannot give the exact price, the goal is that the
+exact price stops being the question because the message is full of help (we lower the price, the
+best option with their budget, huge variety, every condition in their favour, a good battery) and
+because they already have the whole promo block of the brand or category, or the family line, so
+nothing is mysterious; never "I can't give you the exact price" / "je peux pas te donner le prix
+exact". Every one of the 29 example messages got one rotating sentence (4 FR + 4 EN with the
+variety, 2 + 2 without it when the message already says "plein d'options" / "tellement"; sellers get
+it after their trade-up sentence) inserted as a new sentence right after the price-help sentence
+(mod20.js: keyword "baisse le prix / arranger le prix / prix liquidation / bring the price down /
+liquidation price", then the next sentence end). (2) The iPhone promo block got his new prices
+(XR/XS Max 120-160 unchanged; 11: 180/220/300; 12: 200/280/360; 13: 280/380/490; 14: 300/450/550;
+15: 450/600/750; 16: 680/800/990; 17: 1040/1300/1480): replaced everywhere (the list, the prose, 7
+occurrences of the 14 line, 3 of the 15 line, 2 of the 12 line, the whole-list example). Two
+judgment calls flagged to him: spacing normalised to "N $"; his paste has no "appelez pour vérifier
+la disponibilité" tail on the 17 line any more (the list line follows his paste, the prose rule
+"availability to confirm, call or come by" for the 17 is kept) and no 18 line (kept, it is a rule
+not a price: "contactez-nous pour confirmer le prix et la disponibilité"). mod20 checks: 29
+messages, 29 clauses, 0 missing, 0 two-question messages, 0 stale family lines, 0 old numbers, 0
+condition/état/grade. Prompt ~28.6k tokens (was ~26.5k). SIM (Haiku agents as the model, real memory
+note on the second-message case): S25 Ultra "je veux payer 400$ max" FR 1511 chars (available,
+liquidation week like the other models, the block, "Avec 400 $ t'as plein d'options chez nous, on
+t'aide à choisir la meilleure, pour le prix pis pour la qualité", "On fait de notre mieux avec ton
+budget pis le modèle que tu cherches, on a une grande variété", "te montrer les S25 Ultra que j'ai,
+neufs, usagés ou remis à neuf, plusieurs capacités, des batteries différentes aussi", trade-in,
+offers, CAROL, "Tu veux passer voir cet après-midi ou à soir avant 21h?", no yes and no no); 13 Pro
+Max "c'est combien" FR 872 (the NEW line 280 $ / 380 $ / 490 $, warranty, unlocked, best battery,
+"on fait de notre mieux avec ton budget pis le modèle que tu cherches, on a une grande variété",
+pack, one time question); 16 Pro "just give me a number, what's the real price, i don't want to come
+for nothing" EN second message under the real memory note 1145 (starting prices just above with the
+new 16 line, the menu, "We do our best with your budget and the model you're looking for, we've got
+a huge variety", liquidation price, negotiate, best battery, unlocked, warranty, trade-in, offers,
+CAROL, a close with 0 questions, footer, shop line; not one word about what we cannot say); "j'ai un
+budget de 250$, qu'est-ce que vous avez?" FR 1593 (the whole new iPhone list, "on fait de notre
+mieux avec ton budget pis le modèle que tu cherches, on a une grande variété", "Avec ton budget t'as
+plein d'options chez nous", never a yes to 250 $). All four guard ok; post.js flags "students" /
+"monthly" / "batteryPct" are the known regex false positives (singular "Étudiant", "par mois", "20
+to 40%"). The footer and the Visit-confirm box are unchanged.
+
 ## AUTOLISTER — listing creation + delete-and-relist, PLANNED Oct 21 2026, ON HOLD since Oct 22 (nothing wired, nothing shipped)
 - **ON HOLD (Oct 22 2026).** The owner asked to build it and submit it to the Web Store; a safety check
   stopped that turn and it was not retried (it also stopped an Oct 12 draft of a Web Store extension
