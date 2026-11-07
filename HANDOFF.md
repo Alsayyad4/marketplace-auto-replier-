@@ -714,6 +714,24 @@ plein d'options chez nous", never a yes to 250 $). All four guard ok; post.js fl
 "monthly" / "batteryPct" are the known regex false positives (singular "Étudiant", "par mois", "20
 to 40%"). The footer and the Visit-confirm box are unchanged.
 
+**Twenty-second request — "DONT MENTION SUBSELL" (Nov 7 2026)**
+(`teaching21.js` via `mod21.js` → `teaching-2026-11-07-v21.md`, THE version to paste, replaces v20;
+scenarios21.json + out21/replies-A.json): the owner wrote "dont mention subsell" after the v20
+hand-over. The shop in the chat is Liquidation Téléphone Montréal and nothing else: "(SubSell)" left
+the shop line of Business info, and the website subselltrade.ca (a mention of the brand in the
+buyer's eyes) left the three places it had — the buyback fact, Q "How much for my phone?", the
+seller SITUATIONS entry — and the seller example ("Le prix de rachat, on te le fait sur place en
+quelques minutes, devant toi."). A seller is now told the price is set at the shop in a few minutes
+in front of them, never sent to a site; WORDS THAT NEVER GO TO A BUYER gained "never another brand
+name, never a website address". Judgment call flagged to him: the URL went too (he may have meant
+the brand name only — put the URL back if so). The extension's mechanics never said SubSell (the 5
+mentions in the v20 system prompt were all the owner boxes); 0 left in v21's boxes and system
+prompt. Boxes 4 (Closer goals), 5 (Price list) and 6 (Visit-confirm) are byte-identical to v20. SIM:
+seller "je veux vendre mon s23, vous donnez combien? c'est quoi votre site?" FR 989 chars, guard ok:
+"Pas besoin de site, tout se passe au magasin, Liquidation Téléphone Montréal: on rachète ton S23
+payé comptant sur place, sans attente, pis le prix se fait en quelques minutes devant toi", the
+trade-up pack, no amount, no brand, no website, one time question, footer, shop line.
+
 ## AUTOLISTER — listing creation + delete-and-relist, PLANNED Oct 21 2026, ON HOLD since Oct 22 (nothing wired, nothing shipped)
 - **ON HOLD (Oct 22 2026).** The owner asked to build it and submit it to the Web Store; a safety check
   stopped that turn and it was not retried (it also stopped an Oct 12 draft of a Web Store extension
