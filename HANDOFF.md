@@ -627,7 +627,44 @@ and colours" line as a FIXED item of the second message (today a rotating toolbo
 "demandes", never "messages", a banned word); (2) replace v18's "strong batteries" (the assistant's
 line; msg 51 bans battery-health promises) with his msg-24 wording "best quality available,
 warranty, je te trouve une bonne qualité, pas de souci, pis je t'arrange le prix"; (3) optional, his
-msg-42 "only in person": "en personne seulement" inside the footer. Not built: waiting for his "go".
+msg-42 "only in person": "en personne seulement" inside the footer. Built the same day as v19 (Twentieth request): edit (2) folded in, edit (1) only as an example line (the rule stays a toolbox line), edit (3) not done (the footer is his, he said replace nothing).
+
+**Twentieth request — BUDGET + MODEL, SEVERAL OF THE SAME MODEL, PRICE AND QUALITY, UNLOCKED, NO BAD SURPRISES (Nov 7 2026)**
+(`teaching19.js` via `mod19.js` → `teaching-2026-11-07-v19.md`, THE version to paste, replaces v18;
+scenarios19.json + out19/replies-A.json): the owner's "complementary points", additions only,
+nothing replaced: (1) BUDGET + MODEL ("le S25 Ultra, je veux payer 400 $", "mon budget c'est 150 $
+pour le S25"): never yes, never no, never "we can find you an S25 Ultra at that price" — go around
+it: the model is there and in liquidation this week like the other models, the block (or family
+line), "je peux vraiment t'arranger le prix au comptoir pis te montrer les S25 Ultra que j'ai,
+neufs, usagés ou remis à neuf, plusieurs capacités, des batteries différentes aussi, tu compares en
+main", help with the price AND the quality, "avec 400 $ t'as plein d'options chez nous, on t'aide à
+choisir la meilleure, on en a tellement", liquidation, warranty, then the pack and the invitation to
+come and check ("tu veux passer voir, à soir ou demain?"); the number comes back only inside "avec
+400 $ t'as plein d'options", never as the model's price (Business info paragraph BUDGET + MODEL, Q
+"Can you do it for X $? My budget is X $ for the Y", PRICE PART bullet, SITUATIONS, Closer goals).
+(2) THE PRICE ASKED TWICE adds "we have several of the same model" (the menu sentence now starts "On
+en a plusieurs du même modèle"). (3) EVERY message: we lower the price AND we help with the quality
+— the phone / iPad / tablet with the best battery and the one that works best (as help, never a %,
+never one unit) — plus phones unlocked, no bad surprises (pack items 2 and 4, checklist 2 and 4,
+first-message step 3, second-message step 3, two toolbox lines, Business info facts + Q "Is it
+unlocked?"); v18's "strong batteries" line (the assistant's, not his) replaced by his wording. (4)
+The closing question is an invitation to come and check ("tu veux passer voir, cet après-midi ou à
+soir?"); no rhetorical second question ("Old phone? Bring it" counts: say "If you have an old phone,
+bring it") — added after the first iPad sim slipped one in. (5) Three new conversations (S25 Ultra
+at 400 $ first + second, S25 at 150 $, iPad 11 FR); the 25 existing example messages got a rotating
+clause right after their warranty phrase (mod19.js inserts it: 4 FR + 4 EN variants, device variants
+without "unlocked" for iPad / laptop, a battery-only or unlocked-only variant when half is already
+there; WARR regex case-insensitive, "dans tous les cas" kept together). Checklist regex now also
+wants battery (/batterie|battery/) and trust (/débloqu|unlocked|surprise/): 29 messages, 0 missing,
+0 condition/état/grade, 0 yes-to-a-number. Prompt ~26.5k tokens (was ~22.5k). SIM (Haiku agents as
+the model, real memory note on the second-message case): S25 Ultra "je veux payer 400$ max" FR 1583
+chars (available + liquidation week like the others + block + "te montrer les S25 Ultra que j'ai,
+neufs, usagés ou remis à neuf… des batteries différentes" + "avec 400 $ t'as plein d'options" +
+pack, no yes/no); S25 "mon budget c'est 150$" FR 1418; 15 Pro "donne moi juste un chiffre" second
+message under the memory note FR 988 (prices just above, menu with "on en a plusieurs", promise,
+unlocked, best battery, pack, shop line, 0 questions); iPad 11 EN 922 after the
+no-rhetorical-question line (921 before it had "Old phone or tablet? Bring it" = 2 questions, guard
+still ok). All guard ok. The footer and the Visit-confirm box are unchanged.
 
 ## AUTOLISTER — listing creation + delete-and-relist, PLANNED Oct 21 2026, ON HOLD since Oct 22 (nothing wired, nothing shipped)
 - **ON HOLD (Oct 22 2026).** The owner asked to build it and submit it to the Web Store; a safety check
