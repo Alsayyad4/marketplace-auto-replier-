@@ -964,7 +964,7 @@
     if (only) {
       L.push("");
       L.push("With each message the bot is also told which listing the buyer is writing from (the post's title, with the price taken out), and your Listings row and price-list line for that model are put beside the message — so the price and the availability it gives are yours, for that item, never the post's. A question it still cannot answer lands in “Teach these” with the listing named.");
-      L.push("The bot is told: everything you know about this business is what the owner wrote below, and nothing else. When a buyer asks something that is not written here, it says it is best confirmed at the shop. It never guesses.");
+      L.push("The bot is told: everything you know about this business is what the owner wrote below, and nothing else. When a buyer asks something that is not written here, it invites them to ask at the counter instead. It never guesses.");
     }
     const sec = (title, body) => { if (body && String(body).trim()) { L.push(""); L.push("── " + title + " ──"); L.push(String(body).trim()); } };
     sec("OWNER — BUSINESS INFO (the bot is told to find the line here that answers the buyer, and use it)", settings.businessInfo);
@@ -1017,7 +1017,7 @@
     L.push("");
     L.push("── plus, built into every bot ──");
     L.push(only
-      ? "Mechanics only: the rule above (your text is all it knows; anything else is “best confirmed at the shop”), the current time with every message, the reply tokens (hand a risky chat to you, note a planned visit), the platform-safety rule when that switch is on (never share a phone number or a link), your price setting, and a short how-to-write part (short, casual, no AI tells) that your own instructions override. There is NO built-in sales playbook and no canned sentence in this mode."
+      ? "Mechanics only: the rule above (your text is all it knows; anything else is “ask me at the counter, I show you”), the current time with every message, the reply tokens (hand a risky chat to you, note a planned visit), the platform-safety rule when that switch is on (never share a phone number or a link), your price setting, and a short how-to-write part (short, casual, no AI tells) that your own instructions override. There is NO built-in sales playbook and no canned sentence in this mode."
       : "An authority order (your text wins over the built-in playbook), a before-you-write lookup step (find the line in YOUR business info that answers the buyer before writing), the current time with every message, the closing playbook, the platform-safety rules (never share a phone number or move off Messenger), the sound-like-a-person rules, and the reply-format rules. Those ship with the extension — they are not editable here.");
     L.push("");
     L.push("── teaching code ──");

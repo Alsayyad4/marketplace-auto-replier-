@@ -2808,13 +2808,13 @@ function listingContext(settings, threadName, opts) {
     if (e.listing) {
       const l = e.listing;
       L.push(`The owner's own entry for this item: "${one(l.title || l.model || "item", 80)} | ${one(l.storage, 20)} | ${one(l.condition, 40)}` + (e.hidePrices ? "" : ` | $${l.price || "?"} CAD`) + ` | available: ${l.available === false ? "no" : "yes"}"` +
-        (gone ? " — the owner marks it unavailable: say so plainly, give no price for it, and offer what the owner's sections do offer" : e.storageMatch ? "" : " — a different storage than the listing: say that price is for that unit and that the exact one is confirmed at the shop") + ".");
+        (gone ? " — the owner marks it unavailable: say so plainly, give no price for it, and offer what the owner's sections do offer" : e.storageMatch ? "" : " — a different storage than the listing: say that price is for that unit, that the storage they want is there too, and that its price follows what they pick") + ".");
     }
     // no starting price for a unit the owner marked gone
     if (e.priceLines.length && !gone) L.push(`The owner's price-list line${e.priceLines.length > 1 ? "s" : ""} for this model: ` + e.priceLines.map((s) => `"${one(s, 160)}"`).join("; ") + ` (starting prices: say "à partir de" / "starts at").`);
   } else {
     L.push("The owner's Listings and price list have no row for this exact model: take no price from the title. A price for it can come only from the owner's other text" + (opts.hasLesson ? " or the lesson beside this message" : "") +
-      "; otherwise say it is confirmed at the shop" + (opts.hasLesson || opts.followup ? "" : ", and begin with [GAP] when the buyer asked its price or its availability") + ".");
+      "; otherwise write no number for it: it is in stock and in liquidation like everything the owner sells, and the owner's starting prices, price help and invitation do the work, never 'to confirm'" + (opts.hasLesson || opts.followup ? "" : ", and begin with [GAP] when the buyer asked its price or its availability") + ".");
   }
   return L.join("\n");
 }
@@ -2844,7 +2844,7 @@ function buildOwnerPrompt(settings) {
   L.push("");
   L.push("Everything you know about this business is what its owner wrote for you in the tagged sections below, and nothing else. What the shop sells, what is in stock, prices, condition, warranty, payment, trade-ins, delivery, reservations, promotions, and the way buyers are to be answered all come from those sections. The owner reads these conversations and corrects them, so a detail the owner never wrote is a mistake even when it sounds likely, and so is a sales line the owner never asked for.");
   L.push("");
-  L.push("When the owner's text covers what the buyer is asking, answer with it: its facts, its numbers and its wording, put into the buyer's language. When it does not cover it, do not guess, do not fill the gap with what shops usually do, and do not stretch a line beyond what it says: what the owner wrote about buying phones from customers (which ones, how they are paid) says nothing about what the shop sells or how a buyer can pay. Say you would rather confirm it at the shop than tell them something wrong, or ask what they are looking for, and carry on with what the owner did write. Begin that reply with [GAP] (explained under Special replies) so the owner learns what to teach you. Give no reason of your own for not knowing, such as stock moving fast. A fact that is true of a product everywhere (an iPhone 13 has Face ID) is fine in a few words. Where two of the owner's lines disagree, the rules and the corrections win, because they are the owner's latest word.");
+  L.push("When the owner's text covers what the buyer is asking, answer with it: its facts, its numbers and its wording, put into the buyer's language. When it does not cover it, do not guess, do not fill the gap with what shops usually do, and do not stretch a line beyond what it says: what the owner wrote about buying phones from customers (which ones, how they are paid) says nothing about what the shop sells or how a buyer can pay. Say it as an invitation, never as a doubt (they can ask at the counter and we show them), or ask what they are looking for, and carry on with what the owner did write. Begin that reply with [GAP] (explained under Special replies) so the owner learns what to teach you. Give no reason of your own for not knowing, such as stock moving fast. A fact that is true of a product everywhere (an iPhone 13 has Face ID) is fine in a few words. Where two of the owner's lines disagree, the rules and the corrections win, because they are the owner's latest word.");
   L.push("");
   L.push("<owner_business_info>");
   L.push(info || "(The owner has not written any business information yet.)");
@@ -2880,7 +2880,7 @@ function buildOwnerPrompt(settings) {
     L.push("<owner_starting_prices>");
     L.push(prices);
     L.push("</owner_starting_prices>");
-    L.push("These are starting prices. When a buyer asks about a model on this list, give its price as \"à partir de\" / \"starts at\", and say the exact price of a given unit is confirmed at the shop.");
+    L.push("These are starting prices. When a buyer asks about a model on this list, give its price as \"à partir de\" / \"starts at\"; the exact price of a given unit follows what they pick, and the owner's price help does the rest, never 'confirmed at the shop', never 'to confirm'.");
   } else if (settings.noExactPrices) {
     L.push("");
     L.push("Prices: the owner's setting keeps exact prices out of the chat. Give a price only where the owner's own text tells you a price to say. Otherwise write no amount at all, not a range and not the one on the post: say the price is given in person at the shop. If the buyer keeps insisting on a number you do not have, return [HUMAN].");
@@ -2932,7 +2932,7 @@ function buildOwnerPrompt(settings) {
   // (v0.21.74) The bot tells the owner what it could not answer, so the owner knows
   // exactly which line to add. parseReply strips the token; a row of kind "gap"
   // feeds the dashboard's "teach these" list.
-  L.push("- [GAP] at the very start of a normal reply (before a [VISIT:...] token if there is one), when the buyer asked something about the shop that the owner's text does not answer and you had to say you would rather confirm it at the shop. It tells the owner what to teach you next and is removed before sending.");
+  L.push("- [GAP] at the very start of a normal reply (before a [VISIT:...] token if there is one), when the buyer asked something about the shop that the owner's text does not answer and you had to invite them to ask at the counter instead. It tells the owner what to teach you next and is removed before sending.");
   // (v0.21.85) the model's word for silence. Without it, a model that judged there was
   // nothing to answer EXPLAINED that in prose — and the prose reached a buyer.
   L.push("- [SKIP], as your whole reply, when there is nothing to send: the latest line is not something the buyer wrote, or the buyer only closes the conversation (merci, ok, a thumbs-up) and nothing is left open, where a seller often just lets it end. Nothing is sent. This token is the only way to stay silent: any words you write instead, even a note about the chat, are typed into the chat and the buyer reads them.");

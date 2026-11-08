@@ -84,7 +84,7 @@ const withWrote = (cfg) => {
   ok(p.indexOf("<owner_instructions>") > iInfoEnd && p.includes("Always ask which model they want."), "instructions follow, verbatim, tagged");
   ok(p.includes("<owner_closing_goal>") && p.includes("Bring them to the shop to test the phone in their hands."), "the owner's own closing goal is the closing section");
   ok(p.includes("Everything you know about this business is what its owner wrote") && p.includes("do not guess"), "the contract: the owner's text is all it knows; a gap is never filled by a guess");
-  ok(p.includes("Say you would rather confirm it at the shop than tell them something wrong") && p.includes("do not stretch a line beyond what it says") && p.includes("Give no reason of your own for not knowing"), "an uncovered question gets an honest way out: no invention, no stretched line, no made-up reason");
+  ok(p.includes("Say it as an invitation, never as a doubt") && p.includes("do not stretch a line beyond what it says") && p.includes("Give no reason of your own for not knowing"), "an uncovered question gets an honest way out: no invention, no stretched line, no made-up reason");
   ok(p.includes("you are also told which listing the buyer is writing from (its title, with the price removed)") && p.includes("never from the title, which is an advert and not a stock list") && !p.includes("You are not told which post"), "the model is told it does not know the post, and that a headline is not stock");
   ok(p.includes("do not claim to be a human") && !p.includes("You are just the human seller"), "it stays in role without claiming to be human when asked");
   ok(B.buildSystemPrompt(Object.assign({}, base)) === p, "same settings → byte-identical prompt");

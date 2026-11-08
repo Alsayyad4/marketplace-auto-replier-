@@ -97,7 +97,7 @@ list. There is no second place to teach the bot.
   prompt is the owner's sections in this order — business info, instructions, standing rules,
   corrections, prices, listings, closing goal, examples — then mechanics (reply tokens, platform
   safety, how to write). The model is told that text is ALL it knows about the shop and that an
-  uncovered question is "best confirmed at the shop", never a guess. A correction or 👍 whose
+  uncovered question is an invitation to ask at the counter, never a guess. A correction or 👍 whose
   buyer text matches the incoming message (same words, give or take) is also placed beside the
   message in the user turn (`lessonFor`).
 - **(v0.21.73) Teaching code.** Each extension reports a short code of the teaching it answers

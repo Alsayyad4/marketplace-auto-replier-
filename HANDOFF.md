@@ -732,6 +732,136 @@ seller "je veux vendre mon s23, vous donnez combien? c'est quoi votre site?" FR 
 payé comptant sur place, sans attente, pis le prix se fait en quelques minutes devant toi", the
 trade-up pack, no amount, no brand, no website, one time question, footer, shop line.
 
+**Twenty-third request — "YOU ARE MAKING THE CUSTOMER HESITANT": EVERYTHING IS IN STOCK, NOTHING IS "TO CONFIRM AT THE SHOP", THE EXACT-MODEL ANSWER, WHAT MAKES THEM COME — v22, then the review's v23 (Nov 8 2026)**
+(`teaching22.js` via `mod22.js` → `teaching-2026-11-08-v22.md` = the first draft, handed over at
+13:45; then one adversarial review (Fable, the whole v22 paste + six Haiku replies, 14 findings,
+every one applied) → `mod23.js` → `teaching23.js` → `teaching-2026-11-08-v23.md`, THE version to
+paste, replaces v21; scenarios22.json + out22/replies-A.json (v22 sims) + out23/replies-A.json (v23
+re-sims)): the owner sent a screenshot of the live bot on his "iPhone 17, 17 Air, 17 pro et 17 pro
+max" listing writing "Le 17 Pro Max, c'est à confirmer au magasin ou en appelant, ça change avec les
+arrivages" and, second message, "ça se confirme au magasin, on a pas mal de variété pis les specs
+exactes tu les vérifies sur place": "you are making the customer not come to the shop, making them
+hesitant ... you are saying we can confirm the price only at the shop or only we can check that at
+the shop and that is not a good way to talk ... iphone and samsung and all phones we have all in
+stock and you never need to tell the price to confirm only at the shop, don't make aggressive
+statements like this ... if customer asks for a specific macbook like air m5 you say we have all
+macbook airs in liquidation, we have the majority of models in stock in liquidation, also for ipads
+and laptops same way or whatever the customer is looking for; include this in the way you talk not
+just replace, find better ways to make the customer come, be creative, suggest the best and apply".
+Three sources produced those sentences and all three are fixed. (1) The teaching's own rules:
+"iPhone 17: its line plus 'availability to confirm, call or come by'" (his sixth-pass "appelez pour
+vérifier", kept through v21), "we get hundreds of requests, so the exact details are confirmed at
+the shop" (his own earlier wording, now withdrawn by today's words; the second half, "on te montre
+tous les modèles pis toutes les couleurs", stays), the laptop Q "the stock changes every day ... the
+exact models are seen at the shop", the toolbox line "Stock changes every day", the laptop example
+"le modèle exact tu le vois sur place" and the 18 Pro Max example "le prix pis la dispo on les
+confirme au magasin ou au téléphone". (2) The 18 line of the price list, "contactez-nous pour
+confirmer le prix et la disponibilité" (his line from the sixth pass). (3) The extension's OWN
+owner-only prompt (`buildOwnerPrompt`): "otherwise say it is confirmed at the shop" + [GAP] for a
+listing title with no price-list row — and his multi-model title never matches the family line
+"Série iPhone 17 / 17 Pro / 17 Pro Max" because `sameModel` wants an equal qualifier set
+(air+pro+max vs pro+max), so the model was told "no row" and "confirmed at the shop" on every 17
+chat; also "say the exact price of a given unit is confirmed at the shop" under
+<owner_starting_prices>, the different-storage line, and the general gap rule "say you would rather
+confirm it at the shop". TEACHING v22: a new Business-info paragraph EVERYTHING IS IN STOCK (every
+brand, the 17, 17 Air, 17 Pro, 17 Pro Max and the 18 Pro / Pro Max included; "oui, on l'a, pis on en
+a plusieurs"; an exact model, chip, size, capacity or colour → "on a tous les MacBook Air en
+liquidation, la majorité des modèles sont en stock en liquidation", the family they named, then the
+block or the line, then the pack, then the invitation to compare in hand; nothing is ever to confirm
+/ check / verify at the shop or by phone — those words tell the buyer the trip may be for nothing);
+the 17 rule = its line like any family; the 18 = in stock and in liquidation too, no number, never
+"contact us to confirm"; Q "Is it still available", Q colour/capacity and Q "Which laptops exactly?
+/ MacBook Air M5?" rewritten as abundance; WORDS THAT NEVER GO gains the whole "maybe not" family (à
+confirmer, c'est à confirmer au magasin, en appelant, appelle pour vérifier, ça change avec les
+arrivages, ça dépend des arrivages, tu vérifies sur place, le modèle exact tu le vois sur place, ça
+se confirme au magasin, to confirm, check at the shop, verify in person, call to check, availability
+to confirm, depends on arrivals, stock changes); a NEW Instructions section WHAT MAKES THEM COME,
+eight closer's moves, two or three per message, rotated: abundance never verification; the visit is
+the good part not a condition ("tu passes, tu compares en main, pis tu repars avec aujourd'hui");
+the price is something we do for them; their words first ("Le 17 Pro Max? Oui, on l'a, pis le 17 Air
+aussi"); name the time never "if" + "dis CAROL, je m'occupe de toi"; honest urgency lightly once;
+the comparison they cannot get online; trust in one line; THE PACK item 1 and checklist item 1 say
+"in stock (never 'to confirm')"; THE PRICE PART 17/18 bullet and the no-line bullet rewritten; FIRST
+MESSAGE step 1, SECOND MESSAGE step 1 and the toolbox rewritten ("On te montre tous les modèles pis
+toutes les couleurs, tu choisis en main", "Ça rentre tous les jours pis les modèles populaires
+partent vite", the exact-model line, "fifteen minutes and they leave with it"); SITUATIONS gains the
+exact-model entry; Closer goals ×3; the four example sentences rewritten (laptop ×2, 18 Pro Max,
+S25-400 "centaines de demandes" → "on en a plusieurs en stock, tu viens les comparer en main"); FOUR
+new examples: the live 17 Pro Max chat (first message with the 17 line, second message to "ok mais
+il est vraiment là? je veux pas me déplacer pour rien"), MacBook Air M5 FR, iPad Pro M4 13 EN, S25
+Ultra "en noir 512" second message. Price list: the 18 line is now "iPhone 18 Pro / 18 Pro Max :
+disponibles, en liquidation aussi" (flagged to him: his old line, changed because it WAS the banned
+sentence; a price goes in the moment he pastes one). Boxes 4 (Closer goals) and 5 (Price list)
+changed; box 6 unchanged. 34 example messages, 0 banned phrases in them, 0 two-question messages,
+every message with the footer, the shop line and "on fait de notre mieux"; every remaining banned
+phrase in the boxes sits inside a never-clause (grep-verified). EXTENSION (prompt text only, NOT
+shipped, rides the next store build — the live v0.21.93 still carries the old lines until then):
+`buildOwnerPrompt` no-row line → "otherwise write no number for it: it is in stock and in
+liquidation like everything the owner sells, and its price is settled with them at the counter,
+never 'to confirm'" (the [GAP] stays); the <owner_starting_prices> line → "the exact price of a
+given unit follows what they pick and is settled with them at the counter, never 'confirmed at the
+shop', never 'to confirm'"; the different-storage line → "the storage they want is there too, and
+its price follows what they pick"; the general gap rule → "Say it as an invitation, never as a doubt
+(they can ask at the counter and we show them)"; the [GAP] description → "invite them to ask at the
+counter instead". store/smoke-listing.js and smoke-teach.js assertions follow; docs/app.js (the
+Business-tab explainer, two strings), CLAUDE.md and SETTINGS-REFERENCE.md descriptions follow;
+smoke-listing, smoke-guard, smoke-dashboard, smoke-learn and smoke-teach all pass. Known limitation
+left as is: `sameModel` matches a family line only against a Pro Max title (equal qualifier sets),
+so most iPhone listings get the "no row" note; the teaching carries it ("a note saying the price
+list has no row for this exact model means exactly this: the family line is the answer, no [GAP] for
+it"). THE REVIEW (v22 → v23, `mod23.js`, 23 replacements): (1-2) my own toolbox line "New arrivals
+every day and popular models go fast / Ça rentre tous les jours pis les modèles populaires partent
+vite" and move 6's "les vrais deals c'est pour ceux qui se déplacent" were the screenshot's "ça
+change avec les arrivages" in softer words — the s1 sim said "Les modèles populaires partent vite,
+pis ça rentre tous les jours" to the 17 Pro Max buyer; both lines are OUT of the toolbox, move 6 and
+Closer goals and BANNED in WORDS THAT NEVER GO (also "popular models go fast", "new arrivals every
+day"); the owner's two Business-info facts (line 27 "new arrivals every day, popular models go
+fast"; line 57 "hundreds of people write to us, so we keep the best deals for the serious ones")
+stay as background with a "(for you, never a sentence to a buyer)" note; (3) the laptop example's
+"Les MacBook partent en premier pis il reste 6 jours de liquidation" (invented scarcity about the
+model asked) → "Pis la liquidation dure encore 6 jours"; (4) the 18 Pro row "disponibles, en
+liquidation aussi" has no price, and `ownerEntryFor` matched it as "The owner's price-list line for
+this model … (starting prices: say à partir de)" — the s5 sim wrote "Pour le prix: iPhone 18 Pro /
+18 Pro Max : disponibles, en liquidation aussi"; the row LEFT the price list (the 18 rule lives in
+Business info + THE PRICE PART; an 18 listing now gets the no-row note) — RULE: never a price-list
+row without a price, the matcher feeds it as a price line; (5) "the best deals are for those who
+come in" says the chat price is not the real one — out of the toolbox/move 6/Closer goals; (6) right
+after a buyer names a number, "la meilleure option au prix que tu cherches" sounds like a yes →
+BUDGET + MODEL (Business info + THE PRICE PART) say "la meilleure option avec ton budget" after a
+named number, example 268 fixed; (7) the s4 sim's "the M4 13 inch included" — the exact-chip rule
+had been added after the run, re-simulated; (8) the s6 sim's "Le S25 Ultra 512 en noir, on l'a, pis
+on en a plusieurs" — colour/capacity rule: the abundance is of the model, the colours and the
+capacities ("toutes les couleurs pis toutes les capacités, plusieurs S25 Ultra en stock"), never
+several of one exact unit (line 28 + Q 66), re-simulated; (9) example "Half the people we see come
+from Laval" (invented statistic) → "Plenty of our customers"; (10) the seller's second example
+gained "en échange ton 13 vaut plus qu'en cash", "20 à 40 % sous le prix habituel" and the extra
+discount; (11) my "Fifteen minutes and they leave with it" (invented duration) merged into the
+test-in-hand line without the number; (12) pack item 4 names the two wordings of "on fait de notre
+mieux" (message 1 / message 2, the first never reused); (13) "unlocked" is phones only (pack 2,
+checklist 2); (14) background.js notes no longer say "settled with them at the counter" (now "the
+owner's starting prices, price help and invitation do the work"), smoke-listing/teach/guard pass.
+v23: 34 example messages, 0 banned phrases, every remaining banned phrase inside a never-clause.
+SIM: v22 run (six Haiku buyers on the exact system prompt, 32.8k tokens; local clock Sunday 13:24):
+all six pass the extension's guard, 0 "confirm / vérifier / arrivages" phrases, but the review
+caught the s1 reply's "Les modèles populaires partent vite, pis ça rentre tous les jours", the s4
+"the M4 13 inch included", the s5 "Pour le prix: iPhone 18 Pro / 18 Pro Max : disponibles, en
+liquidation aussi" and the s6 "Le S25 Ultra 512 en noir, on l'a, pis on en a plusieurs"
+(out22/replies-A.json). v23 re-run of those four (33.4k-token prompt, out23/replies-A.json), all
+pass the guard: 17 Pro Max FR first message 905 chars ("Oui, on l'a, le 17 Pro Max, pis on en a
+plusieurs, c'est la semaine de liquidation" + the 1040/1300/1480 line, no urgency line, one
+question); iPad Pro M4 13 EN 1069 ("Yes, we've got all the iPad Pros in liquidation, the majority of
+models in stock, sealed ones too, no need to call first", no chip confirmed; a leading [GAP] token
+the extension strips); 18 Pro Max FR 885 ("Oui, le 18 Pro Max, on l'a, pis on en a plusieurs, lui
+aussi en liquidation", no number, no list line quoted, [GAP] stripped); S25 Ultra "en noir 512"
+second message FR 1091 ("Noir, 512 Go, on a toutes les couleurs pis toutes les capacités, plusieurs
+S25 Ultra en stock, tu choisis le tien en main", 0 questions). Unchanged from v22 and not re-run:
+the 17 Pro Max second message under the memory note ("Oui, il est là, pis on en a plusieurs … tu
+viens les comparer en main pis tu repars avec aujourd'hui, rien payé avant", 1106 chars; a
+[VISIT:maybe] token the extension strips) and MacBook Air M5 FR 1058 ("Oui, on a tous les MacBook
+Air en liquidation, la majorité des modèles sont en stock" + the laptop block, shop line without 📍
+beside the 🫣). post.js "students" / "monthly" / "20-40" pack flags are the known regex false
+positives.
+
 ## AUTOLISTER — listing creation + delete-and-relist, PLANNED Oct 21 2026, ON HOLD since Oct 22 (nothing wired, nothing shipped)
 - **ON HOLD (Oct 22 2026).** The owner asked to build it and submit it to the Web Store; a safety check
   stopped that turn and it was not retried (it also stopped an Oct 12 draft of a Web Store extension

@@ -144,7 +144,7 @@ ok(c.startsWith('The buyer is writing from this listing: "iPhone 13 Pro Max 256 
 ok(c.includes('The owner\'s own entry for this item: "iPhone 13 Pro Max | 256GB | A+ | $650 CAD | available: yes".'), "the owner's row beside it, with the owner's price");
 ok(c.includes('The owner\'s price-list line for this model: "iPhone 13 Pro Max: à partir de 600$" (starting prices'), "and the owner's price-list line");
 c = B.listingContext(S, "Buyer · iPhone 14 Plus 128 Go 700$");
-ok(c.includes("have no row for this exact model: take no price from the title") && c.includes("otherwise say it is confirmed at the shop") && c.includes("[GAP]"), "no entry → no price from the title, and a [GAP] so the owner is asked");
+ok(c.includes("have no row for this exact model: take no price from the title") && c.includes("otherwise write no number for it") && c.includes("[GAP]"), "no entry → no price from the title, and a [GAP] so the owner is asked");
 c = B.listingContext({ listings: S.listings, noExactPrices: true }, "Buyer · iPhone 13 Pro Max 256 Go 650$");
 ok(c.includes('"iPhone 13 Pro Max | 256GB | A+ | available: yes"') && !c.includes("$650"), "noExactPrices → the entry shows availability, no price");
 c = B.listingContext(S, "Buyer · iPhone 13 Pro Max 512 Go 700$");

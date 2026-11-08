@@ -278,7 +278,7 @@ all chrome.debugger/CDP work) + Supabase dashboard in docs/. Live branch:
 - TEACHING (.73): THE OWNER IS THE ONLY TEACHER. `ownerTeachingOnly` (a NEW key, default
   on) → `buildOwnerPrompt` (background.js): the owner's sections first, in tags (info,
   instructions, rules, corrections, prices, listings, closing goal, examples), a contract
-  ("this text is all you know; a gap is 'best confirmed at the shop', never a guess"),
+  ("this text is all you know; a gap is an invitation to ask at the counter, never a guess"),
   then mechanics only — NO playbook, NO phrasebook, and an unwritten Instructions /
   Closer-goals box is one neutral line (`settings.ownerWrote`, set by getSettings), never
   this file's DEFAULTS text. Off = the .72 prompt byte for byte. `lessonFor` puts a graded
