@@ -905,6 +905,27 @@ message's invitation ("Avec 900 $, t'as plein d'options chez nous. Inquiète-toi
 la liste… la meilleure option avec ton budget", 0 questions, "avec ton budget" not "au prix que tu
 cherches"). out24/replies-A.json.
 
+**Twenty-fifth request — "ALL GOOD, DON'T MENTION ANY SUBSELL OR ANY GOOGLE REVIEWS" (Nov 8 2026)**
+(`teaching25.js` via `mod25.js` → `teaching-2026-11-08-v25.md`, THE version to paste, replaces v24;
+no new sim — a fact was removed, nothing that can produce hedging): after the v24 hand-over the
+owner wrote "all good, don't mention any subsell or any google reviews". SubSell has been out of
+every box since v21 (re-checked: 0). Every mention of the Google reviews and of the "1 700" figure
+left the boxes: Business info "A real store with more than 1 700 Google reviews" → "A real store,
+right beside métro Beaubien, open 7 days … Never a word about reviews, ratings or stars, never
+Google"; Q "Why so cheap? Is this legit?" without the reviews; WHAT MAKES THEM COME move 8 (trust) =
+the real store beside the metro, open 7 days, test in hand, pay at the counter, "never reviews,
+ratings, stars or Google"; the toolbox test-in-hand line; SITUATIONS trust doubt; WORDS THAT NEVER
+GO bans "Google", "avis Google", "reviews", "avis", "étoiles", "stars", any rating or review count;
+Closer goals "trust (real store, 1 700+ reviews …)" → "(a real store beside the metro, open 7 days,
+test it, pay at the counter)"; the two examples that quoted them (S24 Ultra EN second message "1
+700+ Google reviews" → "open 7 days"; 17 Pro Max second message "plus de 1 700 avis Google" →
+"ouvert 7 jours"). mod25 check: 37 example messages, 0 banned phrases (the BAD regex now includes
+google|review|avis|1 700|étoile|subsell), the only remaining "Google" / "review" / "avis" words sit
+inside the three never-clauses. STANDING RULE for every future teaching pass: never SubSell, never a
+website, never Google reviews, ratings, stars or a review count in the Marketplace bot's boxes; the
+trust line is the real store beside the metro, open 7 days, the test in hand and paying at the
+counter. Boxes 1-4 change; box 5 (price list) and box 6 unchanged.
+
 ## AUTOLISTER — listing creation + delete-and-relist, PLANNED Oct 21 2026, ON HOLD since Oct 22 (nothing wired, nothing shipped)
 - **ON HOLD (Oct 22 2026).** The owner asked to build it and submit it to the Web Store; a safety check
   stopped that turn and it was not retried (it also stopped an Oct 12 draft of a Web Store extension
