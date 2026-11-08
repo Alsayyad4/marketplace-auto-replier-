@@ -862,6 +862,49 @@ Air en liquidation, la majorité des modèles sont en stock" + the laptop block,
 beside the 🫣). post.js "students" / "monthly" / "20-40" pack flags are the known regex false
 positives.
 
+**Twenty-fourth request — THE LOWER-BUDGET LINE: "don't worry about the list prices, with your budget we find you lower prices too, say CAROL at the counter" (Nov 8 2026)**
+(`teaching24.js` via `mod24.js` → `teaching-2026-11-08-v24.md`, THE version to paste, replaces v23;
+scenarios24.json + out24/replies-A.json): right after the v23 hand-over the owner wrote "since we
+raised the list of iphone and samsung prices, if we knew the customer's budget, in one of the two
+messages we can include: don't worry about these prices, if they have a lower budget we will find
+them lower prices, let them ask for CAROL at the counter; include this in the smartest way possible,
+don't miss a point from my previous instructions". v24 adds THE LOWER-BUDGET LINE on top of v23,
+nothing removed: the moment a buyer's budget is known and sits below the list (a number, "mon budget
+c'est 300", "c'est trop cher", "too expensive"), that message, first or second, carries once
+"Inquiète-toi pas pour les prix de la liste: avec ton budget, on te trouve moins cher aussi, on
+s'arrange au comptoir, dis juste CAROL en arrivant" / "Don't worry about the list prices: with your
+budget we find you lower prices too, we work it out at the counter, just say CAROL when you get
+here" — general words, never their model at their number, never yes/no, never a number of ours, the
+v23 budget rules intact ("avec X $ t'as plein d'options", "la meilleure option avec ton budget",
+never "au prix que tu cherches"). When no budget is known and a family line or the Samsung block was
+just sent, the first message MAY invite it lightly, no question mark ("Pis si ton budget est plus
+bas, inquiète-toi pas, on a moins cher aussi, dis-le-moi" / "And if your budget is lower, no
+worries, we've got cheaper too, just tell me"): a budget that comes back gets the line in the second
+message (the invitation is my addition, the way to "know the customer's budget" inside the
+two-message rule). Where it lives: Business info new paragraph A LOWER BUDGET (after BUDGET +
+MODEL), Q "What can I get for my budget", Q "Can you do it for X $", NEW Q "It is too expensive, I
+only have X"; Instructions THE PACK item 4, checklist 4, WHAT MAKES THEM COME move 9 "The list is
+not a wall", THE PRICE PART BUDGET + MODEL bullet, FIRST MESSAGE step 3 (line + invitation), SECOND
+MESSAGE step 2, toolbox line, SITUATIONS budget entry + NEW "C'est trop cher" entry; Closer goals
+one clause; examples: the 300-cash EN first message, the S25-400 first and second messages, the
+S25-150 first message and the "95 % à 300" second message gain the line, the 17 Pro Max and S25
+Ultra "dispo" first messages gain the invitation, and THREE new examples (16 Pro "c'est trop cher
+pour moi, j'ai 500 max" FR first message; S24 Ultra "too expensive, i only have 350" EN first
+message; 17 Pro Max second message to "j'ai 900 max" after the invitation). 37 example messages, 0
+banned phrases, every budget example carries the line (mod24 check). Boxes 1-4 change; box 5 (price
+list) and box 6 unchanged from v23. SIM: three Haiku buyers on the exact v24 system prompt (36.6k
+tokens, local clock Sunday ~14:00), all pass the extension's guard, 0 banned phrases, 0 yes/no to a
+number, the lower-budget line in each: 16 Pro "c'est trop cher pour moi, j'ai 500 max" FR first
+message ("Ah, le 16 Pro, on l'a, pis on en a plusieurs" + the 16 line + "Inquiète-toi pas pour les
+prix de la liste: avec ton budget, on te trouve moins cher aussi, on s'arrange au comptoir, dis
+juste CAROL en arrivant. Avec 500 $ t'as plein d'options chez nous", one question); S24 Ultra "too
+expensive for me, i only have 350" EN first message (the block, "Don't worry about the list prices:
+with your budget we find you lower prices too, we work it out at the counter, just say CAROL when
+you get here", no model at 350); 17 Pro Max second message to "j'ai 900 max" after the first
+message's invitation ("Avec 900 $, t'as plein d'options chez nous. Inquiète-toi pas pour les prix de
+la liste… la meilleure option avec ton budget", 0 questions, "avec ton budget" not "au prix que tu
+cherches"). out24/replies-A.json.
+
 ## AUTOLISTER — listing creation + delete-and-relist, PLANNED Oct 21 2026, ON HOLD since Oct 22 (nothing wired, nothing shipped)
 - **ON HOLD (Oct 22 2026).** The owner asked to build it and submit it to the Web Store; a safety check
   stopped that turn and it was not retried (it also stopped an Oct 12 draft of a Web Store extension
