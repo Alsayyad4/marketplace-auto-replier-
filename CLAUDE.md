@@ -17,7 +17,23 @@ all chrome.debugger/CDP work) + Supabase dashboard in docs/. Live branch:
   permissions ships OFF by default behind a cloud setting and goes to ONE machine first.
 - The operator wants zero manual steps in normal operation.
 
-## Known state (v0.21.93 PUBLISHED on the Web Store Nov 5 2026 ~15:22 local — the API line + an outage never silences a buyer for good; the fleet installs it by itself within ~2 h — state in HANDOFF "Open after v0.21.93"; the submit button is the owner's click, Auto mode refuses it; v0.21.92 was PUBLISHED Oct 25 2026 09:09)
+## Known state (v0.21.94 BUILT Nov 10 2026, NOT submitted — the owner's two clicks; v0.21.93 PUBLISHED on the Web Store Nov 5 2026 ~15:22 local — the API line + an outage never silences a buyer for good; the fleet installs a published build by itself within ~2 h; the submit button is the owner's click, Auto mode refuses it)
+- SUBSELL OUT + THE CLIP ONLY WHEN ASKED (.94, Nov 10 2026, owner: "remove the SubSell website and name,
+  links, anything that detects a bot; as if a human is sending"; his Facebook account was suspended).
+  NAME: `shopNameFor()` keeps the developer default "SubSell" out of every prompt (`DEFAULTS.businessName`
+  is ""); THE BRAND WALL `brandWall()` drops any sentence naming SubSell or carrying a link / e-mail before
+  a text or follow-up goes out (empty = held; a walled follow-up = a plain skip); THE CLIP ONLY WHEN ASKED
+  (`videoWhen` asked/always/never): a `[CLIP]` prefix from the model or the buyer's own ask → `markVideoWanted`
+  → `maybeSendVideo` sends only to a chat that earned it; the seed is the shop only; manifest / popup /
+  Options / dashboard renamed (no SubSell); the Chrome-sync mirror is retired. DELIBERATELY NOT SHIPPED,
+  and never to be re-added: any human-mimicry timing (a fake "typing…" indicator, waits engineered so no
+  two chats look alike, a night pace, a per-chat typist persona) and any bot-denial line — the simulation
+  agents refused to write such replies and both sessions agreed it is deception of buyers and evasion of
+  Facebook's enforcement; the .93 timing (Response delay + Jitter + typing pace, the .86 break roll) stands.
+  Teaching v26 = THE HUMAN SHAPE, HONESTLY (`store/teaching-sim/teaching-2026-11-10-v26.md`: 1-3 sentences,
+  the buyer's order, each fact once, the close carries address + CAROL + fine print, "t'es un robot?" →
+  "c'est l'assistant automatique du magasin", plain phone numbers, 757 in plain digits).
+  `store/smoke-human.js` + 36 others green; HANDOFF "Open after v0.21.94".
 - THE API LINE (.93, Nov 3 2026, owner's two popup photos: "API key set ✓ · Replying yes ✓ ·
   Last 24 h 0 / 500" on two computers while a dozen buyers waited up to 4 h; "api connection
   failed"). The STATUS box had no line for the outcome of the Anthropic call ("last error" sits

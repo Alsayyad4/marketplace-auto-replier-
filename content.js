@@ -1,5 +1,5 @@
 /* =====================================================================
- * SubSell Marketplace Auto-Reply — content script (SIMPLE mode)
+ * Marketplace Auto-Reply (Liquidation Téléphone Montréal) — content script (SIMPLE mode)
  * ---------------------------------------------------------------------
  * Takes over the Messenger Marketplace inbox and does ONE thing:
  *
@@ -73,6 +73,27 @@
     return Math.min(cap, Math.round((n / cps) * 1000));
   }
   const log = (...a) => console.log("[SubSell]", ...a);
+  // (v0.21.94) THE CLIP ONLY WHEN ASKED (settings.videoWhen = "asked"): the two ways a chat earns its demo clip are
+  // the model's [CLIP] token (parseReply, background.js) and the buyer's own words below; markVideoWanted remembers
+  // it and maybeSendVideo reads the mark.
+  // Does this buyer message ask to SEE the phone (a video, photos, pictures)? The owner's
+  // rule: the demo clip goes out only then (settings.videoWhen = "asked"); the model's
+  // own [CLIP] token is the other way a chat earns its clip.
+  // (review, Nov 10) an ASK only: "je veux voir le 13 en magasin" or "sur les photos de l'annonce" is not a request for a clip
+  const ASKS_CLIP_RE = /vid[ée]o|\bvideo\b|montre[- ]?(?:moi|le|la|les)\b|\bshow me\b|\bsee (?:it|the phone|a video)\b|\ben vrai\b|(?:t'?as|as[- ]tu|avez[- ]vous|envoie|envoyer|envoyez|send|got)[^.?!]{0,25}\b(?:photos?|pics?|pictures?|images?)\b/i;
+  function asksForClip(text) { return ASKS_CLIP_RE.test(String(text || "")); }
+  // Remember that THIS chat earned its clip (the buyer asked, or the model said [CLIP]);
+  // maybeSendVideo reads the mark. Kept small: entries older than 30 days are dropped.
+  async function markVideoWanted(id, sidebarId) {
+    try {
+      const w = (await getLocal(["videoWanted"])).videoWanted || {};
+      const now = Date.now();
+      for (const k of Object.keys(w)) if (now - (Number(w[k]) || 0) > 30 * 24 * 3600 * 1000) delete w[k];
+      if (id) w[id] = now;
+      if (sidebarId && sidebarId !== id) w[sidebarId] = now;
+      await setLocal({ videoWanted: w });
+    } catch (e) { /* the clip is a courtesy; the text still goes out */ }
+  }
   const safe = (fn, fb) => {
     try {
       return fn();
@@ -3875,6 +3896,20 @@
       // corrupt old local file from blocking the whole set via the complete-set
       // guard, and (b) buyers receiving local+central duplicates.
       if (central.length) local = [];
+      // (v0.21.94) THE CLIP ONLY WHEN ASKED (settings.videoWhen, default "asked"): the demo clip goes out only in a
+      // chat that earned it — the model's [CLIP] token or the buyer's own words (markVideoWanted, handleThread) — or
+      // on the popup's manual resend. "never" = no clip at all; "always" = the pre-.94 habit (one set per chat).
+      if (settingsOk) { // a settings hiccup falls through to the retry queue below, never to a dropped set
+        const when = String((sCfg && sCfg.videoWhen) || "asked");
+        if (when === "never") { clearPend(); vstat("videos: off (Send the clip = never)"); return; }
+        if (when !== "always") {
+          const wv = await getLocal(["videoWanted", "videoAttempts"]);
+          const wanted = wv.videoWanted || {};
+          const mr = wv.videoAttempts && wv.videoAttempts[id] && wv.videoAttempts[id].manualResend;
+          const manual = !!(mr && Date.now() - mr < 10 * 60000);
+          if (!wanted[id] && !(sidebarKey && wanted[sidebarKey]) && !manual) { clearPend(); vstat("clip waits until this buyer asks to see it (" + (name || id) + ")"); return; }
+        }
+      }
       if (!settingsOk && !central.length && !local.length) {
         // Queue instead of dropping: a one-cycle settings hiccup used to consume
         // this chat's visit permanently (next visit could be days away on rotation).
@@ -5796,7 +5831,7 @@
     // Remember the billed text until it's actually delivered — an abort below used
     // to throw it away and bill a fresh call on the retry. (v0.21.91) Memoized BEFORE
     // the clip engine runs: an abort during a long attach replays it free.
-    if (!memoOk) pendingReply[id] = { buyerMessage: turn.buyerMessage, transcript: turn.transcript, text: reply.text, at: Date.now() };
+    if (!memoOk) pendingReply[id] = { buyerMessage: turn.buyerMessage, transcript: turn.transcript, text: reply.text, at: Date.now(), clip: reply.clip === true }; // (v0.21.94) clip: the model's [CLIP] survives a replay
 
     // Ships the text reply exactly once — called by the video engine right after
     // the first clip goes out, or below when there are no clips to send.
@@ -5944,6 +5979,10 @@
     // (attachMiss): the buyer's answer must not wait a minute or two behind an
     // attach that is not taking. Reply now; the set goes to the pending lane
     // (bounded native retries with channel rotation, then the link fallback).
+    // (v0.21.94) THE CLIP ONLY WHEN ASKED: the model's [CLIP] token (kept through a replay by
+    // the memo) or the buyer's own words ("vidéo", "photo", "show me") earn this chat its
+    // clip; maybeSendVideo reads the mark and otherwise lets the chat be (videoWhen "asked").
+    if (reply.clip === true || (memoOk && memo && memo.clip === true) || asksForClip(turn.buyerMessage)) await markVideoWanted(id, sidebarId);
     const attachFailing = (attachMiss.streak || 0) >= 2;
     if (!videoLocked.has(id) && ((buyersWaitingCount(id, sidebarId) >= 3 && !cdpAvailable()) || attachFailing)) {
       // Never queue a chat whose set is already CONFIRMED delivered (persisted
@@ -6760,6 +6799,7 @@
         try {
           const nm = safe(() => (document.title || "").replace(/\s*[|·—-]\s*Messenger.*$/i, "").trim(), "") || id;
           setStatus({ lastAction: "manual: sending demo videos to the open chat…", currentThread: nm });
+          await markVideoWanted(id, null); // (v0.21.94) a manual send is an ask
           await maybeSendVideo(id, nm, true, id);
         } catch (e) {
           setStatus({ lastError: "video error: " + ((e && e.message) || e) });

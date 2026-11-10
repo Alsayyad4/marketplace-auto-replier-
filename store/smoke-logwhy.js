@@ -36,11 +36,11 @@ const cloudOn = { ok: true, loggedIn: true, email: "op@example.com", holdLine: "
 const text = (s, c) => emptyLogLines(Object.assign({}, base, s || {}), c === undefined ? cloudOn : c, T0).join("\n");
 
 let t = text({});
-ok(/^Nothing has been sent from this computer yet — this copy of SubSell was installed here on /.test(t), "healthy: opens with 'nothing sent yet' and the install date — " + t.split("\n")[0]);
+ok(/^Nothing has been sent from this computer yet — this copy of the extension was installed here on /.test(t), "healthy: opens with 'nothing sent yet' and the install date — " + t.split("\n")[0]);
 ok(/Bot: ON ✓/.test(t) && /Cloud login: op@example\.com ✓/.test(t) && /API key: set ✓/.test(t) && /Messenger: 1 tab\(s\) open ✓/.test(t) && /Sent today from this computer: 0\./.test(t),
    "healthy: every line is a ✓ and today reads 0");
 t = text({ enabled: false });
-ok(/Bot: OFF — this computer answers nobody until you press "Turn ON" in the SubSell popup/.test(t), "OFF: names the popup's Turn ON");
+ok(/Bot: OFF — this computer answers nobody until you press "Turn ON" in the extension's popup/.test(t), "OFF: names the popup's Turn ON");
 t = text({}, { ok: true, loggedIn: false });
 ok(/Cloud login: none — log in on the General tab/.test(t), "no login: points at the General tab");
 t = text({}, { ok: true, loggedIn: true, email: "op@example.com", holdLine: "Supabase is limiting logins from this internet connection for a few minutes — next try 09:00, by itself" });
@@ -67,7 +67,7 @@ ok(/if \(!show\) \{ el\.style\.display = "none"; return; \}/.test(opt), "a non-e
 ok(/type: "GET_STATUS"/.test(opt.slice(from)) && /type: "CLOUD_STATUS"/.test(opt.slice(from)), "the box is built from GET_STATUS + CLOUD_STATUS");
 ok(/a\.href = DASHBOARD_URL \+ "#activity";/.test(opt) && /alsayyad4\.github\.io\/marketplace-auto-replier-\/docs\//.test(opt), "the box links to the dashboard's Activity tab"); // (v0.21.89) at the tab
 ok(/id="logWhy"/.test(optHtml), "options.html carries the box");
-ok(/sent from THIS computer by this copy of SubSell/.test(optHtml) && !/this account sent/.test(optHtml), "the hint says THIS computer; 'this account sent' is gone");
+ok(/sent from THIS computer by this copy of the extension/.test(optHtml) && !/this account sent/.test(optHtml), "the hint says THIS computer; 'this account sent' is gone");
 const gs = bg.slice(bg.indexOf('case "GET_STATUS"'), bg.indexOf('case "GET_DIAGNOSTIC"'));
 ok(/const installTs = await getInstallTs\(\);/.test(gs) && /installTs,\n/.test(gs), "GET_STATUS answers with installTs");
 ok(/chrome\.tabs\.query\(\{ url: \["https:\/\/\*\.messenger\.com\/\*", "https:\/\/www\.facebook\.com\/messages\/\*", "https:\/\/www\.facebook\.com\/marketplace\/\*"\] \}/.test(gs) && /messengerTabs,/.test(gs) && /lastError \? -1 :/.test(gs),

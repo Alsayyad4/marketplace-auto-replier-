@@ -16,6 +16,7 @@
     responseDelaySec: 30,
     jitterSec: 60,
     typingPaceMaxSec: 20, // (v0.21.71) MUST match background.js DEFAULTS
+    videoWhen: "asked", // (v0.21.94) MUST match background.js DEFAULTS — the clip only when a buyer asks to see the phone
     threadMemory: true, // (v0.21.71) MUST match background.js DEFAULTS
     replyGuard: true, // (v0.21.85) MUST match background.js DEFAULTS
     humanTouch: true, // (v0.21.85) MUST match background.js DEFAULTS
@@ -42,9 +43,7 @@
     closerMode: true,
     closerIntensity: "medium",
     noExactPrices: true,
-    visitConfirmEnabled: true,
-    visitConfirmAfterMin: 120,
-    businessName: "SubSell",
+    businessName: "", // (v0.21.94) the shop's own name; "SubSell" (the old default) is never said to a buyer
     businessAddress: "757 Rue Beaubien E, Montréal",
     businessHoursText: "9AM–10PM, 7 days",
     businessInfo: "",
@@ -52,7 +51,6 @@
     examples: "",
     closerGoals: "",
     priceList: "",
-    visitConfirmMessage: "",
     listings: [],
     followUps: [],
     videos: [],
@@ -92,13 +90,13 @@
     ["humanCadence", "checked"], ["skipChance", "number"], ["breakChance", "number"], ["breakMinMin", "number"], ["breakMaxMin", "number"],
     ["warmupEnabled", "checked"], ["warmupDays", "number"], ["warmupStartCap", "number"],
     ["offPlatformGuard", "checked"], ["closerMode", "checked"], ["closerIntensity", "value"], ["noExactPrices", "checked"],
-    ["visitConfirmEnabled", "checked"], ["visitConfirmAfterMin", "number"],
     ["businessName", "value"], ["businessAddress", "value"], ["businessHoursText", "value"],
     ["ownerTeachingOnly", "checked"], // (v0.21.73)
     ["businessInfo", "value"], ["instructions", "value"], ["examples", "value"],
-    ["closerGoals", "value"], ["priceList", "value"], ["visitConfirmMessage", "value"],
+    ["closerGoals", "value"], ["priceList", "value"],
     ["demoVideoDelaySec", "number"], ["demoVideoBetweenSec", "number"],
     ["videoRetryMax", "number"], ["videoCompleteSet", "checked"], // (v0.21.72)
+    ["videoWhen", "value"], // (v0.21.94) the clip only when a buyer asks to see the phone
     // videoLinkOptIn / videoLinkUrl / videoLinkText: no field any more. The demo
     // is sent as a FILE or not at all — the link sender was deleted in v0.21.60
     // and the owner asked for the option itself to go ("sounds like a scam").
@@ -495,7 +493,7 @@
       renderAll();
       const saved = await saveConfig(true, SYSTEM_SAVE);
       flash(saved
-        ? "Your account was empty — the SubSell starter setup was put back (business info, hours, 2 demo videos). Only the API key is missing: paste it on the General tab."
+        ? "Your account was empty — the starter setup was put back (shop name, address, hours). Paste your teaching on the Business tab and the API key on the General tab."
         : "Your account is empty and the starter setup could not be saved — press Save to cloud to retry.", !saved);
       return;
     }
@@ -616,7 +614,7 @@
   // draft of this code ran the offer BEFORE those load-time saves, which then
   // destroyed it on every reload; the 3-refuter review caught that.
   const DRAFT_KEY = "subsell_unsaved_teaching";
-  const DRAFT_FIELDS = ["businessName", "businessAddress", "businessHoursText", "businessInfo", "instructions", "examples", "closerGoals", "priceList", "visitConfirmMessage"];
+  const DRAFT_FIELDS = ["businessName", "businessAddress", "businessHoursText", "businessInfo", "instructions", "examples", "closerGoals", "priceList"]; // (v0.21.94) the visit-confirm box is gone (its sender was dead code)
   const asText = (v) => (v == null ? "" : String(v));
   let draftOffered = false; // an offer is on screen: the stored draft is frozen until the operator decides
   function draftKey() { return DRAFT_KEY + (session && session.user && session.user.id ? ":" + session.user.id : ""); }
@@ -957,9 +955,10 @@
     const has = (v) => !!String(v == null ? "" : v).trim();
     const L = [];
     L.push("── WHO YOU ARE ──");
-    L.push(only
-      ? `You answer buyers on Facebook Marketplace for "${settings.businessName || "(no name)"}", writing as the seller.`
-      : `You are the auto-reply assistant for "${settings.businessName || "(no name)"}".`);
+    // (v0.21.94) mirrors shopNameFor() in background.js: the developer default "SubSell" is never the shop's name
+    const shopName = /^sub[\s-]?sell\b/i.test(String(settings.businessName || "").trim()) ? "" : String(settings.businessName || "").trim();
+    L.push(shopName ? `You answer buyers on Facebook Marketplace for "${shopName}", writing as the seller.` : "You answer buyers on Facebook Marketplace for the shop described below, writing as the seller.");
+    L.push("The shop has only the name you wrote for it: never another company or brand name, never a website or any web address. A sentence that names SubSell or carries a link is removed before it is sent (the brand wall).");
     L.push(`Address: ${settings.businessAddress || "(none)"}. Hours: ${settings.businessHoursText || "(none)"}.`);
     if (only) {
       L.push("");
@@ -1347,7 +1346,7 @@
   // same site). The two markers are comments in that file; store/smoke-teach.js fails if they move.
   const CORE_BEGIN = "/* ===================== (v0.21.73) THE OWNER IS THE ONLY TEACHER";
   const CORE_END = "/* ---------------- video fetch ---------------- */";
-  const CORE_VER = "20261103"; // (v0.21.93) the API line; (v0.21.88) the listing line + the owner's entry for the item
+  const CORE_VER = "20261110"; // (v0.21.94) [CLIP] + the neutral seed; (v0.21.93) the API line; (v0.21.88) the listing line + the owner's entry for the item
   let teachCore = null, teachCoreErr = "";
   async function loadTeachCore() {
     if (teachCore) return teachCore;
@@ -1391,7 +1390,7 @@
     if (!out || out.error) { tryNote("The AI call failed: " + ((out && out.error) || "no answer"), true); return; }
     const p = core.writeReply ? out : core.parseReply(out.text);
     const isText = p.kind === "text";
-    const shown = isText ? p.text : p.kind === "human" ? "(the bot would hand this chat to you: " + (p.reason || "it needs you") + ")" : p.kind === "held" ? "(held back, nothing sent: it wrote a note about the chat instead of a message, twice. You would be notified.)" : "(the bot would stay silent)";
+    const shown = isText ? p.text : p.kind === "human" ? "(the bot would hand this chat to you: " + (p.reason || "it needs you") + ")" : p.kind === "held" ? "(held back, nothing sent: " + (p.reason || "it wrote a note about the chat instead of a message, twice") + ". You would be notified.)" : "(the bot would stay silent)";
     tryState.turns.push({ role: "buyer", text: msg, ctx: true }, { role: "me", text: shown, ctx: isText });
     tryState.last = { buyer: msg, reply: isText ? p.text : "" };
     $("tryText").value = "";
@@ -1579,7 +1578,7 @@
    * teaching, the last 20 messages — and copies it. It never includes the API key
    * or any password (the teaching preview has neither). */
   async function buildReport() {
-    const L = ["SubSell dashboard report — " + new Date().toLocaleString() + " — dashboard build " + CORE_VER];
+    const L = ["Marketplace Auto-Reply dashboard report — " + new Date().toLocaleString() + " — dashboard build " + CORE_VER];
     const sec = (title, body) => { L.push(""); L.push("== " + title + " =="); L.push(body && String(body).trim() ? String(body).trim() : "(nothing)"); };
     sec("Computers", $("teachFleet") && $("teachFleet").textContent);
     sec("Cost", $("costLine") && $("costLine").textContent);

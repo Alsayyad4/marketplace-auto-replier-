@@ -325,7 +325,7 @@
               (resp && resp.error ? " [" + resp.error + "]" : "")
         );
       }
-      const report = "===== SubSell DIAGNOSTIC — paste this whole block to Claude =====\n" + parts.join("\n---\n") + "\n===== END =====";
+      const report = "===== AUTO-REPLY DIAGNOSTIC — paste this whole block to Claude =====\n" + parts.join("\n---\n") + "\n===== END =====";
       $("dump").value = report;
       try {
         await navigator.clipboard.writeText(report);

@@ -1,0 +1,12 @@
+[
+ { "id": "s1_where_first_fr", "thread": "Marc · iPhone 14 Pro Max 256 Go 1$", "turns": ["vous êtes où?", "c'est combien le 14 pro max?", "ok je passe demain après le travail vers 17h30"] },
+ { "id": "s2_new_first_fr", "thread": "Sophie · iPhone 15 Pro 128 Go 1$", "turns": ["il est neuf?", "la batterie est à combien? pis c'est quoi le vrai prix", "ok et vous êtes ouverts jusqu'à quelle heure?"] },
+ { "id": "s3_budget_first_fr", "thread": "Karim · iPhone 16 Pro 256 Go 1$", "turns": ["c'est trop cher pour moi j'ai 500 max", "ok et si j'amène mon vieux iphone 11?", "je peux passer ce soir?"] },
+ { "id": "s4_howmuch_en", "thread": "Jess · Samsung Galaxy S24 Ultra 256GB $1", "turns": ["how much?", "is it unlocked? and is it new or used", "where are you located exactly?"] },
+ { "id": "s5_dispo_bot_fr", "thread": "Amel · iPhone 12 64 Go 1$", "turns": ["c'est encore dispo?", "t'es un robot ou quoi?", "ok"] },
+ { "id": "s6_seller_fr", "thread": "Youssef", "turns": ["je veux vendre mon iphone 13 128gb, vous donnez combien?", "il est en parfait état batterie 95%, tu donnes combien exactement?", "ok je viens demain matin"] },
+ { "id": "s7_colour_delivery_fr", "thread": "Nadia · Samsung Galaxy S25 Ultra 512GB 1$", "turns": ["vous l'avez en noir 512?", "c'est combien exactement le s25 ultra?", "vous faites la livraison?"] },
+ { "id": "s8_hold_en", "thread": "Dan · iPhone 13 128GB $1", "turns": ["still available?", "can you hold it for me till saturday?", "ok thanks"] },
+ { "id": "s9_macbook_fr", "thread": "Pierre · MacBook Air 13 1$", "turns": ["vous avez le macbook air m5?", "lesquels exactement vous avez? et le prix?", "ok je passe demain"] },
+ { "id": "s10_number_video_fr", "thread": "Lina · iPhone 14 128 Go 1$", "turns": ["c'est quoi votre numéro de téléphone?", "ok c'est combien le 14? pis je peux voir une vidéo?", "parfait à tantôt"] }
+]

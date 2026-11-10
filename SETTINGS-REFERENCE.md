@@ -38,6 +38,7 @@ endpoint serves that object to the extension.
 | Break chance / reply (0–1) | `breakChance` | number | `0.05` | Chance, after each DELIVERED reply (`LOG_EVENT` text), of a break (`cadenceAfterReply`, one break at a time). |
 | Break min (min) | `breakMinMin` | number | `3` | Min break length. |
 | Break max (min) | `breakMaxMin` | number | `18` | Max break length. |
+| Send the clip | `videoWhen` | enum | `asked` | (v0.21.94, NEW key; dashboard Videos tab) `asked` = the demo clip goes out only in a chat that earned it: the model's `[CLIP]` token (a third silent prefix in `parseReply`, taught in the owner prompt only when clips exist and this is `asked`) or the buyer's own words asking to see the phone (`asksForClip`, content.js), remembered per chat in `videoWanted` (`markVideoWanted`) and read by `maybeSendVideo`; the popup's manual resend also counts as an ask. `always` = the pre-.94 habit (one set per chat right after the first reply). `never` = no clip. With no clip uploaded the prompt says the bot never sends or promises one. |
 | Warm-up mode | `warmupEnabled` | bool | `true` | (v0.21.86 — enforced on every gate now; before, only the alarm path read it and the popup said "warm-up isn't enforced") A NEW account ramps its daily cap from `warmupStartCap` (day 0) to `dailyCap` over `warmupDays`, linearly. Day 0 = this install's first run (`installTs`). An established account ends the ramp for good (`warmupDone`, `markWarmDone`) on either evidence: (a) the inbox list already shows a chat WE answered ("You: …") whose age tag (minutes to years) is older than the install — a new account has none, one is enough; judged by content.js once a minute while the ramp runs, before the pause, no chat opened, no cloud needed (`sidebarOurRow`, `sidebarAgeMsLoose`, `WARM_EVIDENCE_LOCAL`); (b) an opened chat carries a bot row (text / follow-up / video, any computer) older than the install − 1 h, compared on server time (`noteWarmEvidence`, `memSkewMs`; needs the chat memory). While the ramp holds a computer, one `video-status` Activity row a day names it (`noteWarmHold`). The ramp never exceeds `dailyCap` (a start cap of 10 with a daily cap of 5 = 5). So the move to the Web Store build throttles nobody; only a genuinely new Facebook account ramps. Popup: "· warm-up day 2 of 7" / "warm-up skipped (account was already active)". |
 | Warm-up days | `warmupDays` | number | `7` | Ramp length. `0` = no ramp. |
 | Day-0 daily cap | `warmupStartCap` | number | `10` | Daily cap on day 0 (floor of the ramp). |
@@ -45,8 +46,8 @@ endpoint serves that object to the extension.
 | Closer mode | `closerMode` | bool | `true` | Drive buyers to call/visit; trade-in/buyback/liquidation. |
 | Closing style | `closerIntensity` | enum | `medium` | `soft` (one gentle invite) / `medium` (guide toward the visit) / `master` (full sales playbook: micro-commitments, assumptive & two-option closes, reserve technique, honest urgency, objection handling, one advancing question per message, stop-selling-after-yes). Only applies when Closer mode is ON. |
 | Never quote exact prices | `noExactPrices` | bool | `true` | Promise best price in person (ignored if `priceList` set). |
-| Silent visit confirmation | `visitConfirmEnabled` | bool | `true` | After a buyer says they'll come, ask "still coming?" silently. |
-| Ask after (minutes) | `visitConfirmAfterMin` | number | `120` | Delay before the silent visit confirm. |
+| *(box removed in v0.21.94, the sender never fired)* Silent visit confirmation | `visitConfirmEnabled` | bool | `true` | After a buyer says they'll come, ask "still coming?" silently. |
+| *(box removed in v0.21.94)* Ask after (minutes) | `visitConfirmAfterMin` | number | `120` | Delay before the silent visit confirm. |
 
 ## Tab: Business
 
@@ -61,7 +62,7 @@ endpoint serves that object to the extension.
 | Example conversations | `examples` | string | `""` | Few-shot buyer→reply pairs; strongly shapes voice. |
 | Closer goals | `closerGoals` | string | (see defaults) | Closing strategy text (used when Closer mode on). |
 | Price list | `priceList` | string | `""` | Starting prices, one per line. When set, the bot shares them (overrides `noExactPrices`). |
-| Visit-confirm message | `visitConfirmMessage` | string | `""` | Blank = built-in bilingual default. |
+| *(box removed in v0.21.94)* Visit-confirm message | `visitConfirmMessage` | string | `""` | Blank = built-in bilingual default. |
 
 ## Tab: Listings
 

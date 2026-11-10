@@ -1,5 +1,5 @@
 /* =====================================================================
- * SubSell Marketplace Auto-Reply — background service worker
+ * Marketplace Auto-Reply (Liquidation Téléphone Montréal) — background service worker
  * ---------------------------------------------------------------------
  * Responsibilities:
  *   - Anthropic Claude API calls (claude-sonnet-4-6) with the
@@ -31,6 +31,11 @@ const DEFAULTS = {
   // length: up to this many extra seconds are added to the delay above, at the
   // Typing WPM speed configured below (wpmMin..wpmMax). 0 = off.
   typingPaceMaxSec: 20,
+  // (v0.21.94) THE CLIP ONLY WHEN ASKED: "asked" = the demo video goes out only when the
+  // buyer asks to see the phone (the model's [CLIP] token, or the buyer's own words);
+  // "always" = the pre-.94 habit (one set per chat right after the first reply);
+  // "never" = no clip at all.
+  videoWhen: "asked",
   // (v0.21.71) Chat memory across computers: before every reply and every video
   // the Activity log (subsell_messages) is read back for that chat, so a message
   // another computer already answered is never answered again, a demo video any
@@ -65,7 +70,10 @@ const DEFAULTS = {
   businessHoursEnabled: true, // legacy, read by builds before v0.21.75 only
   businessHoursStart: 9, // 9 AM — start of the window for bot-started messages
   businessHoursEnd: 22, // 10 PM — end of that window
-  businessName: "SubSell",
+  // (v0.21.94) The shop's chat name is the owner's to write (dashboard Business name box). "SubSell" was the
+  // developer default until .93 and every row created before .94 still carries it; shopNameFor() keeps it out
+  // of every prompt — SubSell is another company and buyers were told it was the shop's name (owner, Nov 10 2026).
+  businessName: "",
   businessAddress: "757 Rue Beaubien E, Montréal",
   businessHoursText: "9AM–10PM, 7 days",
   businessInfo:
@@ -180,54 +188,24 @@ const DEFAULTS = {
 // not fight; and it runs once per row stamp. The API key is NOT in here and cannot
 // be — a secret that only ever lived in that row is gone, and Anthropic never
 // shows a key twice. Everything else comes back.
-// Every fact below is traced to a file in the SubSell website repo or verified
-// against the live Supabase project (supabase/RECOVERY.md has the sources).
-// Nothing is invented. Keys that DEFAULTS already ship with good text
-// (instructions, closerGoals) are deliberately absent so the shipped text wins.
-// priceList and listings are absent ON PURPOSE: the only surviving numbers are
-// months stale and the site's own list contradicts itself (an iPhone 12 Pro Max
-// above a 13 Pro Max), and with no price list the bot stays in its designed mode —
-// best price in person, come to the shop. Paste a list later if you want quotes.
+// (v0.21.94) The starter setup is the SHOP's and nothing else. The owner (Nov 10 2026) wants the SubSell
+// company and its website out of the bot for good, so the seed carries the shop's name, address and hours
+// and one neutral line: no other brand, no website, no reviews, no warranty number, no demo clips (a clip to
+// every first-contact buyer reads as a bot; the owner adds clips on the dashboard's Videos tab if he wants
+// them). The teaching itself (prices, instructions, examples) is the owner's paste, never seeded. Keys that
+// DEFAULTS already ship with text (instructions, closerGoals) are absent so the shipped text wins; priceList
+// and listings are absent on purpose. docs/seed.js is the byte-identical copy (store/smoke-seed.js).
 const SEED_CONFIG = {
   model: "claude-haiku-4-5",
-  businessName: "SubSell",
-  businessAddress: "757 Rue Beaubien Est, Montréal (Rosemont – La Petite-Patrie), 30 seconds from Métro Beaubien",
-  // The shop closes at 9 PM and the prompt says so. businessHoursStart/End are
-  // NOT here on purpose: they are the REPLY GATE (a message outside the window is
-  // skipped, not queued — withinBusinessHours), and the shipped 9–22 window lets
-  // the bot still answer a 21:30 buyer with "on est fermé là, passe demain".
-  businessHoursText: "9AM–9PM, 7 days",
-  // No phone number in here: the platform guard forbids writing one in chat
-  // (Facebook flags it) and a buyer who asks for one is escalated [HUMAN].
+  businessName: "Liquidation Téléphone Montréal",
+  businessAddress: "757 Rue Beaubien E, Montréal (métro Beaubien)",
+  businessHoursText: "9h à 21h (9am to 9pm), 7 jours sur 7",
   businessInfo:
-    "SubSell is an independent used & refurbished phone shop in Montréal, open since 2017, at 757 Rue Beaubien Est " +
-    "(Rosemont – La Petite-Patrie), 30 seconds on foot from Métro Beaubien (orange line). Open 7 days a week, " +
-    "9 AM to 9 PM, no appointment needed. Bilingual French/English. Metered parking on Beaubien Est, free " +
-    "side-street parking after 6 PM; bus 18 runs along Beaubien; bike rack in front. " +
-    "Every iPhone we sell is unlocked, tested on 30+ points, and comes with a 6-month SubSell warranty plus " +
-    "accessories (charger, case, screen protector already installed). 7-day exchange for another model of equal " +
-    "or higher value (price difference payable, phone returned in the condition it was sold). A phone can be " +
-    "reserved free for 24 hours with no deposit through the website — nothing is paid online; the buyer sees the " +
-    "exact phone, tests it with us (screen, battery, cameras, Face ID, network) and pays in person only once " +
-    "satisfied. We also BUY used phones and pay cash the same day (or instant Interac e-Transfer) — when we buy or " +
-    "trade in, never store credit, never gift cards. Trade-ins welcome, including cross-brand (e.g. Samsung → " +
-    "iPhone): the old phone's value comes off the price and the buyer pays only the difference — and if their " +
-    "phone is worth more, we pay them the difference in cash. We also buy Samsung Galaxy, iPads, MacBooks, Apple " +
-    "Watch and game consoles; iCloud-locked phones cannot be bought, and government photo ID is required on every " +
-    "purchase. 1,500+ Google reviews at 4.9/5.",
-  // Two clips, not three: every clip here is sent to EVERY buyer, in one chat.
-  // The general iPhone demo plus the newest upload; the 2025-09-30 clip (which was
-  // uploaded twice, 9 s apart) can be added back from the dashboard's Videos tab.
-  demoVideoUrls: [
-    {
-      name: "Video_iPhone.mp4",
-      url: "https://tcqunihripihroseswgy.supabase.co/storage/v1/object/public/subsell-videos/3983744e-d577-4be1-8bd7-0a53f68071af/1780943854937-Video_iPhone.mp4",
-    },
-    {
-      name: "WhatsApp Video 2026-07-06.mp4",
-      url: "https://tcqunihripihroseswgy.supabase.co/storage/v1/object/public/subsell-videos/3983744e-d577-4be1-8bd7-0a53f68071af/1783399350640-WhatsApp_Video_2026-07-06_at_9.35.54_PM.mp4",
-    },
-  ],
+    "Liquidation Téléphone Montréal: refurbished, used and brand-new phones, tablets and laptops at liquidation prices. " +
+    "757 Rue Beaubien E, Montréal, right beside métro Beaubien, open 9h à 21h (9am to 9pm), 7 days a week, no appointment needed. " +
+    "Buyers test the device in hand and pay at the counter, nothing before. Everything else the bot may say comes from the owner's " +
+    "teaching in the web app (Business tab): paste it there after a reset.",
+  demoVideoUrls: [],
 };
 
 const LOG = (...a) => console.log("[SubSell-BG]", ...a);
@@ -470,7 +448,11 @@ function getSettings() {
           finish(res.remoteConfig);
           return;
         }
-        syncedConfigRead((cfg, hadSync) => finish(hadSync ? cfg : res.settings || {}));
+        // (v0.21.94) the Chrome-sync mirror is retired: it could not hold the teaching any
+        // more (over the 100 KB quota since v18) and a copy left behind on a computer with
+        // no cloud login still answered buyers with the old brand. A computer that has not
+        // logged in runs on this file's neutral defaults until it does.
+        finish(res.settings || {});
       });
     });
   });
@@ -1029,7 +1011,7 @@ function apiNote(ok, err, model) {
         try { mirrorToCloud({ action: "apierr", thread: null, threadId: null, buyer: null, reply: apiDiagLine(next, now) }); } catch (e) { /* the row is a courtesy */ }
         if (!next.ok) {
           const h = apiErrorHint(next.error);
-          try { chrome.notifications.create({ type: "basic", iconUrl: "icon128.png", title: "SubSell — Claude is not answering on this computer", message: (h.what + " " + h.fix).slice(0, 500), priority: 2 }); } catch (e) { /* no notifications */ }
+          try { chrome.notifications.create({ type: "basic", iconUrl: "icon128.png", title: "Marketplace Auto-Reply — Claude is not answering on this computer", message: (h.what + " " + h.fix).slice(0, 500), priority: 2 }); } catch (e) { /* no notifications */ }
         }
       }
       chrome.storage.local.set(put, () => void chrome.runtime.lastError);
@@ -2826,6 +2808,14 @@ function lessonClash(c, buyerMessage, item) {
   const qm = modelKeys(String(buyerMessage || "") + " " + String(item || ""));
   return !!(lm.digits.size && qm.digits.size && !sameModel(lm, qm).same);
 }
+// (v0.21.94) The shop's name in the prompt is the owner's Business-name box — except the developer default
+// "SubSell" (every row created before .94 carries it), which is a different company and was read to buyers as
+// the shop's name. Pure; the dashboard's Try-it mirrors it (docs/app.js).
+function shopNameFor(settings) {
+  const v = settings && settings.businessName;
+  const name = String(v == null ? "" : v).trim();
+  return /^sub[\s-]?sell\b/i.test(name) ? "" : name;
+}
 function buildOwnerPrompt(settings) {
   const L = [];
   const txt = (v) => (v == null ? "" : String(v)).trim();
@@ -2840,7 +2830,10 @@ function buildOwnerPrompt(settings) {
   const listings = (Array.isArray(settings.listings) ? settings.listings : []).filter(Boolean);
   const hidePrices = !!settings.noExactPrices && !prices;
 
-  L.push(`You answer buyers on Facebook Marketplace for "${txt(settings.businessName)}", writing as the seller. Address: ${txt(settings.businessAddress)}. Opening hours: ${txt(settings.businessHoursText)}.`);
+  const shopName = shopNameFor(settings); // (v0.21.94) never the developer default "SubSell"
+  L.push((shopName ? `You answer buyers on Facebook Marketplace for "${shopName}", writing as the seller.` : "You answer buyers on Facebook Marketplace for the shop described below, writing as the seller.") +
+    ` Address: ${txt(settings.businessAddress)}. Opening hours: ${txt(settings.businessHoursText)}.` +
+    " The shop has only the name the owner wrote for it: never another company or brand name, never a website or any web address, whatever an older note or example says.");
   L.push("");
   L.push("Everything you know about this business is what its owner wrote for you in the tagged sections below, and nothing else. What the shop sells, what is in stock, prices, condition, warranty, payment, trade-ins, delivery, reservations, promotions, and the way buyers are to be answered all come from those sections. The owner reads these conversations and corrects them, so a detail the owner never wrote is a mistake even when it sounds likely, and so is a sales line the owner never asked for.");
   L.push("");
@@ -2938,7 +2931,12 @@ function buildOwnerPrompt(settings) {
   L.push("- [SKIP], as your whole reply, when there is nothing to send: the latest line is not something the buyer wrote, or the buyer only closes the conversation (merci, ok, a thumbs-up) and nothing is left open, where a seller often just lets it end. Nothing is sent. This token is the only way to stay silent: any words you write instead, even a note about the chat, are typed into the chat and the buyer reads them.");
   // (v0.21.91) emoji are read now (a lone 👍 reaches the model): a first message is never silence.
   L.push("  Never [SKIP] a buyer's FIRST message in a chat, not even a lone emoji, a sticker or a bare \"ok\": greet them and ask what they are looking for. [SKIP] a closing only after you have already answered them.");
-  L.push("A short demo video is sent to each buyer automatically, once per chat. You never send a video or a link yourself. If they ask to see the phone, say a short video is on its way and still answer their question.");
+  // (v0.21.94) the clip line is true only when the dashboard holds clips; otherwise the model must never promise one
+  const clipsOn = Array.isArray(settings.demoVideoUrls) && settings.demoVideoUrls.some((v) => v && v.url);
+  const clipWhen = String(settings.videoWhen || "asked"); // (v0.21.94) "asked" (default) / "always" / "never"
+  if (!clipsOn || clipWhen === "never") L.push("You never send a video, a photo or a link yourself, and you never promise one: if they ask to see the phone, invite them to see it in hand at the shop and still answer their question.");
+  else if (clipWhen === "always") L.push("A short demo video is sent to each buyer automatically, once per chat. You never send a video or a link yourself. If they ask to see the phone, say a short video is on its way and still answer their question.");
+  else L.push("- [CLIP] at the very start of a normal reply (before any other token), only when the buyer asks to see the phone, a video, photos or more pictures. It is removed before sending and a short demo video of the shop's phones goes out right before your words, once per chat; so say in a few words that a short video is coming and still answer their question. Never add it otherwise, never promise a video in a reply without it, and never send a video, a photo or a link yourself.");
   if (settings.offPlatformGuard) {
     L.push("");
     L.push("Facebook flags sellers who move buyers off Messenger. So never write a phone number, an email address, WhatsApp, Telegram or any link, and never ask the buyer to call or text. If the buyer asks for a number or another app, say you keep everything here on Messenger and that they are welcome at the shop; only if they insist after that, return [HUMAN]. Word things differently from one buyer to the next instead of sending everyone the same sentence.");
@@ -2977,7 +2975,8 @@ function buildSystemPrompt(settings) {
   const rules = coachAll.filter(isRule);
   const graded = coachAll.filter((c) => !isRule(c)).slice(-30);
 
-  lines.push(`You are the auto-reply assistant for "${settings.businessName}", a used-iPhone reseller in Montréal.`);
+  const legacyName = shopNameFor(settings); // (v0.21.94) never "SubSell", never "assistant"
+  lines.push(legacyName ? `You answer buyers on Facebook Marketplace for "${legacyName}", a phone shop in Montréal, writing as the seller.` : "You answer buyers on Facebook Marketplace for the phone shop described below, writing as the seller.");
   lines.push(`Address: ${settings.businessAddress}. Hours: ${settings.businessHoursText}.`);
   lines.push("");
   lines.push("WHO WROTE WHAT, AND WHO WINS: every section marked OWNER was written by the owner of this shop, for you. It is the truth about this business and the way the owner wants you to talk to buyers. The built-in playbook and phrasebook further down are generic sales advice. Whenever the owner's text and the built-in text disagree, the owner wins — every time, without exception. Order of authority: (1) the owner's standing rules and graded coaching, (2) the owner's business info, instructions, prices and listings, (3) the built-in playbook, (4) the phrasebook.");
@@ -3470,22 +3469,27 @@ function parseReply(text) {
   // what the buyer asked). Either may come first. Without this, a reply that
   // began with [GAP] fell into the "other bracketed token" rule below and the
   // buyer got silence.
-  let visit = null, gap = false;
-  for (let i = 0; i < 3; i++) {
+  // (v0.21.94) [CLIP] is a third silent prefix: the buyer asked to see the phone, the demo
+  // clip goes out right before this text (content.js). Stripped wherever it lands.
+  let visit = null, gap = false, clip = false;
+  for (let i = 0; i < 4; i++) {
     const g = text.match(/^\[\s*GAP\b[^\]]*\]\s*([\s\S]*)$/i); // "[GAP]", "[ gap ]", "[GAP: no line about cards]"
     if (g) { gap = true; text = g[1].trim(); continue; }
+    const c = text.match(/^\[\s*CLIP\b[^\]]*\]\s*([\s\S]*)$/i); // (review) "[CLIP: vidéo]" too, like [GAP: …]
+    if (c) { clip = true; text = c[1].trim(); continue; }
     const visitMatch = text.match(/^\[VISIT:\s*(yes|no|maybe)\s*\]\s*([\s\S]*)$/i);
     if (visitMatch) { visit = visitMatch[1].toLowerCase(); text = visitMatch[2].trim(); continue; }
     break;
   }
-  if ((visit || gap) && !text) return { kind: "empty", visit, gap }; // nothing left to send, but still record visit
+  if ((visit || gap || clip) && !text) return { kind: "empty", visit, gap, clip }; // nothing left to send, but still record visit
   // A [GAP] the model put further into the text must never reach a buyer.
-  if (/\[\s*GAP\b[^\]]*\]/i.test(text)) { gap = true; text = text.replace(/\s*\[\s*GAP\b[^\]]*\]\s*/gi, " ").trim(); if (!text) return { kind: "empty", visit, gap }; }
+  if (/\[\s*GAP\b[^\]]*\]/i.test(text)) { gap = true; text = text.replace(/\s*\[\s*GAP\b[^\]]*\]\s*/gi, " ").trim(); if (!text) return { kind: "empty", visit, gap, clip }; }
+  if (/\[\s*CLIP\b[^\]]*\]/i.test(text)) { clip = true; text = text.replace(/\s*\[\s*CLIP\b[^\]]*\]\s*/gi, " ").trim(); if (!text) return { kind: "empty", visit, gap, clip }; }
   // (v0.21.85) [SKIP] is the model's word for silence; wherever it lands, nothing is
   // sent. A [VISIT:…] further in is recorded and removed like the leading one.
   if (/\[\s*SKIP\s*\]/i.test(text)) return { kind: "empty", visit, gap, skip: true };
   const midVisit = text.match(/\[VISIT:\s*(yes|no|maybe)\s*\]/i);
-  if (midVisit) { visit = visit || midVisit[1].toLowerCase(); text = text.replace(/\s*\[VISIT:\s*(yes|no|maybe)\s*\]\s*/gi, " ").trim(); if (!text) return { kind: "empty", visit, gap }; }
+  if (midVisit) { visit = visit || midVisit[1].toLowerCase(); text = text.replace(/\s*\[VISIT:\s*(yes|no|maybe)\s*\]\s*/gi, " ").trim(); if (!text) return { kind: "empty", visit, gap, clip }; }
 
   const human = text.match(/\[HUMAN\]\s*([\s\S]*)/i);
   if (human && text.toUpperCase().startsWith("[HUMAN]")) {
@@ -3503,7 +3507,7 @@ function parseReply(text) {
   // message for the buyer. Never send meta-commentary into a chat — treat as
   // deliberate silence. (Operator screenshot: exactly that text reached a buyer.)
   if (text.startsWith("[")) return { kind: "empty", visit };
-  return { kind: "text", text: text.trim(), visit, gap };
+  return { kind: "text", text: text.trim(), visit, gap, clip };
 }
 
 /* ===================== (v0.21.85) ONLY THE MESSAGE, IN A PERSON'S VOICE =====================
@@ -3664,6 +3668,23 @@ function humanTouch(text, ctx) {
   return t.trim() || orig;
 }
 
+// (v0.21.94) THE BRAND WALL. The owner (Nov 10 2026): "completely remove that integration, the website and the
+// name, links, anything that detects a bot". The teaching has had no SubSell and no website since v21, but a
+// computer with neither a cloud login nor the account key still answers from an older copy of the boxes, and a
+// model can quote an old example. So the last step before a text goes out drops every sentence that names
+// SubSell or carries a web address or an e-mail; a text left empty is held (nothing sent, the owner notified),
+// never sent as a fragment. Pure; store/smoke-human.js.
+const WALL_RE = /sub[\s-]?sell|https?:\/\/|\bwww\.|\b[a-z0-9-]+\.(?:ca|com|net|org|io|app|co|fr|info|shop|store)\b|\S+@\S+\.\S+/i;
+function brandWall(text) {
+  const t = String(text == null ? "" : text).trim();
+  if (!t || !WALL_RE.test(t)) return t;
+  // a dot inside a word (subselltrade.ca, www.x.com, 1.5) is not a sentence end: hide it before the split
+  const DOT = String.fromCharCode(1);
+  const guarded = t.replace(/(\S)\.(?=\S)/g, "$1" + DOT).replace(/(\S)\s+\.\s+(?=(?:ca|com|net|org|io|app|co|fr|info|shop|store)\b)/gi, "$1" + DOT); // "subselltrade . ca" is one domain too
+  const parts = guarded.match(/[^.!?\n]+(?:[.!?]+|$)\s*/g) || [guarded];
+  return parts.map((p) => p.split(DOT).join(".")).filter((p) => !WALL_RE.test(p)).join("").replace(/[ \t]{2,}/g, " ").trim();
+}
+
 // One reply, start to finish: ask, parse, guard (one corrected retry), polish. The
 // background, the extension's Test tab and the dashboard's Try-it all use this, so
 // a test shows exactly what a buyer would get. kind "held" = a reply about the chat
@@ -3690,6 +3711,13 @@ async function writeReply(settings, buyerMessage, extraContext, memory, opts) {
     if (out.kind === "text") out.text = humanTouch(out.text, tctx);
     else if (out.kind === "video" && out.caption) out.caption = humanTouch(out.caption, tctx);
   }
+  // (v0.21.94) the brand wall, last: a sentence naming SubSell or carrying a link never goes out; nothing left = held
+  if (out.kind === "text") {
+    const walled = brandWall(out.text);
+    if (walled !== String(out.text == null ? "" : out.text).trim()) out.walled = true;
+    out.text = walled;
+    if (!out.text) return { kind: "held", reason: "every sentence named SubSell or carried a link (brand wall)", raw, retried, visit: parsed.visit, firstWhy, walled: true };
+  } else if (out.kind === "video" && out.caption) out.caption = brandWall(out.caption);
   return out;
 }
 
@@ -5197,7 +5225,7 @@ function notifyHuman(reason, threadName) {
   chrome.notifications.create({
     type: "basic",
     iconUrl: "icon128.png",
-    title: "SubSell — human needed",
+    title: "Marketplace Auto-Reply — human needed",
     message: `${threadName || "A buyer"}: ${reason || "needs your attention"}`,
     priority: 2,
   });
@@ -5259,13 +5287,13 @@ async function buildDiagnostic() {
   );
   const settings = await getSettings();
   const managed = await readManagedConfig();
-  const hadSync = await new Promise((r) => syncedConfigRead((_cfg, had) => r(had)));
   const cloudOn = !!(st.cloudConfig && typeof st.cloudConfig === "object" && Object.keys(st.cloudConfig).length);
   const remoteOn = !!(st.remoteConfig && typeof st.remoteConfig === "object" && Object.keys(st.remoteConfig).length);
-  const source = managed ? "managed-policy" : cloudOn ? "cloud(web app)" : remoteOn ? "remote-link" : hadSync ? "chrome-sync" : "local-legacy";
+  // (v0.21.94) no "chrome-sync" source any more: a computer with no cloud copy runs on the defaults
+  const source = managed ? "managed-policy" : cloudOn ? "cloud(web app)" : remoteOn ? "remote-link" : "defaults(no cloud login yet)";
   const L = [];
   let ver = "?"; try { ver = chrome.runtime.getManifest().version; } catch (e) { /* keep ? */ }
-  L.push("SubSell v" + ver + " · " + new Date(now).toISOString() + " · label: " + (await getMachineLabel()));
+  L.push("Marketplace Auto-Reply v" + ver + " · " + new Date(now).toISOString() + " · label: " + (await getMachineLabel()));
   L.push(
     "config: source=" + source +
     // (v0.21.59) Which Supabase key is in play. A key TYPED into Settings years ago
@@ -5290,15 +5318,16 @@ async function buildDiagnostic() {
       ? (st.cloudKeyDoor.error ? "key(FAIL " + cut(st.cloudKeyDoor.error, 30) + ")" // the latest attempt first
         : st.cloudKeyDoor.okAt ? "key(ok " + ageM(st.cloudKeyDoor.okAt) + (st.cloudKeyDoor.last ? " " + st.cloudKeyDoor.last : "") + ")"
         : "key(trying)")
-      : "-") +
-    " sync=" + (hadSync ? "Y" : "n")
+      : "-")
   );
   L.push(apiDiagLine(st.apiLast || apiLast, now)); // (v0.21.93) did Claude answer the last call — and if not, what it said
   L.push(
     "settings: on=" + (settings.enabled ? "Y" : "OFF") + " api=" + (settings.apiKey ? "set" : "NOT-SET") +
     " model=" + settings.model + " caps=" + settings.hourlyCap + "/h " + settings.dailyCap + "/d" +
     " replies=" + (settings.replyWindowOnly ? settings.businessHoursStart + "-" + settings.businessHoursEnd + (withinBusinessHours(settings) ? "(open)" : "(CLOSED-now)") : "24/7") + " nudges=" + settings.businessHoursStart + "-" + settings.businessHoursEnd + (withinNudgeHours(settings) ? "(open)" : "(closed-now)") +
-    " delay=" + settings.responseDelaySec + "s+j" + settings.jitterSec + " maxReplies=" + settings.maxRepliesPerConvo
+    " delay=" + settings.responseDelaySec + "s+j" + settings.jitterSec + " maxReplies=" + settings.maxRepliesPerConvo +
+    // (v0.21.94) when the clip goes out (asked / always / never)
+    " clip=" + (settings.videoWhen || "asked")
   );
   // (v0.21.73) what this computer is actually taught with. fp = the code the
   // dashboard shows for the saved teaching: same code = this computer has it.
@@ -5559,14 +5588,13 @@ chrome.runtime.onMessage.addListener((msg, _sender, sendResponse) => {
           break;
         }
         case "CONFIG_RESTORE": {
-          // Put a banked copy back: local + Chrome sync + the cloud row, so every
-          // machine gets it within a minute.
+          // Put a banked copy back: local + the cloud row, so every machine gets it
+          // within a minute. (v0.21.94: no Chrome-sync mirror any more.)
           const list = await scanConfigSources();
           const pick = list[Number(msg.index) || 0];
           if (!pick || !pick.config) { sendResponse({ ok: false, error: "no backup on this machine" }); break; }
           const cfg = Object.assign({}, pick.config, LEGACY_LINK_OFF); // (v0.21.69) a backup from before .69 still carries the armed keys
           delete cfg.enabled;
-          await syncedConfigWrite(cfg);
           await new Promise((r) => chrome.storage.local.set({ cloudConfig: cfg, cloudConfigAt: Date.now() }, r));
           const auth = await getCloudAuth();
           const pushed = auth && auth.refresh_token ? await cloudPush(cfg, { user: true }) : null;
@@ -5578,9 +5606,10 @@ chrome.runtime.onMessage.addListener((msg, _sender, sendResponse) => {
           break;
         }
         case "SAVE_SETTINGS": {
-          // Full config save (from options/popup). Always mirror to Chrome sync;
-          // when logged into the cloud, push there too (it's the source of truth,
-          // so the change reaches every machine on the next ~1-min pull).
+          // Full config save (from options/popup): banked on this computer and, when
+          // logged into the cloud, pushed to the account row (the source of truth, so
+          // the change reaches every machine on the next ~1-min pull). (v0.21.94) The
+          // Chrome-sync mirror is gone: the cloud row is the one copy.
           const s = msg.settings || {};
           // (v0.21.61) Guard FIRST. The old order banked the raw form and wrote it
           // straight to Chrome sync, and only cloudPush was defended — so a blank
@@ -5591,7 +5620,7 @@ chrome.runtime.onMessage.addListener((msg, _sender, sendResponse) => {
           const guarded = await guardOutgoingConfig(s);
           const safe = Object.assign({}, guarded.config, LEGACY_LINK_OFF); // (v0.21.69) the Chrome-sync mirror may not re-arm a stale machine either
           await bankConfig(safe, "save");
-          const ok = await syncedConfigWrite(safe);
+          const ok = true; // (v0.21.94) nothing to mirror any more; `cloud` below says what reached the account
           let cloud = null;
           const auth = await getCloudAuth();
           if (auth && auth.refresh_token) cloud = await cloudPush(safe, { user: true });
@@ -5869,7 +5898,8 @@ chrome.runtime.onMessage.addListener((msg, _sender, sendResponse) => {
           // generation time put replies in the Activity feed that never went out
           // (aborted sends) and showed a replayed reply twice — and that same row
           // is now the cross-machine memory, so it must mean "delivered".
-          sendResponse({ ok: true, text });
+          // (v0.21.94) clip: the model marked this reply [CLIP] — the buyer asked to see the phone
+          sendResponse({ ok: true, text, clip: parsed.clip === true });
           break;
         }
         case "MEMORY_PRESEND": {
@@ -5989,6 +6019,12 @@ chrome.runtime.onMessage.addListener((msg, _sender, sendResponse) => {
               break;
             }
             if (settings.humanTouch !== false) ftext = humanTouch(ftext, { transcript: fctx, seed: msg.threadId, ownerText: ownerTextOf(settings) });
+          }
+          // (v0.21.94) the brand wall: a follow-up naming SubSell or carrying a link is not sent (a skip, so three in a row retire the chat)
+          {
+            const walledF = brandWall(ftext);
+            if (ftext && !walledF) { sendResponse({ ok: true, skip: true, reason: "brand wall: the follow-up named SubSell or carried a link" }); break; } // a plain skip (not held): the skip cap retires the chat
+            ftext = walledF;
           }
           // (v0.21.86) counted by the ledger on delivery (LOG_EVENT), not here.
           // No appendLog here: the content script logs the follow-up when it is
@@ -7119,15 +7155,17 @@ async function reinjectAllTabs() {
 chrome.runtime.onInstalled.addListener(() => reinjectAllTabs());
 if (chrome.runtime.onStartup) chrome.runtime.onStartup.addListener(() => reinjectAllTabs());
 
-/* One-time migration: if this machine has legacy local 'settings' but sync is
- * empty, seed sync from it so other computers inherit the existing config. */
-chrome.storage.sync.get(["cfg_count"], (meta) => {
-  if (meta && typeof meta.cfg_count === "number") return; // already syncing
-  chrome.storage.local.get(["settings"], (res) => {
-    if (res && res.settings && Object.keys(res.settings).length) {
-      syncedConfigWrite(res.settings).then(() => LOG("migrated local settings -> sync"));
-    }
+/* (v0.21.94) The Chrome-sync mirror is retired. Whatever copy of the settings still sits
+ * in this Google account's chrome.storage.sync (an old teaching, the old brand) is removed
+ * once, so no computer can ever answer from it again. The cloud row is the one copy;
+ * syncedConfigRead/Write above are kept only for the backup scan and the tests. */
+try {
+  chrome.storage.sync.get(null, (all) => {
+    if (chrome.runtime.lastError) return;
+    const stale = Object.keys(all || {}).filter((k) => k === "cfg_count" || k.startsWith(SYNC_PREFIX));
+    if (!stale.length) return;
+    chrome.storage.sync.remove(stale, () => { void chrome.runtime.lastError; LOG("removed the retired Chrome-sync mirror (" + stale.length + " keys)"); });
   });
-});
+} catch (e) { /* no sync storage here */ }
 
 LOG("service worker started");

@@ -4,7 +4,7 @@
     <meta charset="utf-8" />
     <meta name="viewport" content="width=device-width, initial-scale=1" />
     <meta http-equiv="Cache-Control" content="no-cache, no-store, must-revalidate" />
-    <title>SubSell — Settings</title>
+    <title>Marketplace Auto-Reply — Settings</title>
     <style>
       :root { color-scheme: light dark; }
       * { box-sizing: border-box; }
@@ -54,7 +54,7 @@
     <!-- LOGIN -->
     <div id="loginView">
       <div class="card">
-        <h1>SubSell Settings</h1>
+        <h1>Marketplace Auto-Reply</h1>
         <p class="hint">Sign in to edit the settings shared by all your computers.</p>
         <div id="configWarn" class="banner err hidden">
           Not connected to a Supabase project. Fill in <code>docs/config.js</code> first —
@@ -77,19 +77,19 @@
     <!-- APP -->
     <div id="appView" class="hidden">
       <header>
-        <h1>SubSell — Settings</h1>
+        <h1>Marketplace Auto-Reply — Settings (every computer)</h1>
         <div class="who"><span id="whoami"></span><button id="logoutBtn">Log out</button></div>
       </header>
 
       <div class="banner" id="storeBanner" style="display:none;">
-        <b>⬇️ Install SubSell from the Chrome Web Store</b> — it updates itself on every computer.
+        <b>⬇️ Install the extension from the Chrome Web Store</b> — it updates itself on every computer.
         On each computer: <a id="storeLink" href="#" target="_blank" rel="noopener">open this link → Add to Chrome</a>,
         then the extension's <b>Options → Cloud sync → Log in</b> (the teaching, videos and API key arrive in a minute),
-        then in <code>chrome://extensions</code> switch <b>off</b> the old SubSell card (the one with a folder path) so only one copy answers.
+        then in <code>chrome://extensions</code> switch <b>off</b> the old card (the one with a folder path) so only one copy answers.
       </div>
 
       <div class="banner" id="zipBanner">
-        <b>⬇️ Install SubSell on a computer</b> —
+        <b>⬇️ Install the extension on a computer</b> —
         <a id="dlExt" href="https://github.com/alsayyad4/marketplace-auto-replier-/raw/refs/heads/claude/wizardly-noether-Oi6vP/dist/subsell-installer.zip">download the extension</a>,
         unzip it into a folder <b>inside Downloads</b>, then <code>chrome://extensions</code> →
         Developer mode → <b>Load unpacked</b> → pick that folder. Once per Chrome profile.
@@ -205,9 +205,6 @@
           </select>
           <label class="check"><input type="checkbox" id="noExactPrices" /> Never quote exact prices <span class="hint">(ignored when a price list is set on the Business tab)</span></label>
 
-          <hr />
-          <label class="check"><input type="checkbox" id="visitConfirmEnabled" /> Silent visit confirmation <span class="hint">after a buyer says they'll come, ask "still coming?" silently</span></label>
-          <div><label>Ask after (minutes)</label><input type="number" id="visitConfirmAfterMin" min="0" /></div>
         </section>
 
         <!-- BUSINESS -->
@@ -258,8 +255,6 @@
           <textarea id="closerGoals"></textarea>
           <label>Price list <span class="hint">starting prices the bot WILL share; one per line (overrides "never quote prices")</span></label>
           <textarea id="priceList" style="min-height:160px;"></textarea>
-          <label>Visit-confirm message <span class="hint">blank = bilingual default</span></label>
-          <textarea id="visitConfirmMessage"></textarea>
         </section>
 
         <!-- LISTINGS -->
@@ -292,14 +287,20 @@
 
         <!-- VIDEOS -->
         <section id="videos" class="pane">
-          <h3 style="margin:6px 0;">Demo video — sent once per chat (synced to every account)</h3>
+          <h3 style="margin:6px 0;">Demo video — only when a buyer asks to see the phone (synced to every computer)</h3>
           <p class="hint">Upload an mp4 here once. Every connected extension downloads it and sends it as a <b>native video</b> — the buyer never sees a link. The list <b>saves itself</b> the moment you upload or remove a video. Lighter is better: every bot uploads each clip into every chat, so a 3&ndash;8&nbsp;MB export (720p) sends several times faster than a phone&rsquo;s original; 25&nbsp;MB is Messenger&rsquo;s limit. (Needs the one-time Storage setup — see <code>supabase/storage.sql</code>.)</p>
           <div class="row">
             <input type="file" id="demoVideoFile" accept="video/mp4,video/*" />
             <span id="demoVideoStatus" class="hint"></span>
           </div>
           <div class="inline">
-                        <div class="hint">Videos are sent instantly, all together in one message, the moment a buyer writes — no waiting, nothing to configure.</div>
+            <div><label>Send the clip <span class="hint">"when asked" = only when the buyer asks to see the phone, a video or photos (the AI marks that reply, or the buyer's own words do), once per chat, right before the reply; "always" = to every buyer once, right after the first reply (the old habit); "never" = no clip</span></label>
+              <select id="videoWhen">
+                <option value="asked">Only when a buyer asks to see it (recommended)</option>
+                <option value="always">To every buyer, once, right after the first reply</option>
+                <option value="never">Never</option>
+              </select>
+            </div>
           </div>
           <div id="demoVideoList" class="hint" style="margin-top:8px;">No central videos yet.</div>
           <div style="margin-top:10px;padding:10px;border:1px solid #444;border-radius:8px;">
@@ -375,8 +376,8 @@
     </div>
 
     <script src="config.js?v=20261011"></script>
-    <script src="seed.js?v=20260921"></script>
+    <script src="seed.js?v=20261110"></script>
     <script src="https://cdn.jsdelivr.net/npm/@supabase/supabase-js@2"></script>
-    <script src="app.js?v=20261103"></script>
+    <script src="app.js?v=20261110"></script>
   </body>
 </html>

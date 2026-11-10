@@ -31,9 +31,11 @@ for (const bad of ["apiKey", "enabled", "priceList", "listings", "coaching", "bu
   ok(!(bad in ext), "the seed never carries " + bad);
 ok(!/258-7895|4382587895|438-258/.test(JSON.stringify(ext)), "no phone number in the seed (the platform guard forbids writing one)");
 ok(!/\b(repairs?|technicians?|diagnostics?|r[ée]paration)\b/i.test(JSON.stringify(ext)), "no banned ad wording in the seed");
-ok(/9AM–9PM/.test(ext.businessHoursText) && /9 AM to 9 PM/.test(ext.businessInfo), "hours say 9 PM everywhere, never 10 PM / 22h");
-ok(Array.isArray(ext.demoVideoUrls) && ext.demoVideoUrls.length === 2 && ext.demoVideoUrls.every((v) => /^https:\/\/tcqunihripihroseswgy\.supabase\.co\/storage\/v1\/object\/public\/subsell-videos\//.test(v.url)),
-   "two demo clips, both from the public bucket");
+ok(/21h|9pm/i.test(ext.businessHoursText) && /21h|9pm/i.test(ext.businessInfo) && !/10PM|22h/i.test(ext.businessHoursText + ext.businessInfo), "hours say 21h / 9pm everywhere, never 10 PM / 22h");
+// (v0.21.94) the seed is brand-neutral: nothing from the SubSell website may come back through it
+ok(!/subsell|subselltrade|google|review|avis|warranty|garantie|reserv|2017/i.test(JSON.stringify(ext)), "nothing from the SubSell website in the seed (no brand, no site, no reviews, no warranty terms, no reservation)");
+ok(/Liquidation Téléphone Montréal/.test(ext.businessName), "the shop is Liquidation Téléphone Montréal");
+ok(Array.isArray(ext.demoVideoUrls) && ext.demoVideoUrls.length === 0, "no clips in the seed (v0.21.94) — the clips live in the web app Videos tab");
 
 // the dashboard actually wires the seed in
 const app = fs.readFileSync(path.join(root, "docs", "app.js"), "utf8");

@@ -11,6 +11,7 @@
     responseDelaySec: 30,
     jitterSec: 60,
     typingPaceMaxSec: 20, // (v0.21.71) extra wait per reply, grows with its length (wpmMin..wpmMax); 0 = off
+    videoWhen: "asked", // (v0.21.94) MUST match background.js DEFAULTS — the clip only when a buyer asks to see the phone
     threadMemory: true, // (v0.21.71) read the Activity log before every reply/video: never answer twice, never re-send the demo
     replyGuard: true, // (v0.21.85) a reply about the chat is never typed: one corrected retry, then held + you are told
     humanTouch: true, // (v0.21.85) texting habits enforced on the text: no long dashes, one "!", no filler, no second greeting
@@ -23,7 +24,7 @@
     businessHoursEnabled: true, // legacy, read by builds before v0.21.75 only
     businessHoursStart: 9, // the window for messages the bot STARTS
     businessHoursEnd: 22,
-    businessName: "SubSell",
+    businessName: "", // (v0.21.94) the shop's own name; the old default "SubSell" is never said to a buyer
     businessAddress: "757 Rue Beaubien E, Montréal",
     businessHoursText: "9AM–10PM, 7 days",
     businessInfo:
@@ -38,9 +39,6 @@
     closerGoals:
       "Your #1 goal is to get the buyer to come visit the shop in person. We give better prices in person than online. We also do trade-ins/exchanges, buyback of their old phone, and have liquidation deals — mention these naturally when relevant. Build excitement and urgency without being pushy. Always steer toward 'come by the shop and we'll take care of you'.",
     priceList: "",
-    visitConfirmEnabled: true,
-    visitConfirmAfterMin: 120,
-    visitConfirmMessage: "",
     maxRepliesPerConvo: 5,
     convoCapBehavior: "stop",
     humanCadence: true,
@@ -162,9 +160,6 @@
     ["noExactPrices", "checked"],
     ["closerGoals", "value"],
     ["priceList", "value"],
-    ["visitConfirmEnabled", "checked"],
-    ["visitConfirmAfterMin", "number"],
-    ["visitConfirmMessage", "value"],
     ["maxRepliesPerConvo", "number"],
     ["convoCapBehavior", "value"],
     ["humanCadence", "checked"],
@@ -444,11 +439,11 @@
   function emptyLogLines(s, c, now) {
     const lines = [];
     let since = "";
-    try { if (s.installTs) since = " — this copy of SubSell was installed here on " + new Date(s.installTs).toLocaleDateString(); } catch (e) { since = ""; }
+    try { if (s.installTs) since = " — this copy of the extension was installed here on " + new Date(s.installTs).toLocaleDateString(); } catch (e) { since = ""; }
     lines.push("Nothing has been sent from this computer yet" + since + ".");
     lines.push(s.enabled
       ? "Bot: ON ✓"
-      : "Bot: OFF — this computer answers nobody until you press \"Turn ON\" in the SubSell popup (the toolbar icon).");
+      : "Bot: OFF — this computer answers nobody until you press \"Turn ON\" in the extension's popup (the toolbar icon).");
     if (c) {
       lines.push(c.loggedIn
         ? "Cloud login: " + (c.email || "logged in") + " ✓" + (c.holdLine ? " (" + c.holdLine + ")" : "")
@@ -577,7 +572,7 @@
       let text = rep.length
         ? "Saved ✓ — kept " + rep.length + " field(s) a blank form would have cleared (" +
           rep.slice(0, 3).join(", ") + (rep.length > 3 ? "…" : "") + ")"
-        : "Saved ✓ (syncs to your other computers)";
+        : "Saved ✓";
       // (v0.21.89) …and what the account changed since this page opened was kept, not overwritten
       const keptN = kept ? kept.length : 0;
       if (keptN) text += " — kept " + keptN + " newer change(s) from the account (" + kept.slice(0, 3).join(", ") + (keptN > 3 ? "…" : "") + ")";
@@ -599,9 +594,13 @@
             ? "Cure (once): open the web dashboard and press Save to cloud — it hands you the SQL to paste."
             : "Reason: " + err) +
           " Your text is kept in this computer's backup (Settings → General → Earlier copies of my settings).";
-      } else if (r.ok === false) {
-        text = "Saved to the cloud — but Chrome sync refused its copy on this computer.";
-      } else bad = false;
+      } else if (!c) {
+        // (v0.21.94) no Chrome-sync mirror any more: without a cloud login a save stays on this computer
+        text += " — on this computer only: log in (General → Cloud sync) and every computer gets it within a minute.";
+      } else {
+        text += " — live on every computer within a minute.";
+        bad = false;
+      }
       clearTimeout(savedMsgTimer);
       $("savedMsg").textContent = text;
       $("savedMsg").style.color = bad ? "#c0392b" : "";

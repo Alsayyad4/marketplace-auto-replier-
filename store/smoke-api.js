@@ -1,4 +1,4 @@
-/* (v0.21.93) THE API LINE — Nov 3 2026: the owner sent two popup photos ("API key set ✓ ·
+/* (v0.21.94) THE API LINE — Nov 3 2026: the owner sent two popup photos ("API key set ✓ ·
  * Replying yes ✓ · Last 24 h 0 / 500") while a dozen buyers had waited up to 4 h, and
  * called it "api connection failed". The popup's STATUS box had no line for the outcome of
  * the Anthropic call itself ("last error" sat below the slider), and after three refused
@@ -189,10 +189,10 @@ const H = new Function("machineKey", "machineShow", appSrc + "; return { apiHeal
 const iso = (t) => new Date(t).toISOString();
 const NOW = T0;
 const rows = [
-  { created_at: iso(NOW - 2 * MIN), machine: "PC-b · v0.21.93", bot_text: "api: ok 0m claude-haiku-4-5".replace("api: ", "api ") },
-  { created_at: iso(NOW - 10 * MIN), machine: "PC-a · v0.21.93", bot_text: "api FAIL since 50m n=7 last=0m ok=60m claude-haiku-4-5 — auth: " + AUTH },
-  { created_at: iso(NOW - 40 * MIN), machine: "PC-b · v0.21.93", bot_text: "api FAIL since 1m n=1 last=0m ok=5m claude-haiku-4-5 — auth: " + AUTH },
-  { created_at: iso(NOW - 5 * 60 * MIN), machine: "PC-c · v0.21.93", bot_text: "api FAIL since 1m n=1 last=0m ok=5m claude-haiku-4-5 — network: Fetch failed: Failed to fetch" },
+  { created_at: iso(NOW - 2 * MIN), machine: "PC-b · v0.21.94", bot_text: "api: ok 0m claude-haiku-4-5".replace("api: ", "api ") },
+  { created_at: iso(NOW - 10 * MIN), machine: "PC-a · v0.21.94", bot_text: "api FAIL since 50m n=7 last=0m ok=60m claude-haiku-4-5 — auth: " + AUTH },
+  { created_at: iso(NOW - 40 * MIN), machine: "PC-b · v0.21.94", bot_text: "api FAIL since 1m n=1 last=0m ok=5m claude-haiku-4-5 — auth: " + AUTH },
+  { created_at: iso(NOW - 5 * 60 * MIN), machine: "PC-c · v0.21.94", bot_text: "api FAIL since 1m n=1 last=0m ok=5m claude-haiku-4-5 — network: Fetch failed: Failed to fetch" },
 ];
 let lines = H.apiHealthLines(rows, NOW);
 ok(lines.length === 2 && /^⚠ Claude is NOT answering on 1 computer\(s\)/.test(lines[0]), "newest row per computer: PC-a refused, PC-b answering again, PC-c's row too old → 1 computer — " + lines[0].slice(0, 60));
@@ -219,7 +219,7 @@ ok(/apiKeySet: !!settings\.apiKey,\s*api: apiLast, apiLine: apiStatusLine\(apiLa
 ok(/"apiLast", \/\/ \(v0\.21\.93\)/.test(bg) && /L\.push\(apiDiagLine\(st\.apiLast \|\| apiLast, now\)\);/.test(bg), "the 🩺 reads the record and prints the api: line");
 ok(/sendResponse\(\{ ok: false, error: parsed\.error, api: true \}\);/.test(bg), "GET_REPLY_SIMPLE flags a failed model call api: true");
 ok(/sendResponse\(\{ ok: false, error: "empty model output \(" \+ \(parsed\.kind \|\| "\?"\)[^}]*\}\);/.test(bg) && !/error: "empty model output[^\n]*api: true/.test(bg), "…and an empty model output is NOT flagged (it keeps the 3-try give-up)");
-ok(/function apiNote\(ok, err, model\)/.test(bg) && /mirrorToCloud\(\{ action: "apierr"/.test(bg) && /chrome\.notifications\.create\(\{ type: "basic", iconUrl: "icon128\.png", title: "SubSell — Claude is not answering on this computer"/.test(bg), "apiNote writes the hidden row and the notification when a report is due");
+ok(/function apiNote\(ok, err, model\)/.test(bg) && /mirrorToCloud\(\{ action: "apierr"/.test(bg) && /chrome\.notifications\.create\(\{ type: "basic", iconUrl: "icon128\.png", title: "Marketplace Auto-Reply — Claude is not answering on this computer"/.test(bg), "apiNote writes the hidden row and the notification when a report is due");
 ok(/chrome\.storage\.local\.get\(\["apiLast", "apiReportAt"\]/.test(bg) && /put\.apiReportAt = now;/.test(bg), "apiNote folds over the stored record and remembers the last report");
 ok(/<div>Claude<\/div><div id="api">—<\/div>/.test(popupHtml), "popup.html has the Claude row under API key");
 ok(/const ap = \$\("api"\);\s*if \(ap\) \{ const a = s\.apiLine \|\| \{ text: "—", cls: "muted" \}; ap\.textContent = a\.text; ap\.className = a\.cls; \}/.test(popupJs), "popup.js renders the row from GET_STATUS");
@@ -228,8 +228,8 @@ ok(/\) && !freshLookAtStamp\(id, sidebarId, turn, name\)\) \{/.test(cs), "conten
 ok(/function oweText\(id, sid, turn, why, hint, opts\)/.test(cs) && /if \(!\(opts && opts\.noTry\)\) o\.tries = \(Number\(o\.tries\) \|\| 0\) \+ 1;/.test(cs) && /tries: opts && opts\.noTry \? 0 : 1 \}/.test(cs), "content: oweText takes noTry (no increment, and an entry it opens starts at 0)");
 ok(/sidebarVideoSeen, stampRepaired \}\)\)/.test(cs) && /"replyCountsRepaired92", "replyCountsRepairedN", "stampRepaired"\]/.test(cs) && /stampRepaired = r\.stampRepaired;/.test(cs), "content: stampRepaired is persisted and hydrated (and the .92 repair count is finally fetched)");
 ok(/const HIDDEN_KINDS = \["claim", "teach", "gap", "usage", "apierr"\]/.test(app) && /loadStuck\(\);[^\n]*\n\s*loadApiHealth\(\);/.test(app), "dashboard: apierr is hidden from the feed and the fleet line is loaded with the others");
-ok(/id="fleetApi"/.test(indexHtml) && /app\.js\?v=20261103/.test(indexHtml) && /const CORE_VER = "20261103"/.test(app), "dashboard: the box exists and both cache-busters moved");
-ok(/"version": "0\.21\.93"/.test(manifest), "manifest is 0.21.93");
+ok(/id="fleetApi"/.test(indexHtml) && /app\.js\?v=20261110/.test(indexHtml) && /const CORE_VER = "20261110"/.test(app), "dashboard: the box exists and both cache-busters moved");
+ok(/"version": "0\.21\.94"/.test(manifest), "manifest is 0.21.94");
 
 console.log("\n" + (failed ? failed + " CHECK(S) FAILED" : "all checks passed"));
 process.exit(failed ? 1 : 0);
