@@ -1398,7 +1398,17 @@ function memoryLine(settings, transcript, rows, recentRows, threadId) {
   const q = (arr) => arr.map((w) => '"' + w + '"').join(", ");
   const ord = (k) => (k === 1 ? "1st" : k === 2 ? "2nd" : k === 3 ? "3rd" : k + "th");
   const parts = [];
-  if (n > 0) parts.push("this will be your " + ord(n + 1) + " message to this buyer, so no greeting and no re-introduction");
+  // (v0.21.95) The per-chat cap in the note: the model's LAST text is told it is the last (nobody
+  // answers after it), so it closes with everything the buyer needs and ends without a question. The
+  // owner's cap of 3 = three model texts in "stop" / "notify"; in "close" the canned line takes the last
+  // slot, so the model's last text is the one before it (the same math as convoCapLimit, inlined here
+  // because store/smoke-memory.js runs this function alone). Cap 0 = unlimited, never "last".
+  const capN = Math.max(0, Math.floor(Number(settings && settings.maxRepliesPerConvo) || 0));
+  const capLimit = capN && String((settings && settings.convoCapBehavior) || "stop") === "close" ? Math.max(1, capN - 1) : capN;
+  const last = !!(capN && n + 1 >= capLimit);
+  if (n > 0) parts.push("this will be your " + ord(n + 1) + (last ? " and last" : "") + " message to this buyer, so no greeting and no re-introduction");
+  else if (last) parts.push("this will be your only message to this buyer");
+  if (last) parts.push("nobody answers here after this message, so it must leave them everything they need to come by, the address and the hours in it, and end without a question");
   // (v0.21.93) In owner-teaching mode the owner's sections decide what is said again (a two-message
   // pack repeats the address, the hours and the offers on purpose): the note lists the facts and asks
   // for new words, it no longer forbids them. The old wording stays for the playbook prompt.

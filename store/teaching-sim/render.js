@@ -13,6 +13,7 @@ const boxes = [
 ];
 const out = [];
 for (const [label, key] of boxes) {
+  if (t[key] == null) continue; // a box the dashboard no longer has (the visit-confirm box left in v0.21.94)
   out.push("### " + label);
   out.push("");
   out.push("```text");

@@ -196,6 +196,17 @@ const V = (rows, buyerMessage, transcript, phase) => memVerdict(rows, { buyerMes
   const noNum = memoryLine({ businessAddress: "Rue Beaubien Est" }, "Buyer: allo\nYou: sur Beaubien Est", null, null, "t1");
   ok(/the address/.test(noNum), "an address configured without a number falls back to the street word");
   ok(memoryLine({}, "Buyer: allo\nYou: salut", null, null, "t1").indexOf("2nd message") > 0, "empty settings never throw");
+  // (v0.21.95) the per-chat cap in the note: the model's last text is told it is the last
+  const cap3 = { businessAddress: "757 Rue Beaubien E, Montréal", maxRepliesPerConvo: 3, convoCapBehavior: "stop" };
+  const twoSent = "Buyer: allo\nYou: salut\nBuyer: prix?\nYou: 300";
+  const third = memoryLine(cap3, twoSent, null, null, "t1");
+  ok(/3rd and last message/.test(third) && /nobody answers here after this message/.test(third) && /end without a question/.test(third), "cap 3 / stop: the 3rd text is told it is the last, with the close's needs");
+  ok(!/last/.test(memoryLine(cap3, "Buyer: allo\nYou: salut", null, null, "t1")), "cap 3 / stop: the 2nd text is not the last");
+  ok(/2nd and last message/.test(memoryLine(Object.assign({}, cap3, { convoCapBehavior: "close" }), "Buyer: allo\nYou: salut", null, null, "t1")), "cap 3 / close: the 2nd model text is the last (the canned line takes the 3rd slot)");
+  ok(/only message to this buyer/.test(memoryLine({ maxRepliesPerConvo: 1 }, "Buyer: allo", null, null, "t1")), "cap 1: the first text is the only one");
+  ok(!/last|only message/.test(memoryLine({ maxRepliesPerConvo: 0 }, twoSent, null, null, "t1")), "cap 0 = unlimited: never 'last'");
+  ok(!/last|only message/.test(memoryLine({}, twoSent, null, null, "t1")), "no cap setting: never 'last'");
+  ok(/3rd and last message/.test(memoryLine(cap3, "Buyer: ok", [row("text", 60, "allo", "salut"), row("text", 30, "prix?", "300")], null, "t1")), "cap 3: cloud rows count toward 'last' too");
 }
 
 // --- 6. typing pace ---

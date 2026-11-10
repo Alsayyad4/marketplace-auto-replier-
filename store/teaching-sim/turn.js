@@ -48,7 +48,13 @@ function memoryNote(settings, transcript) {
   const q = (arr) => arr.map((w) => '"' + w + '"').join(", ");
   const ord = (k) => (k === 1 ? "1st" : k === 2 ? "2nd" : k === 3 ? "3rd" : k + "th");
   const parts = [];
-  if (n > 0) parts.push("this will be your " + ord(n + 1) + " message to this buyer, so no greeting and no re-introduction");
+  // (v27) mirrors background.js memoryLine v0.21.95: the per-chat cap tells the model when a text is its last
+  const capN = Math.max(0, Math.floor(Number(settings && settings.maxRepliesPerConvo) || 0));
+  const capLimit = capN && String((settings && settings.convoCapBehavior) || "stop") === "close" ? Math.max(1, capN - 1) : capN;
+  const last = !!(capN && n + 1 >= capLimit);
+  if (n > 0) parts.push("this will be your " + ord(n + 1) + (last ? " and last" : "") + " message to this buyer, so no greeting and no re-introduction");
+  else if (last) parts.push("this will be your only message to this buyer");
+  if (last) parts.push("nobody answers here after this message, so it must leave them everything they need to come by, the address and the hours in it, and end without a question");
   if (facts.length) parts.push("you already told them " + facts.join(", ") + " (if the owner's instructions have you say any of it again, say it in new words, never the same sentence)");
   if (mineOpeners.length) parts.push("openers you already used in this chat, do not reuse them: " + q(mineOpeners));
   if (!parts.length) return "";

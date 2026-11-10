@@ -18,6 +18,22 @@ all chrome.debugger/CDP work) + Supabase dashboard in docs/. Live branch:
 - The operator wants zero manual steps in normal operation.
 
 ## Known state (v0.21.94 BUILT Nov 10 2026, NOT submitted — the owner's two clicks; v0.21.93 PUBLISHED on the Web Store Nov 5 2026 ~15:22 local — the API line + an outage never silences a buyer for good; the fleet installs a published build by itself within ~2 h; the submit button is the owner's click, Auto mode refuses it)
+- TEACHING v27 = THREE TEXTS, THEN THE COUNTER (Nov 10 2026 evening, owner: "make the teaching include all
+  the teachings and rules I gave you in the most human way possible without detection to be a bot. I will do
+  3 replies" = Max replies / conversation 3, cap behaviour "Go quiet"). `store/teaching-sim/teaching27.js` →
+  `teaching-2026-11-10-v27.md`, THE paste, replaces v26: every v26 fact word for word (+ the owner's own "on
+  fait de notre mieux avec ton budget pis le modèle que tu cherches" and "grosse variété" put back); the ARC:
+  text 1 = the answer + the price part + where/until when + one time question; text 2 = the answer + one or
+  two facts, short; text 3 = always the close (full address + hours, CAROL once, the old phone, the fine print
+  once, "le reste on le règle au comptoir"), NO question, because nobody answers after it; [VISIT:yes] closes
+  earlier; "ok"/"merci" after an invitation = [SKIP]. SOUND LIKE A PERSON gained mirroring (language,
+  tu/vous, length, energy, their own words), order rotation across chats, a length rhythm. Honesty kept:
+  "t'es un robot?" → "l'assistant automatique du magasin"; never "my last message", "I have to go", a claim
+  to be a person. CODE (comment v0.21.95, manifest NOT bumped, NOT uploaded): `memoryLine` tells the model
+  when a text is its last ("3rd and last message … nobody answers here after this message … end without a
+  question"; "close" mode = cap-1; cap 0 = never), `store/smoke-memory.js` +8 asserts, `turn.js` mirrors
+  it, `render.js` skips a box the dashboard no longer has. Sim: 4 Haiku buyers × 3 turns on the exact
+  prompt (`out27/`), 0 refusals, every 3rd text a close without a question, 0 banned phrases.
 - SUBSELL OUT + THE CLIP ONLY WHEN ASKED (.94, Nov 10 2026, owner: "remove the SubSell website and name,
   links, anything that detects a bot; as if a human is sending"; his Facebook account was suspended).
   NAME: `shopNameFor()` keeps the developer default "SubSell" out of every prompt (`DEFAULTS.businessName`
