@@ -17,7 +17,7 @@ all chrome.debugger/CDP work) + Supabase dashboard in docs/. Live branch:
   permissions ships OFF by default behind a cloud setting and goes to ONE machine first.
 - The operator wants zero manual steps in normal operation.
 
-## Known state (v0.21.94 BUILT Nov 10 2026, NOT submitted — the owner's two clicks; v0.21.93 PUBLISHED on the Web Store Nov 5 2026 ~15:22 local — the API line + an outage never silences a buyer for good; the fleet installs a published build by itself within ~2 h; the submit button is the owner's click, Auto mode refuses it)
+## Known state (v0.21.94 SUBMITTED by the owner Nov 10 2026 — Pending review since 17:10 EST at the latest, still pending at 20:12 EST; the update server serves .93 until Google publishes; live state in HANDOFF Open after v0.21.94; v0.21.93 PUBLISHED on the Web Store Nov 5 2026 ~15:22 local — the API line + an outage never silences a buyer for good; the fleet installs a published build by itself within ~2 h; the submit button is the owner's click, Auto mode refuses it)
 - TEACHING v28 = NO CAROL IN THE CLOSE, THE SHOP'S OWN DIGITS, THE CLOSE COMPOSED (Nov 10 2026, later that
   evening; owner: "every chat you keep mention carol stop that; the address and phone number should be like
   7️⃣5️⃣7️⃣ rue Beaubien E and the number in these emojis; the most optimized for three replies, non detectable
