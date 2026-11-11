@@ -107,7 +107,7 @@ ok(T.parseReply("[CLIP: vidéo] Oui je t'envoie ça").kind === "text" && T.parse
   ok(ref.includes("`videoWhen`") && /box removed in v0\.21\.94/.test(ref), "SETTINGS-REFERENCE documents videoWhen and the removed boxes");
   ok(/mirrors shopNameFor\(\) in background\.js/.test(app) && /for the shop described below, writing as the seller/.test(app) && !/You are the auto-reply assistant/.test(app) && /sub\[\\s-\]\?sell/.test(app), "the dashboard's teaching preview mirrors the name rule (hyphen included)");
   ok(/\(held back, nothing sent: " \+ \(p\.reason \|\| /.test(app), "the dashboard's Try-it shows a held reply's real reason");
-  ok(!/SubSell/.test(manifest.name) && manifest.name.length <= 45 && manifest.version === "0.21.94", "manifest: no SubSell in the name (" + manifest.name + "), v0.21.94");
+  ok(!/SubSell/.test(manifest.name) && manifest.name.length <= 45 && manifest.version === "0.21.95", "manifest: no SubSell in the name (" + manifest.name + "), v0.21.94");
   ok(!/SubSell/.test(popupHtml) && !/SubSell/.test(html) && !/SubSell/.test(optHtml), "no SubSell in the popup, the dashboard or the Options page");
   ok(/seed\.js\?v=20261110/.test(html) && /app\.js\?v=20261110/.test(html), "both dashboard cache-busters moved");
   const seedAt = bg.indexOf("const SEED_CONFIG = {");

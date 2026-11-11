@@ -1,4 +1,4 @@
-// Headless boot of the v0.21.94 STORE build (same staging as store/build-webstore-zip.ps1): the real
+// Headless boot of the v0.21.95 STORE build (same staging as store/build-webstore-zip.ps1): the real
 // worker in a real browser, Anthropic stubbed by overriding self.fetch inside it. Proves the worker's
 // top level runs with the .94 code, the name rule, the brand wall, the bursts, the [CLIP] parse, the
 // three-way clip sentence, writeReply's wall, the 🩺 lines and the renamed popup. Pattern: e2e-api.mjs.
@@ -25,7 +25,7 @@ for (const f of ["content.js", "options.html", "options.js", "popup.html", "popu
 execFileSync("node", [path.join(root, "store/webstore-background.js"), path.join(root, "background.js"), path.join(stage, "background.js")], { stdio: "inherit" });
 execFileSync("node", [path.join(root, "store/webstore-manifest.js"), path.join(root, "manifest.json"), path.join(stage, "manifest.json")], { stdio: "inherit" });
 const mf = JSON.parse(fs.readFileSync(path.join(stage, "manifest.json"), "utf8"));
-ok(mf.version === "0.21.94" && !mf.key && mf.name === "Liquidation Téléphone Montréal Auto-Reply", "store manifest: v" + mf.version + ", no key, name '" + mf.name + "'");
+ok(mf.version === "0.21.95" && !mf.key && mf.name === "Liquidation Téléphone Montréal Auto-Reply", "store manifest: v" + mf.version + ", no key, name '" + mf.name + "'");
 
 const get = (p) => new Promise((res, rej) => http.get({ host: "127.0.0.1", port: PORT, path: p }, (r) => { let d = ""; r.on("data", (c) => (d += c)); r.on("end", () => res(d)); }).on("error", rej));
 const put = (p) => new Promise((res, rej) => { const q = http.request({ host: "127.0.0.1", port: PORT, path: p, method: "PUT" }, (r) => { let d = ""; r.on("data", (c) => (d += c)); r.on("end", () => res(d)); }); q.on("error", rej); q.end(); });
@@ -111,7 +111,7 @@ try {
   ok(wr2 && wr2.kind === "held" && /brand wall/.test(wr2.reason), "…a brand-only answer is held: " + (wr2 && wr2.reason));
   const diag = await evalIn(w, "buildDiagnostic()");
   const theatreField = (diag.match(/typingLive=on|typingLive=off|burst=\d|human=on|human=off|rhythm=/) || [])[0] || "";
-  ok(/clip=asked/.test(diag) && !theatreField && /Marketplace Auto-Reply v0\.21\.94/.test(diag), "the 🩺 reads clip=asked, no timing-theatre fields, header renamed" + (theatreField ? " — found: " + theatreField : ""));
+  ok(/clip=asked/.test(diag) && !theatreField && /Marketplace Auto-Reply v0.21.95/.test(diag), "the 🩺 reads clip=asked, no timing-theatre fields, header renamed" + (theatreField ? " — found: " + theatreField : ""));
   ok(!/SubSell/.test(diag.split("\n").slice(0, 3).join("\n")), "…and its header has no SubSell");
   const pop = JSON.parse(await put("/json/new?chrome-extension://" + extId + "/popup.html"));
   const p = await cdp(pop.webSocketDebuggerUrl);

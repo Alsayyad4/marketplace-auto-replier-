@@ -229,7 +229,7 @@ ok(/function oweText\(id, sid, turn, why, hint, opts\)/.test(cs) && /if \(!\(opt
 ok(/sidebarVideoSeen, stampRepaired \}\)\)/.test(cs) && /"replyCountsRepaired92", "replyCountsRepairedN", "stampRepaired"\]/.test(cs) && /stampRepaired = r\.stampRepaired;/.test(cs), "content: stampRepaired is persisted and hydrated (and the .92 repair count is finally fetched)");
 ok(/const HIDDEN_KINDS = \["claim", "teach", "gap", "usage", "apierr"\]/.test(app) && /loadStuck\(\);[^\n]*\n\s*loadApiHealth\(\);/.test(app), "dashboard: apierr is hidden from the feed and the fleet line is loaded with the others");
 ok(/id="fleetApi"/.test(indexHtml) && /app\.js\?v=20261110/.test(indexHtml) && /const CORE_VER = "20261110"/.test(app), "dashboard: the box exists and both cache-busters moved");
-ok(/"version": "0\.21\.94"/.test(manifest), "manifest is 0.21.94");
+ok(/"version": "0.21.95"/.test(manifest), "manifest is 0.21.95");
 
 console.log("\n" + (failed ? failed + " CHECK(S) FAILED" : "all checks passed"));
 process.exit(failed ? 1 : 0);
