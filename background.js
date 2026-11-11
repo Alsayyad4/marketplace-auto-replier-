@@ -3724,9 +3724,12 @@ function brandWall(text) {
 // digits (7️⃣5️⃣7️⃣ rue Beaubien E, 4️⃣3️⃣8️⃣…): his house style, his account, his call (Nov 10 2026). When the
 // Address box is written that way, a reply keeps the style: a keycap that lost its variation selector
 // (some model outputs emit 7+U+20E3, which can render as a boxed plain 7 on desktop fonts) gets it back;
-// the address's number in plain figures before its street word becomes keycaps; a plain ten-digit phone
-// number becomes keycaps. Prices, capacities, hours and years are never ten digits and never sit before
-// the street word, so they are untouched. Pure; a plain Address box = the selector repair only.
+// the address's number in plain figures before its street word becomes keycaps; a plain ten-digit number
+// becomes keycaps only when it is one of the OWNER'S OWN numbers (the keycap runs of seven digits or more
+// written in his boxes, read as plain digits) — three separate figures with single spaces ("128 256 1040")
+// are never his number, so a price sentence is never touched (hovig-27's review of .95). Prices,
+// capacities, hours and years never sit before the street word either. Pure; a plain Address box = the
+// selector repair only.
 function shopDigits(text, settings) {
   let t = String(text == null ? "" : text);
   if (!t) return t;
@@ -3741,7 +3744,10 @@ function shopDigits(text, settings) {
     const esc = (s) => String(s).replace(/[.*+?^${}()|[\]\\]/g, "\\$&");
     t = t.replace(new RegExp("(^|[^0-9\\uFE0F\\u20E3])" + esc(num) + "(?=,?\\s+(?:rue\\s+)?" + esc(street) + ")", "giu"), (m, pre) => pre + keys(num));
   }
-  t = t.replace(/(^|[^0-9])(\d{3})[ .-]?(\d{3})[ .-]?(\d{4})(?![0-9])/g, (m, pre, a, b, c) => pre + keys(a + b + c));
+  const own = new Set();
+  const boxes = ["businessInfo", "instructions", "examples", "closerGoals"].map((k) => String((settings && settings[k]) == null ? "" : settings[k])).join("\n");
+  for (const m of boxes.matchAll(/(?:[0-9]️?⃣){7,}/g)) own.add(m[0].replace(/[^0-9]/g, ""));
+  if (own.size) t = t.replace(/(^|[^0-9])(\d{3})[ .-]?(\d{3})[ .-]?(\d{4})(?![0-9])/g, (m, pre, a, b, c) => (own.has(a + b + c) ? pre + keys(a + b + c) : m));
   return t;
 }
 const GUARD_RETRY_NOTE = "The buyer would have read that word for word, and it is a note about the chat, not a message to them. Write only what the seller sends now, in the buyer's language. If the buyer's latest line is not something they wrote, or there is nothing to answer, reply with exactly [SKIP].";

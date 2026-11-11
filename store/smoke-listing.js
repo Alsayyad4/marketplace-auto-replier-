@@ -144,6 +144,8 @@ ok(B.ownerEntryFor(F, "iPhone 13 Pro 128 Go").priceLines.join("|") === "iPhone 1
 ok(B.ownerEntryFor(F, "iPhone 13 Pro Max 256 Go").priceLines.length === 1 && /^iPhone 13 \//.test(B.ownerEntryFor(F, "iPhone 13 Pro Max 256 Go").priceLines[0]), "a Pro Max gets it too (the exact match)");
 ok(B.ownerEntryFor(F, "iPhone 14 Plus 128 Go").priceLines.length === 0 && B.ownerEntryFor(F, "iPhone 18 Pro Max").priceLines.length === 0, "a Plus (not on its line) and a generation with no line → no line, the no-row note");
 ok(B.ownerEntryFor(F, "Samsung Galaxy S25 Ultra 512GB").priceLines.length === 0, "a Samsung block line without a price is not a price line");
+const FS = { listings: [], noExactPrices: true, priceList: "Samsung S24 / S24+ / S24 Ultra : à partir de 400 $ / 500 $ / 700 $" };
+ok(B.ownerEntryFor(FS, "Samsung Galaxy S24 Ultra 256GB").priceLines.length === 1 && B.ownerEntryFor(FS, "Galaxy S24 128GB").priceLines.length === 1 && B.ownerEntryFor(FS, "Galaxy S23 128GB").priceLines.length === 0, "a Samsung family line WITH a price works like an iPhone one: the S24 Ultra (exact) and the plain S24 (family) get it, the S23 does not — " + JSON.stringify(B.ownerEntryFor(FS, "Galaxy S24 128GB").priceLines));
 ok(B.ownerEntryFor({ listings: [], priceList: "iPhone 13 Pro Max: à partir de 600$" }, "iPhone 13").priceLines.length === 0, "a single-model line names its number once: never handed to the plain 13");
 const cf = B.listingContext(F, "Amel · iPhone 12 64 Go 1$");
 ok(cf.includes("The owner's price-list line for this model: \"iPhone 12 / 12 Pro / 12 Pro Max") && !cf.includes("[GAP]"), "the note carries the family line and asks no [GAP] — " + cf.split("\n")[1]);

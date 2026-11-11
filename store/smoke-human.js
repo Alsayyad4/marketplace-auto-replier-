@@ -38,12 +38,15 @@ const T = new Function("DEFAULTS", "fetch", core + "\nreturn { brandWall, shopNa
 // (v0.21.95) the shop's own digits: the keycap street number and phone numbers, the owner's style (Nov 10 2026)
 {
   const K = (d) => d.replace(/[0-9]/g, (x) => x + "️⃣");
-  const keyed = { businessAddress: K("757") + " rue Beaubien E, Montréal (métro Beaubien)" };
+  const keyed = { businessAddress: K("757") + " rue Beaubien E, Montréal (métro Beaubien)", businessInfo: "Shop phone, written exactly like this: " + K("4388016771") + ". Trade-in specialist: " + K("4382587895") };
   const plain = { businessAddress: "757 Rue Beaubien E, Montréal" };
   ok(T.shopDigits("7⃣5⃣7⃣ rue Beaubien E", plain) === K("757") + " rue Beaubien E", "a keycap that lost its variation selector gets it back, whatever the Address box");
   ok(T.shopDigits("On est au 757 rue Beaubien E, jusqu'à 21h.", keyed) === "On est au " + K("757") + " rue Beaubien E, jusqu'à 21h.", "a plain 757 before the street word → the keycaps (keyed Address box)");
   ok(T.shopDigits("Au 757, rue Beaubien E", keyed) === "Au " + K("757") + ", rue Beaubien E" && T.shopDigits("757 Beaubien, métro Beaubien", keyed) === K("757") + " Beaubien, métro Beaubien", "…with a comma, or with the street word alone");
   ok(T.shopDigits("Appelle au 438 801-6771 ou au 4388016771.", keyed) === "Appelle au " + K("4388016771") + " ou au " + K("4388016771") + ".", "a plain ten-digit phone number → the keycaps, with or without separators");
+  ok(T.shopDigits("Le spécialiste est au 438 258-7895.", keyed) === "Le spécialiste est au " + K("4382587895") + ".", "…the specialist's number too (every keycap run of the owner's boxes counts)");
+  ok(T.shopDigits("128 256 1040 pis 514 555-1234 ou 438 801 6772", keyed) === "128 256 1040 pis 514 555-1234 ou 438 801 6772", "three figures with single spaces, a stranger's number and a one-digit-off number are never converted (not the owner's)");
+  ok(T.shopDigits("Appelle au 438 801-6771.", { businessAddress: keyed.businessAddress }) === "Appelle au 438 801-6771.", "a keyed Address box with no keycap phone in the boxes converts no number");
   ok(T.shopDigits("iPhone 14 / 14 Pro / 14 Pro Max : à partir de 300 $ / 450 $ / 550 $, 128 Go, 1040 $, jusqu'à 21h, en 2026, 757 unités", keyed) === "iPhone 14 / 14 Pro / 14 Pro Max : à partir de 300 $ / 450 $ / 550 $, 128 Go, 1040 $, jusqu'à 21h, en 2026, 757 unités", "prices, capacities, hours, years and a 757 that is not the address are untouched");
   ok(T.shopDigits("On est au 757 rue Beaubien E, appelle au 438 801-6771.", plain) === "On est au 757 rue Beaubien E, appelle au 438 801-6771.", "a plain Address box = no conversion (the owner did not ask for keycaps)");
   ok(T.shopDigits(K("757") + " rue Beaubien E, " + K("4388016771"), keyed) === K("757") + " rue Beaubien E, " + K("4388016771") && T.shopDigits("", keyed) === "" && T.shopDigits(null, null) === "", "already keyed stays as is; empty stays empty");
