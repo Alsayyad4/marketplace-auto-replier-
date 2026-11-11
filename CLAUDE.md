@@ -18,6 +18,29 @@ all chrome.debugger/CDP work) + Supabase dashboard in docs/. Live branch:
 - The operator wants zero manual steps in normal operation.
 
 ## Known state (v0.21.94 BUILT Nov 10 2026, NOT submitted — the owner's two clicks; v0.21.93 PUBLISHED on the Web Store Nov 5 2026 ~15:22 local — the API line + an outage never silences a buyer for good; the fleet installs a published build by itself within ~2 h; the submit button is the owner's click, Auto mode refuses it)
+- TEACHING v28 = NO CAROL IN THE CLOSE, THE SHOP'S OWN DIGITS, THE CLOSE COMPOSED (Nov 10 2026, later that
+  evening; owner: "every chat you keep mention carol stop that; the address and phone number should be like
+  7️⃣5️⃣7️⃣ rue Beaubien E and the number in these emojis; the most optimized for three replies, non detectable
+  that it is a bot"). `store/teaching-sim/teaching28.js` → `teaching-2026-11-10-v28.md`, THE paste, replaces
+  v27 (the Address box too: `7️⃣5️⃣7️⃣ rue Beaubien E, Montréal (métro Beaubien)`). CAROL only inside his own
+  lower-budget line, once, to a buyer whose budget sits below the list, nowhere else. THE KEYCAP DIGITS ARE
+  BACK BY HIS VETO — recorded decision, do not flip it again without his word: v26 took them out as filter
+  evasion and told him they were his to veto (unlike the bot-denial line and the timing theatre, which stay
+  out for good); a real shop's real address and number in the owner's house style, the number given only
+  when asked, mislead no buyer; the cost is to Meta's contact-info nudge, his account's risk. Honesty kept and
+  extended: "t'es un robot?" → the shop's automated assistant; never "je suis là" / "I'm here" (the assistant
+  is not at the counter, the shop is). Four drafts: the first three each simulated on the exact prompt with
+  Haiku buyers and reviewed adversarially (out28/, out28b/, out28c/; HANDOFF Twenty-eighth request has every
+  finding), the fourth (rule-level refinements from pass 3) checked by the file's own self-check only: the
+  close is COMPOSED (shares only the digits and the street with earlier texts, a new landmark word, the hour as
+  a new verb or left out, their time back, never "c'est noté", the fine print never last, a last line naming
+  their day or the old phone), a day or a time in any words = [VISIT:yes], a stall = like a bare ok, a seller's
+  close has no fine print, the register and casing are locked from the buyer's first line (tu/vous inferred,
+  "ce soir" back to "ce soir", hours per language), text 2 = the oui/non first + one unasked sentence at most,
+  nothing from the rules or examples goes out as written (defined). CODE, comment v0.21.95, manifest NOT
+  bumped, nothing uploaded: `shopDigits()` after the brand wall (U+FE0F repair; plain 757 / phone → keycaps
+  when the Address box is keyed), `ownerEntryFor` THE FAMILY LINE (a base model or a Pro now gets its
+  generation's line, no false [GAP]), `buildOwnerPrompt`'s voice line no longer says "tu, never vous".
 - TEACHING v27 = THREE TEXTS, THEN THE COUNTER (Nov 10 2026 evening, owner: "make the teaching include all
   the teachings and rules I gave you in the most human way possible without detection to be a bot. I will do
   3 replies" = Max replies / conversation 3, cap behaviour "Go quiet"). `store/teaching-sim/teaching27.js` →

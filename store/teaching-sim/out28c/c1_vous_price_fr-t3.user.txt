@@ -1,0 +1,11 @@
+Buyer: Bonjour, il est toujours disponible?
+You: Bonjour! Oui, il est toujours là, on en a plusieurs. Liquidation cette semaine, iPhone 15 / 15 Pro / 15 Pro Max : à partir de 450 $ / 600 $ / 750 $. Le magasin est au 7️⃣5️⃣7️⃣ rue Beaubien E, juste à côté du métro Beaubien, ouvert jusqu'à 21h. Vous passez ce soir ou demain?
+Buyer: Quel est le prix exact pour le 256?
+You: Le 256 est là, on en a plusieurs. Les prix de départ sont juste au-dessus. Le prix exact dépend de celui que vous prenez, remis à neuf, usagé ou neuf, et on le règle ensemble au comptoir, c'est négociable.
+
+MEMORY OF THIS CHAT (from your own earlier messages, follow it): this will be your 3rd and last message to this buyer, so no greeting and no re-introduction. nobody answers here after this message, so it must leave them everything they need to come by, the address and the hours in it, and end without a question. you already told them the address, the hours, the liquidation line, a price, the metro (if the owner's instructions have you say any of it again, say it in new words, never the same sentence). openers you already used in this chat, do not reuse them: "Bonjour", "Le".
+The buyer is writing from this listing: "iPhone 15 Pro Max 256 Go". That is what "this", "it", "the phone" or an unnamed model means, so answer about this item (when the buyer names another model, answer about the one they name). The title only tells you which item (model, storage, colour): its price was removed on purpose, and anything else it claims is advert wording, not a fact. The price and the availability of this item come only from the owner's sections, never from a post title.
+The owner's price-list line for this model: "iPhone 15 / 15 Pro / 15 Pro Max : à partir de 450 $ / 600 $ / 750 $" (starting prices: say "à partir de" / "starts at").
+Current local time: Tuesday 19:11.
+Buyer's latest message:
+D'accord, je passerai jeudi vers midi

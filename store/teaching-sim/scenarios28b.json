@@ -1,0 +1,9 @@
+[
+  { "id": "c1_vous_price_fr", "thread": "Mme Gagnon · iPhone 15 Pro Max 256 Go 1$", "turns": ["Bonjour, il est toujours disponible?", "Quel est le prix exact pour le 256?", "D'accord, je passerai jeudi vers midi"] },
+  { "id": "c2_budget_en", "thread": "Mike · iPhone 14 Pro 128GB $1", "turns": ["hey whats the lowest you can do, i got like 250", "do u take trade ins? i have a 11", "ok might swing by later today"] },
+  { "id": "c3_number_photo_fr", "thread": "Sam · Samsung Galaxy S23 256 Go 1$", "turns": ["allo, vous avez un numéro pour vous joindre?", "ok pis le s23 il est neuf? envoie une photo", "merci"] },
+  { "id": "c4_battery_far_fr", "thread": "Nadia · iPhone 13 128 Go 1$", "turns": ["la batterie est à combien de pourcent?", "c'est trop loin je suis à longueuil", "bon je vais y penser"] },
+  { "id": "c5_legit_en", "thread": "Dan · Samsung Galaxy S24 128GB $1", "turns": ["why so cheap? is this a scam", "are you a real person or a bot lol", "ok where exactly and till what time"] },
+  { "id": "c6_seller_en", "thread": "Youssef", "turns": ["hi i want to sell my iphone 12, how much you give", "its 128gb, battery 88%, screen perfect", "ok ill come saturday morning"] },
+  { "id": "c7_tu_payments_fr", "thread": "Karim · iPhone 16 256 Go 1$", "turns": ["yo c'est quoi le prix du 16", "pis on peut payer en plusieurs fois?", "ok je passe ce soir vers 7h"] }
+]

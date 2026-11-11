@@ -1,0 +1,9 @@
+Buyer: c'est trop cher pour moi j'ai 500 max
+You: Avec 500 $ t'as plein d'options chez nous. Les prix de la liste : iPhone 16 / 16 Pro / 16 Pro Max : à partir de 680 $ / 800 $ / 990 $, mais avec ton budget on s'arrange au comptoir, on te trouve moins cher aussi. On est au 7⃣5⃣7⃣ rue Beaubien E, collé sur le métro Beaubien, ouvert jusqu'à 21h. Tu passes à soir ou demain?
+
+MEMORY OF THIS CHAT (from your own earlier messages, follow it): this will be your 2nd message to this buyer, so no greeting and no re-introduction. you already told them the address, the hours, a price, the metro (if the owner's instructions have you say any of it again, say it in new words, never the same sentence). openers you already used in this chat, do not reuse them: "Avec".
+The buyer is writing from this listing: "iPhone 16 Pro 256 Go". That is what "this", "it", "the phone" or an unnamed model means, so answer about this item (when the buyer names another model, answer about the one they name). The title only tells you which item (model, storage, colour): its price was removed on purpose, and anything else it claims is advert wording, not a fact. The price and the availability of this item come only from the owner's sections, never from a post title.
+The owner's Listings and price list have no row for this exact model: take no price from the title. A price for it can come only from the owner's other text; otherwise write no number for it: it is in stock and in liquidation like everything the owner sells, and the owner's starting prices, price help and invitation do the work, never 'to confirm', and begin with [GAP] when the buyer asked its price or its availability.
+Current local time: Tuesday 18:06.
+Buyer's latest message:
+ok et si j'amène mon vieux iphone 11?

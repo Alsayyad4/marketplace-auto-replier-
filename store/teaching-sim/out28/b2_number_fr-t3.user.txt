@@ -1,0 +1,11 @@
+Buyer: c'est quoi votre numéro?
+You: C'est le 4️⃣3️⃣8️⃣8️⃣0️⃣1️⃣6️⃣7️⃣7️⃣1️⃣, mais on est souvent au comptoir, ici c'est plus rapide. Le 14 128 Go est là, c'est la semaine de liquidation: iPhone 14 / 14 Pro / 14 Pro Max : à partir de 300 $ / 450 $ / 550 $. Au 7️⃣5️⃣7️⃣ rue Beaubien E, collé sur le métro Beaubien, jusqu'à 21h. Vous passez quand?
+Buyer: ok c'est combien le 14 exactement?
+You: Les prix à partir de sont juste au-dessus. Le prix exact suit ce que vous choisissez, remis à neuf, usagé ou neuf, en 128, 256 ou 512 Go, pis on fait de notre mieux avec votre budget. Vous voulez passer quand?
+
+MEMORY OF THIS CHAT (from your own earlier messages, follow it): this will be your 3rd and last message to this buyer, so no greeting and no re-introduction. nobody answers here after this message, so it must leave them everything they need to come by, the address and the hours in it, and end without a question. you already told them the address, the hours, the liquidation line, a price, the metro (if the owner's instructions have you say any of it again, say it in new words, never the same sentence). openers you already used in this chat, do not reuse them: "C'est", "Les".
+The buyer is writing from this listing: "iPhone 14 128 Go". That is what "this", "it", "the phone" or an unnamed model means, so answer about this item (when the buyer names another model, answer about the one they name). The title only tells you which item (model, storage, colour): its price was removed on purpose, and anything else it claims is advert wording, not a fact. The price and the availability of this item come only from the owner's sections, never from a post title.
+The owner's Listings and price list have no row for this exact model: take no price from the title. A price for it can come only from the owner's other text; otherwise write no number for it: it is in stock and in liquidation like everything the owner sells, and the owner's starting prices, price help and invitation do the work, never 'to confirm', and begin with [GAP] when the buyer asked its price or its availability.
+Current local time: Tuesday 18:06.
+Buyer's latest message:
+parfait je passe demain

@@ -137,6 +137,16 @@ ok(!e.listing && e.priceLines.length === 0, "a model the owner never entered →
 e = B.ownerEntryFor({ listings: S.listings, noExactPrices: true }, "iPhone 13 Pro Max 256 Go");
 ok(e.hidePrices === true, "noExactPrices with no price list → the entry's price is hidden");
 ok(B.ownerEntryFor(S, "iPhone 13").priceLines.length === 1 && B.ownerEntryFor(S, "iPhone 13").priceLines[0].startsWith("iPhone 13:"), "\"iPhone 13\" gets the iPhone 13 line only");
+// (v0.21.95) the owner's FAMILY lines: one line per generation with the Pro and Max qualifiers on it
+const F = { listings: [], noExactPrices: true, priceList: "iPhone 12 / 12 Pro / 12 Pro Max : à partir de 200 $ / 280 $ / 360 $\niPhone 13 / 13 Pro / 13 Pro Max : à partir de 280 $ / 380 $ / 490 $\nS22 Ultra s23 Ultra - s24 Ultra - S25 Ultra\na partir de 450$-550$-700" };
+ok(B.ownerEntryFor(F, "iPhone 12 64 Go").priceLines.join("|") === "iPhone 12 / 12 Pro / 12 Pro Max : à partir de 200 $ / 280 $ / 360 $", "a base model gets its family line (12 64 Go → the 12 line) — " + JSON.stringify(B.ownerEntryFor(F, "iPhone 12 64 Go").priceLines));
+ok(B.ownerEntryFor(F, "iPhone 13 Pro 128 Go").priceLines.join("|") === "iPhone 13 / 13 Pro / 13 Pro Max : à partir de 280 $ / 380 $ / 490 $", "a Pro gets its family line");
+ok(B.ownerEntryFor(F, "iPhone 13 Pro Max 256 Go").priceLines.length === 1 && /^iPhone 13 \//.test(B.ownerEntryFor(F, "iPhone 13 Pro Max 256 Go").priceLines[0]), "a Pro Max gets it too (the exact match)");
+ok(B.ownerEntryFor(F, "iPhone 14 Plus 128 Go").priceLines.length === 0 && B.ownerEntryFor(F, "iPhone 18 Pro Max").priceLines.length === 0, "a Plus (not on its line) and a generation with no line → no line, the no-row note");
+ok(B.ownerEntryFor(F, "Samsung Galaxy S25 Ultra 512GB").priceLines.length === 0, "a Samsung block line without a price is not a price line");
+ok(B.ownerEntryFor({ listings: [], priceList: "iPhone 13 Pro Max: à partir de 600$" }, "iPhone 13").priceLines.length === 0, "a single-model line names its number once: never handed to the plain 13");
+const cf = B.listingContext(F, "Amel · iPhone 12 64 Go 1$");
+ok(cf.includes("The owner's price-list line for this model: \"iPhone 12 / 12 Pro / 12 Pro Max") && !cf.includes("[GAP]"), "the note carries the family line and asks no [GAP] — " + cf.split("\n")[1]);
 
 console.log("\n— 4. the lines the model gets —");
 let c = B.listingContext(S, "Dreamliner · iPhone 13 Pro Max 256 Go 650$");

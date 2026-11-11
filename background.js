@@ -2782,7 +2782,27 @@ function ownerEntryFor(settings, item) {
     const score = (m.storageMatch ? 2 : 0) + (l.available !== false ? 1 : 0) + i / 1000;
     if (score > best) { best = score; listing = l; storageMatch = m.storageMatch; }
   });
-  const priceLines = prices.split("\n").map((s) => s.trim()).filter((s) => s && sameModel(k, modelKeys(s)).same).slice(0, 3);
+  const lines = prices.split("\n").map((s) => s.trim());
+  let priceLines = lines.filter((s) => s && sameModel(k, modelKeys(s)).same).slice(0, 3);
+  // (v0.21.95) THE FAMILY LINE. The owner writes one price line per generation ("iPhone 13 / 13 Pro /
+  // 13 Pro Max : à partir de 280 $ / 380 $ / 490 $"). A base model or a Pro never matched it (the line
+  // carries the Pro and Max qualifiers, sameModel wants them equal), so every such listing got the
+  // "no row for this exact model" note and a false [GAP] on "c'est encore dispo?" (seen in the v28
+  // simulation). When no line matches exactly, a line that names the item's generation more than once
+  // (a family line), carries a price, shares the brand and holds every qualifier the item has is that
+  // family's line. A single-model line ("iPhone 13 Pro Max: 600$") names its number once and is never
+  // handed to a plain "iPhone 13".
+  if (!priceLines.length && k.digits.size) {
+    priceLines = lines.filter((s) => {
+      if (!s || stripPrices(s) === s) return false;
+      const lk = modelKeys(s);
+      if (!lk.digits.size || ![...k.digits].every((d) => lk.digits.has(d))) return false;
+      if (k.brands.size && lk.brands.size && ![...k.brands].some((x) => lk.brands.has(x))) return false;
+      if (![...k.quals].every((q) => lk.quals.has(q))) return false;
+      const words = lessonNorm(stripPrices(s).replace(SPEC_RE, " ")).split(" ");
+      return [...k.digits].every((d) => words.filter((w) => w === d).length >= 2);
+    }).slice(0, 3);
+  }
   return { listing, storageMatch, priceLines, hidePrices };
 }
 // `opts.hasLesson` = a lesson of the owner's sits beside the message (then a price may
@@ -2955,7 +2975,8 @@ function buildOwnerPrompt(settings) {
   L.push("How to write (the owner's instructions and corrections override anything in this part):");
   L.push("Write in the language of the buyer's latest message, the way a busy seller texts from the shop. Before writing, read your own earlier messages in the conversation: say each fact once per conversation (the address, the hours, a price, a policy), never open two messages the same way, and greet only in your first message. Match the buyer's length: a few words from them, a few words back, and two or three short sentences at the very most. Often the best reply is the answer alone, with no opener and no closing question. Ask a question only when it moves things forward, and never two in one message.");
   L.push("- Texting style: contractions, a lowercase start and no final period are all fine, and \"ok\", \"ouais\" or \"yep\" can be the whole reply when that is the honest answer. No bullet points, headings or lists.");
-  L.push("- French: tu, never vous, with light Québec texting (\"pis\", \"là\", \"ouais\", \"c'est correct\") that is never piled on. English: plain and casual. Keep the buyer's register.");
+  // (v0.21.95) the buyer's own register, not a house joual: a "vous" buyer in standard French kept getting "pis" and "tu" (the v28 simulation, two chats)
+  L.push("- French: the buyer's own register, tu or vous, standard or texting French, kept for the whole chat; a Québec texting word (\"pis\", \"là\", \"ouais\") only to a buyer who writes that way, never piled on. English: plain and casual. Keep the buyer's register.");
   L.push("- At most one emoji, in few messages, never in two messages in a row.");
   L.push("- Leave out sales filler: \"n'hésitez pas\", \"feel free to\", \"je vous invite à\", \"let me know if you have any questions\".");
   L.push("- These give an AI away, so leave them out: long dashes (— or –) and semicolons, more than one exclamation mark, repeating the buyer's question before answering it, \"great question\" / \"bonne question\", answering three things in three tidy sentences. Answer the one thing that matters; they will ask the rest.");
@@ -3699,6 +3720,30 @@ function brandWall(text) {
 // background, the extension's Test tab and the dashboard's Try-it all use this, so
 // a test shows exactly what a buyer would get. kind "held" = a reply about the chat
 // was written twice; nothing is sent and the owner is told.
+// (v0.21.95) THE SHOP'S OWN DIGITS. The owner writes the street number and the phone numbers in keycap
+// digits (7️⃣5️⃣7️⃣ rue Beaubien E, 4️⃣3️⃣8️⃣…): his house style, his account, his call (Nov 10 2026). When the
+// Address box is written that way, a reply keeps the style: a keycap that lost its variation selector
+// (some model outputs emit 7+U+20E3, which can render as a boxed plain 7 on desktop fonts) gets it back;
+// the address's number in plain figures before its street word becomes keycaps; a plain ten-digit phone
+// number becomes keycaps. Prices, capacities, hours and years are never ten digits and never sit before
+// the street word, so they are untouched. Pure; a plain Address box = the selector repair only.
+function shopDigits(text, settings) {
+  let t = String(text == null ? "" : text);
+  if (!t) return t;
+  t = t.replace(/([0-9])⃣/g, "$1️⃣");
+  const addr = String((settings && settings.businessAddress) || "");
+  if (!/[0-9]️⃣/.test(addr)) return t;
+  const keys = (digits) => digits.replace(/[0-9]/g, (d) => d + "️⃣");
+  const plain = addr.replace(/️⃣/g, "");
+  const num = (plain.match(/\d{2,}/) || [])[0];
+  const street = plain.replace(/[^\p{L}\s]/gu, " ").split(/\s+/).filter((w) => w.length >= 5).sort((a, b) => b.length - a.length)[0] || "";
+  if (num && street) {
+    const esc = (s) => String(s).replace(/[.*+?^${}()|[\]\\]/g, "\\$&");
+    t = t.replace(new RegExp("(^|[^0-9\\uFE0F\\u20E3])" + esc(num) + "(?=,?\\s+(?:rue\\s+)?" + esc(street) + ")", "giu"), (m, pre) => pre + keys(num));
+  }
+  t = t.replace(/(^|[^0-9])(\d{3})[ .-]?(\d{3})[ .-]?(\d{4})(?![0-9])/g, (m, pre, a, b, c) => pre + keys(a + b + c));
+  return t;
+}
 const GUARD_RETRY_NOTE = "The buyer would have read that word for word, and it is a note about the chat, not a message to them. Write only what the seller sends now, in the buyer's language. If the buyer's latest line is not something they wrote, or there is nothing to answer, reply with exactly [SKIP].";
 async function writeReply(settings, buyerMessage, extraContext, memory, opts) {
   opts = opts || {};
@@ -3728,6 +3773,9 @@ async function writeReply(settings, buyerMessage, extraContext, memory, opts) {
     out.text = walled;
     if (!out.text) return { kind: "held", reason: "every sentence named SubSell or carried a link (brand wall)", raw, retried, visit: parsed.visit, firstWhy, walled: true };
   } else if (out.kind === "video" && out.caption) out.caption = brandWall(out.caption);
+  // (v0.21.95) the shop's own digits, after the wall: the keycap street number and phone numbers
+  if (out.kind === "text") out.text = shopDigits(out.text, settings);
+  else if (out.kind === "video" && out.caption) out.caption = shopDigits(out.caption, settings);
   return out;
 }
 
@@ -6034,7 +6082,7 @@ chrome.runtime.onMessage.addListener((msg, _sender, sendResponse) => {
           {
             const walledF = brandWall(ftext);
             if (ftext && !walledF) { sendResponse({ ok: true, skip: true, reason: "brand wall: the follow-up named SubSell or carried a link" }); break; } // a plain skip (not held): the skip cap retires the chat
-            ftext = walledF;
+            ftext = shopDigits(walledF, settings); // (v0.21.95) the shop's own digits
           }
           // (v0.21.86) counted by the ledger on delivery (LOG_EVENT), not here.
           // No appendLog here: the content script logs the follow-up when it is

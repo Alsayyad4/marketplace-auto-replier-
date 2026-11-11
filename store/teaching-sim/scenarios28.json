@@ -1,0 +1,9 @@
+[
+  { "id": "b1_budget_fr", "thread": "Karim · iPhone 16 Pro 256 Go 1$", "turns": ["c'est trop cher pour moi j'ai 500 max", "ok et si j'amène mon vieux iphone 11?", "je peux passer ce soir?"] },
+  { "id": "b2_number_fr", "thread": "Lina · iPhone 14 128 Go 1$", "turns": ["c'est quoi votre numéro?", "ok c'est combien le 14 exactement?", "parfait je passe demain"] },
+  { "id": "b3_howmuch_en", "thread": "Jess · Samsung Galaxy S24 Ultra 256GB $1", "turns": ["how much?", "is it unlocked? new or used?", "where are you located exactly?"] },
+  { "id": "b4_vous_fr", "thread": "Mme Tremblay · iPhone 14 Pro Max 256 Go 1$", "turns": ["Bonjour, vous êtes situés où?", "Est-ce que vous prenez les cartes?", "Parfait, je passe en fin de journée"] },
+  { "id": "b5_robot_fr", "thread": "Amel · iPhone 12 64 Go 1$", "turns": ["c'est encore dispo?", "t'es un robot ou quoi?", "ok"] },
+  { "id": "b6_hold_en", "thread": "Dan · iPhone 13 128GB $1", "turns": ["still available?", "can you hold it till saturday?", "ok thanks"] },
+  { "id": "b7_seller_fr", "thread": "Youssef", "turns": ["je veux vendre mon iphone 13 128gb, vous donnez combien?", "il est en parfait état batterie 95%, tu donnes combien exactement?", "ok je viens demain matin"] }
+]
