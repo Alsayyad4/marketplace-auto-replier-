@@ -53,6 +53,7 @@
     followUps: [],
     videos: [],
     demoVideoUrls: [],
+    adVideoSets: [], // (v0.21.96) the video sets made for one ad (web app, Videos tab); read-only here
     demoVideoDelaySec: 10,
     demoVideoBetweenSec: 8,
     videoRetryMax: 2,
@@ -83,7 +84,7 @@
    * account holds NOW: a box typed here wins, a box untouched here keeps the account's value,
    * lists merge item by item (added here = added, removed here = removed, added there = kept).
    * Nothing below touches chrome.* — store/smoke-where.js runs it as is. */
-  const LIST_KEYS = ["listings", "followUps", "videos", "demoVideoUrls", "coaching"];
+  const LIST_KEYS = ["listings", "followUps", "videos", "demoVideoUrls", "adVideoSets", "coaching"];
   const clone = (v) => JSON.parse(JSON.stringify(v === undefined ? null : v));
   // JSON with its keys sorted, so two copies of one value compare equal whatever order
   // their keys were stored in (mirrors canonJson in background.js).
@@ -297,8 +298,42 @@
       renderVideos
     );
   }
+  // (v0.21.96) Read-only: the video sets made for one ad (web app, Videos tab) and whether each
+  // one applies on THIS computer. A chat whose ad title holds a set's words gets that set
+  // instead of the general list above (the worker's adVideoPick decides).
+  function renderAdVideoSets() {
+    const el = $("adVideoList");
+    if (!el) return;
+    const sets = (Array.isArray(settings.adVideoSets) ? settings.adVideoSets : []).filter((s) => s && s.id);
+    if (!sets.length) { el.textContent = "None: every ad gets the general video(s) above."; return; }
+    const paint = (me) => {
+      el.textContent = "";
+      sets.forEach((s) => {
+        const pcs = (Array.isArray(s.pcs) ? s.pcs : []).map((p) => String(p || "").toLowerCase()).filter(Boolean);
+        const clips = (Array.isArray(s.clips) ? s.clips : []).filter((v) => v && v.url);
+        const where = !pcs.length ? "every computer" : pcs.includes(me) ? "this computer" : "other computers, not this one";
+        const row = document.createElement("div");
+        row.textContent = "• Ads with: " + (String(s.ads || "").trim() || "(no words yet)") + " — " + (clips.length ? clips.map((v) => v.name || "video").join(" + ") : "(no video yet)") + " — " + where;
+        el.appendChild(row);
+      });
+    };
+    paint("");
+    try {
+      chrome.storage.local.get(["machineId", "machineLabel"], (r) => {
+        void chrome.runtime.lastError;
+        const id = String((r && r.machineId) || ""), label = String((r && r.machineLabel) || "").trim();
+        paint(id.toLowerCase());
+        if (id) { // the name to tick on the web app when a set is for this computer only
+          const who = document.createElement("div");
+          who.textContent = "On the web app's list this computer is: " + (label && label !== id ? label + " (" + id + ")" : id);
+          el.appendChild(who);
+        }
+      });
+    } catch (e) { /* the list without this computer's own line */ }
+  }
   // Read-only list of central demo videos (uploaded/removed in the web app).
   function renderCentralVideos() {
+    renderAdVideoSets(); // (v0.21.96) the sets made for one ad, under the general list
     const el = $("centralVideoList");
     if (!el) return;
     const vids = Array.isArray(settings.demoVideoUrls) ? settings.demoVideoUrls : [];

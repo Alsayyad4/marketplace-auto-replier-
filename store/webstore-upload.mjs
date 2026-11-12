@@ -5,6 +5,7 @@
 // read may throw a TypeError while the page reloads: harmless, verify on the Package page. Submit = the owner.
 import http from "node:http";
 import path from "node:path";
+import fs from "node:fs";
 const PORT = 9223;
 const ITEM = "ipompokpmlhgaioihnlbnmnhendcnejo", PUB = "629bdbe9-443c-4d1b-b4a0-7c7bf5020fc1";
 const BASE = "https://chrome.google.com/webstore/devconsole/" + PUB + "/" + ITEM + "/edit";
@@ -101,7 +102,9 @@ await c.send("DOM.enable");
 const set = await c.send("DOM.setFileInputFiles", { files: [zip], backendNodeId: chooser.backendNodeId });
 console.log("file set:", JSON.stringify(set).slice(0, 200));
 let shown = false;
-for (let i = 0; i < 75; i++) { await sleep(2000); const t = await pageText(c); if (/0\.21\.95/.test(t)) { console.log("page shows 0.21.95 after " + (i + 1) * 2 + " s"); shown = true; break; } }
+// (v0.21.96) the version being uploaded = the repo's manifest; the Package page must show it (the Draft's version)
+const VER = JSON.parse(fs.readFileSync(new URL("../manifest.json", import.meta.url), "utf8")).version;
+for (let i = 0; i < 75; i++) { await sleep(2000); const t = await pageText(c); if (t.indexOf(VER) >= 0) { console.log("page shows " + VER + " after " + (i + 1) * 2 + " s"); shown = true; break; } }
 const t = await pageText(c);
 const i = t.indexOf("Status");
 console.log((shown ? "OK" : "NOT SEEN") + "\n" + t.slice(Math.max(0, i), i + 600));

@@ -78,7 +78,7 @@ m = lib.mergeOverCurrent({ followUps: [] }, { followUps: [{ name: "f1" }] }, {})
 ok(JSON.stringify(m.config.followUps) === JSON.stringify([{ name: "f1" }]), "a follow-up added here lands even when the account holds no list");
 m = lib.mergeOverCurrent({ enabled: true, apiKey: "k" }, { enabled: true, apiKey: "k" }, { enabled: false, apiKey: "k2" });
 ok(m.config.enabled === false && m.config.apiKey === "k2", "untouched boxes (enabled, the API key) take the current values");
-ok(lib.LIST_KEYS.join() === "listings,followUps,videos,demoVideoUrls,coaching", "the list keys are the dashboard's five");
+ok(lib.LIST_KEYS.join() === "listings,followUps,videos,demoVideoUrls,adVideoSets,coaching", "the list keys are the dashboard's six");
 
 /* 2 — the wiring in options.js */
 ok(/saveMergedSettings\(\)\.then\(\(\) => \{\s*\$\("testStatus"\)\.textContent = "Calling Claude…";/.test(opt), "'Get Claude's reply' saves through the merge first");
@@ -108,7 +108,7 @@ ok(/function showTab\(name\)/.test(app) && /function applyHashTab\(\)/.test(app)
 ok(/loadConfig\(\)\.then\(applyHashTab, applyHashTab\);/.test(app), "the hash tab is applied once the row is read after the login");
 ok(/if \(name === "activity"\) loadActivity\(\);/.test(app), "#activity loads the log");
 ok(/history\.replaceState\(null, "", "#" \+ t\.dataset\.tab\);/.test(app), "a click writes the hash back");
-ok(/app\.js\?v=20261110/.test(html), "the dashboard cache-buster is bumped");
+ok(/app\.js\?v=20261112/.test(html), "the dashboard cache-buster is bumped");
 ok(/^0\.21\.(89|9[0-9])$/.test(manifest.version), "manifest v0.21.89 or later — " + manifest.version); // (v0.21.90) the release after carries this page unchanged
 ok(/"options\.html", "options\.js", "popup\.html", "popup\.js"/.test(ps1), "the store zip carries the four page files (nothing new to add)");
 

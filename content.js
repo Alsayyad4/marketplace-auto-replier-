@@ -2732,7 +2732,9 @@
           // another tile) and keep the chat on the pending queue.
           try {
             if (at && at.blindKey && lastSettings && lastSettings.videoCompleteSet !== false) {
-              const cfgW = (Array.isArray(lastSettings.demoVideoUrls) ? lastSettings.demoVideoUrls.filter((v) => v && v.url) : []).map(clipIdsOf);
+              // (v0.21.96) the clips of THIS chat's list: its ad's set when the worker gave it one (videoSetOf), else the general list
+              const setW = (((await getLocal(["videoSetOf"])).videoSetOf || {})[id] || {}).set || ""; // remembered even when the set is gone since: its clips are then none, never the general list's
+              const cfgW = clipsOfSet(lastSettings, setW).map(clipIdsOf);
               const bi = cfgW.findIndex((ci) => ci.indexOf(at.blindKey) >= 0);
               if (bi >= 0) {
                 const ledW = await clipLedgerPut(id, (e) => clipMark(e, cfgW[bi], "s", now));
@@ -3743,9 +3745,22 @@
     await setLocal({ videoClips: map });
     return e;
   }
+  // (v0.21.96) A VIDEO PER AD. The account may carry video sets made for one ad (settings.adVideoSets;
+  // the worker's adVideoPick says which ad a set is for). The worker decides which set a chat is on and
+  // remembers it (CHAT_CLIPS, storage key videoSetOf). Here: is any set configured, and the clip list of
+  // a given set ("" = the general list). With no set configured both read exactly as before.
+  // (function declarations, hoisted: the watcher above this point calls them)
+  function adSetsOn(s) { return !!(s && Array.isArray(s.adVideoSets) && s.adVideoSets.some((x) => x && x.id && /[\p{L}\p{N}]/u.test(String(x.ads || "")) && Array.isArray(x.clips) && x.clips.some((v) => v && v.url))); }
+  function generalClips(s) { return s && Array.isArray(s.demoVideoUrls) ? s.demoVideoUrls.filter((v) => v && v.url) : []; }
+  function clipsOfSet(s, setId) {
+    if (!setId) return generalClips(s);
+    const st = (s && Array.isArray(s.adVideoSets) ? s.adVideoSets : []).find((x) => x && x.id === setId);
+    return st && Array.isArray(st.clips) ? st.clips.filter((v) => v && v.url) : [];
+  }
   // The configured clip list as one string: when it changes, every in-memory
   // "already served this session" latch is re-evaluated against the ledger.
-  const clipListSig = (s) => (s && Array.isArray(s.demoVideoUrls) ? s.demoVideoUrls.filter((v) => v && v.url).map((v) => clipIdsOf(v)[0]).join("|") : "");
+  const clipListSig = (s) => (s && Array.isArray(s.demoVideoUrls) ? s.demoVideoUrls.filter((v) => v && v.url).map((v) => clipIdsOf(v)[0]).join("|") : "") +
+    (adSetsOn(s) ? "#" + s.adVideoSets.map((x) => (x && x.id ? x.id + ":" + (Array.isArray(x.clips) ? x.clips : []).filter((v) => v && v.url).map((v) => clipIdsOf(v)[0]).join("|") : "")).join("#") : ""); // (v0.21.96) …and the ad sets: one made, changed or removed re-opens the same latches
   let videoLockedSig = null;
 
   async function maybeSendVideo(id, name, immediate, sidebarKey, deferSend, hooks) {
@@ -3862,6 +3877,7 @@
       }
       const cfg = await getLocal([
         "videoEnabled", "demoVideos", "demoVideo", "videoDelaySec", "videoSentThreads", "videoAttempts", "videoJustSend",
+        "videoSetOf", // (v0.21.96) the video set this chat was given, if any (written by the worker's CHAT_CLIPS)
       ]);
       // JUST-SEND is the default (v0.21.43); a machine-local `videoJustSend:false`
       // or the dashboard's `videoJustSend:false` brings the verdict engine back.
@@ -3908,6 +3924,46 @@
           const mr = wv.videoAttempts && wv.videoAttempts[id] && wv.videoAttempts[id].manualResend;
           const manual = !!(mr && Date.now() - mr < 10 * 60000);
           if (!wanted[id] && !(sidebarKey && wanted[sidebarKey]) && !manual) { clearPend(); vstat("clip waits until this buyer asks to see it (" + (name || id) + ")"); return; }
+        }
+      }
+      // (v0.21.96) A VIDEO PER AD. The gate above decides WHETHER this chat gets a clip; this decides WHICH.
+      // When the account carries video sets made for one ad — or this chat was once given one (videoSetOf,
+      // even if that set is gone since) — the worker says which list the chat is on (its ad's set, or the
+      // general list) and that list replaces `central` for the whole visit. A chat that already holds a
+      // clip, a video mark or a retry stays where it is (`servedA`), so a set made, changed or removed
+      // later never sends a second, different video into it. An account that never made a set asks
+      // nothing and reads the general list as before. No answer from the worker = not this visit (the
+      // chat is queued), never a guess.
+      let adSetChatA = false; // this visit sends a set's clips
+      const rememberedA = safe(() => { const e = cfg.videoSetOf && cfg.videoSetOf[id]; return e && typeof e.set === "string" ? e.set : ""; }, "") || "";
+      if (settingsOk && (adSetsOn(sCfg) || rememberedA)) {
+        let servedA = true; // an unreadable state keeps the chat on the list it has
+        try {
+          const ledA = await clipLedgerGet(id);
+          const atA = (cfg.videoAttempts || {})[id];
+          servedA = !!(cfg.videoSentThreads || {})[id] || !!(atA && atA.blindTries) || Object.keys(ledA.s).length + Object.keys(ledA.t).length > 0;
+        } catch (e) { servedA = true; }
+        // the chat's label ("Buyer · headline"): a caller that only has the page title (the popup's manual send) gets the sidebar row's
+        const nameA = name && String(name).indexOf("·") > 0 ? name : (safe(() => openThreadName(), "") || name || "");
+        let pickA = null;
+        try { pickA = await ask({ type: "CHAT_CLIPS", threadId: id, threadName: nameA, served: servedA }); } catch (e) { pickA = null; }
+        if (!(pickA && pickA.ok)) {
+          const dnA = (cfg.videoSentThreads || {})[id];
+          const doneA = !!(dnA && dnA.done && typeof dnA.resumeFrom !== "number");
+          const qkA = sidebarKey || id;
+          if (qkA && !doneA && videoPending[qkA] == null && videoPending[id] == null) { videoPending[qkA] = Date.now(); persistDedup(); }
+          vstat("couldn't ask which video list this chat is on — will retry (" + (name || id) + ")");
+          return;
+        }
+        if (pickA.set) {
+          if (pickA.gone) { clearPend(); vstat("the video set of this chat's ad was removed: the chat keeps what it has (" + (name || id) + ")"); return; }
+          central = (Array.isArray(pickA.clips) ? pickA.clips : []).filter((v) => v && v.url);
+          local = [];
+          if (!central.length) { clearPend(); vstat("the video set of this chat's ad holds no clip (" + (name || id) + ")"); return; }
+          adSetChatA = true;
+          vstat("this ad has its own video set: " + central.length + " clip(s) (" + (name || id) + ")");
+        } else if (adSetsOn(sCfg) && !central.length && !local.length) {
+          clearPend(); vstat("no video for this ad: the sets are for other ads and there is no general video (" + (name || id) + ")"); return;
         }
       }
       if (!settingsOk && !central.length && !local.length) {
@@ -4282,7 +4338,9 @@
           // lost on every visit. The File is loaded LAZILY, only if a synthetic
           // strategy ever runs for this clip. (The disk cache is kept warm even
           // while the file API is parked — a park must not mean a cold start.)
-          const p = await diskPathFor({ url: v.url, name: v.name });
+          // (v0.21.96) a set's clip gets no on-disk copy where the file API is parked for good (the store build):
+          // every disk copy is a download the computer shows, and the disk index holds nine clips
+          const p = adSetChatA && !HAS_DEBUGGER ? null : await diskPathFor({ url: v.url, name: v.name });
           if (p) {
             const load = async () => {
               const r = await fetchWithBudget(v.url);
@@ -6671,7 +6729,7 @@
           const now = Date.now();
           const ageM = (t) => (typeof t === "number" && t > 0 ? Math.round((now - t) / 60000) + "m" : "-");
           const det = (fn) => { try { return fn() ? "Y" : "n"; } catch (e) { return "err"; } };
-          const st = await getLocal(["videoSentThreads", "videoAttempts"]);
+          const st = await getLocal(["videoSentThreads", "videoAttempts", "videoSetOf"]);
           const vt = st.videoSentThreads || {};
           const am = st.videoAttempts || {};
           const anchors = conversationAnchors();
@@ -6732,7 +6790,9 @@
               " | detectors: hardened=" + det(chatAlreadyHasOurVideo) +
               " legacyVideo=" + det(legacyChatVideoDetect) +
               " legacyBadge=" + det(legacyBadgeDetect) +
-              " | mark=" + (vt[m[1]] ? JSON.stringify(vt[m[1]]).slice(0, 90) : "-")
+              " | mark=" + (vt[m[1]] ? JSON.stringify(vt[m[1]]).slice(0, 90) : "-") +
+              // (v0.21.96) which video list this chat is on: a set made for its ad (the worker's CHAT_CLIPS) or the general one
+              " adset=" + (((st.videoSetOf || {})[m[1]] || {}).set || (adSetsOn(lastSettings) ? "general" : "-"))
             );
           } else {
             L.push("open chat: none");

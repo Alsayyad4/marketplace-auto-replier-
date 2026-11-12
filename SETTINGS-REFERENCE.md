@@ -135,6 +135,20 @@ list. There is no second place to teach the bot.
   downloading a new clip the minute the list arrives (before any buyer needs it); `size`
   (bytes, written by the dashboard on upload) lets the bots recognise the same FILE listed
   or uploaded twice. Lighter is better — every bot uploads each clip into every chat.
+- `adVideoSets` — array of `{ id, ads, pcs, clips }` (default `[]`). (v0.21.96) **A video per ad.**
+  A set goes, INSTEAD of `demoVideoUrls`, to the chats whose ad title holds the set's words.
+  `ads` = words of the title, with a comma, a semicolon or a new line between alternatives
+  ("macbook air, macbook pro"): whole words, accents and case aside; the longest alternative
+  wins, then a set written for this computer, then the order of the list. `pcs` = the install
+  ids (`PC-xxxxx`) the set is for, empty = every computer. `clips` = `[{ name, url, size }]`,
+  the same shape as `demoVideoUrls`. `videoWhen` still decides WHETHER a chat gets a clip; a
+  set only decides WHICH. One list per chat: the worker remembers the set it gave a chat
+  (`videoSetOf` in the machine's local storage, written by the `CHAT_CLIPS` message), and a
+  chat that already holds a clip, a video mark or a retry stays on the general list, so a set
+  made later never sends a second, different video. Made on the dashboard's Videos tab (it
+  lists the ads the bots answered in the last 5 days, per computer); read-only in the
+  extension's Settings. Builds before 0.21.96 ignore the key and send the general list.
+  Pure rule: `adVideoPick` / `chatClipChoice` in background.js; `store/smoke-advideo.js`.
 - `videoCompleteSet` — bool (default `true`). (v0.21.72) **Every clip, exactly once per chat.**
   Each chat keeps a ledger of the clips it was handed, by file (`videoClips` in the
   machine's local storage: `s` = sent, `t` = handed over but never confirmed; both mean

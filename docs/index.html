@@ -303,6 +303,10 @@
             </div>
           </div>
           <div id="demoVideoList" class="hint" style="margin-top:8px;">No central videos yet.</div>
+          <h3 style="margin:14px 0 4px;">🎯 A video for a specific ad <span class="hint">(optional — a computer needs extension 0.21.96 or newer)</span></h3>
+          <p class="hint">The video(s) above go to <b>every</b> ad. To give one ad its <b>own</b> video: press the button, pick the ad (the list shows the ads the bots answered, and on which computer) or type words from its title, then upload the video. A buyer who writes from that ad gets this video <b>instead of</b> the general one. <b>You do not need a video for every ad:</b> an ad with no set gets the general video(s) above, or no video at all when that list is empty — remove the general video(s) to send a video only on the ads you choose. Tick a computer to use a set only there (one computer = one Facebook account). &ldquo;Send the clip&rdquo; above still decides <b>if</b> a buyer gets a video; a set only decides <b>which one</b>. A chat that already got a video is never sent a second one.</p>
+          <div id="adSets"></div>
+          <div class="row"><button id="addAdSet" type="button">+ A video for a specific ad</button> <span id="adSetStatus" class="hint"></span></div>
           <div style="margin-top:10px;padding:10px;border:1px solid #444;border-radius:8px;">
             <b>Where the videos went, last 7 days</b> <span class="hint">read from what every computer logged in the Activity tab — a chat that got more clips than the list holds, two computers sending into one chat, a chat still short of a clip an hour later. Use “Copy report” below and paste it to Claude when something looks wrong.</span>
             <div id="videoReport" class="hint" style="margin-top:6px;">Open this tab while signed in to load.</div>
@@ -378,6 +382,6 @@
     <script src="config.js?v=20261011"></script>
     <script src="seed.js?v=20261110"></script>
     <script src="https://cdn.jsdelivr.net/npm/@supabase/supabase-js@2"></script>
-    <script src="app.js?v=20261110"></script>
+    <script src="app.js?v=20261112"></script>
   </body>
 </html>

@@ -55,6 +55,7 @@
     followUps: [],
     videos: [],
     demoVideoUrls: [], // central demo videos (uploaded to Supabase Storage) [{name,url}]
+    adVideoSets: [], // (v0.21.96) MUST match background.js DEFAULTS — a video set per ad [{ id, ads, pcs, clips: [{ name, url, size }] }]; a chat whose ad fits a set gets it instead of the general list
     demoVideoDelaySec: 10,
     demoVideoBetweenSec: 8,
     videoRetryMax: 2, // native attach retries per chat before the link fallback
@@ -303,8 +304,8 @@
   // `url` (uploads): after a failed save the page may have RELOADED another
   // device's newer row — then the new entry is gone from the list and "press
   // Save" would be a lie; say what actually has to be done.
-  async function saveVideoList(what, url) {
-    const status = $("demoVideoStatus");
+  async function saveVideoList(what, url, statusEl) {
+    const status = statusEl || $("demoVideoStatus"); // (v0.21.96) the ad sets report on their own line
     // one save at a time: a debounced auto-save about to fire would send the same
     // row stamp and one of the two would read as "someone else saved first"
     if (autoTimer) { clearTimeout(autoTimer); autoTimer = null; }
@@ -327,7 +328,9 @@
     if (!el) return;
     const vids = settings.demoVideoUrls || [];
     if (!vids.length) {
-      el.textContent = "No central videos yet.";
+      // (v0.21.96) the owner: "not every listing I will put a video". With sets and no general video, only the ads that have a set get one
+      const setsOn = (Array.isArray(settings.adVideoSets) ? settings.adVideoSets : []).some((s) => s && s.id && String(s.ads || "").trim() && Array.isArray(s.clips) && s.clips.some((v) => v && v.url));
+      el.textContent = setsOn ? "No general video: only the ads that have their own video below get one; every other ad gets none." : "No central videos yet.";
       return;
     }
     el.innerHTML = "";
@@ -400,6 +403,225 @@
     });
   }
 
+  /* ----- (v0.21.96) A VIDEO PER AD -----
+   * The general list above goes to every ad. A set made here goes INSTEAD of it to the chats whose
+   * ad title holds the set's words, on every computer or only on the ones ticked (the bots choose
+   * with adVideoPick in background.js and keep one list per chat, see CHAT_CLIPS there). The sets
+   * save themselves like the general list. "Ads the bots answered" = the listing titles of the
+   * last five days of Activity rows, with the computers that answered them: the way to pick an ad
+   * of the Facebook account open on a given computer without typing its title. */
+  const AD_MIN_VER = "0.21.96"; // the first build that reads adVideoSets; an older one sends the general list to every ad
+  const verLess = (a, b) => { const x = String(a || "").split(".").map(Number), y = String(b).split(".").map(Number); for (let i = 0; i < 3; i++) { if ((x[i] || 0) !== (y[i] || 0)) return (x[i] || 0) < (y[i] || 0); } return false; };
+  const newAdSetId = () => "s" + Date.now().toString(36) + Math.random().toString(36).slice(2, 6);
+  let adsSeen = []; // [{ item, n, pcs: { "pc-abc12": n } }], the most written-to first
+  let adPcs = []; // [{ key: "pc-abc12", show: "Front desk", ver: "0.21.96" }]
+  let adCore = null; // the bots' own adVideoPick (the Try-it slice of background.js), for the "it gets" line
+  // Pure: Activity rows (newest first) → the ads answered and the computers that answered them.
+  function adsSeenFrom(rows) {
+    const by = new Map(), pcs = new Map();
+    for (const r of rows || []) {
+      const raw = String((r && r.machine) || "");
+      const key = raw ? machineKey(raw) : "";
+      if (key && !pcs.has(key)) pcs.set(key, { key, show: machineShow(raw).replace(/\s*·\s*v[\d.]+\s*$/, "") || key, ver: (raw.match(/·\s*v([\d.]+)/) || [])[1] || "" }); // the newest name and version win
+      const item = listingFromTitle(r && r.thread_name);
+      if (!item) continue;
+      const k = item.toLowerCase();
+      const e = by.get(k) || { item, n: 0, pcs: {} };
+      e.n++;
+      if (key) e.pcs[key] = (e.pcs[key] || 0) + 1;
+      by.set(k, e);
+    }
+    return { ads: Array.from(by.values()).sort((a, b) => b.n - a.n), pcs: Array.from(pcs.values()) };
+  }
+  async function loadAdsSeen() {
+    if (!client || !session || !rowLoaded) return;
+    try {
+      const since = new Date(Date.now() - 5 * 24 * 3600 * 1000).toISOString();
+      const r = await messagesOnly(client.from("subsell_messages").select("created_at, machine, thread_name"))
+        .gte("created_at", since).order("created_at", { ascending: false }).limit(1000);
+      if (r.error) return;
+      const got = adsSeenFrom(r.data || []);
+      adsSeen = got.ads;
+      adPcs = got.pcs;
+      await ensureAdCore();
+      const act = document.activeElement, box = $("adSets");
+      if (!(act && box && box.contains(act))) renderAdSets(); // never under a box being typed in
+    } catch (e) { /* a picker must never break the page */ }
+  }
+  // The bots' own rule is fetched only once a set exists: the general list alone never needs it.
+  async function ensureAdCore() {
+    if (adCore || !adSetsList().length) return;
+    const core = await loadTeachCore();
+    adCore = core && typeof core.adVideoPick === "function" ? core : null;
+  }
+  const adSetsList = () => (settings.adVideoSets = Array.isArray(settings.adVideoSets) ? settings.adVideoSets : []);
+  const saveAdSets = (what) => saveVideoList(what, undefined, $("adSetStatus"));
+  // The ads answered that this set would get, by the bots' own rule (null = the rule is not loaded).
+  function adSetFits(set) {
+    if (!adCore) return null;
+    const cfg = { adVideoSets: adSetsList() };
+    return adsSeen.filter((ad) => {
+      const keys = Object.keys(ad.pcs);
+      return (keys.length ? keys : [""]).some((k) => { const p = adCore.adVideoPick(cfg, ad.item, k); return !!p && p.id === set.id; });
+    }).map((ad) => ad.item);
+  }
+  function renderAdSets() {
+    const el = $("adSets");
+    if (!el) return;
+    const sets = adSetsList();
+    el.textContent = "";
+    if (!sets.length) {
+      const none = document.createElement("div");
+      none.className = "hint";
+      none.textContent = "No video for a specific ad yet: every ad gets the general video(s) above.";
+      el.appendChild(none);
+    }
+    const lower = (list) => (Array.isArray(list) ? list : []).map((x) => String(x || "").toLowerCase()).filter(Boolean);
+    const check = (text, checked, onChange) => {
+      const lb = document.createElement("label");
+      lb.className = "check";
+      const cb = document.createElement("input");
+      cb.type = "checkbox";
+      cb.checked = checked;
+      cb.addEventListener("change", () => onChange(cb.checked));
+      lb.appendChild(cb);
+      lb.appendChild(document.createTextNode(" " + text));
+      return lb;
+    };
+    sets.forEach((set, i) => {
+      set.clips = Array.isArray(set.clips) ? set.clips : [];
+      set.pcs = lower(set.pcs);
+      const card = document.createElement("div");
+      card.style.cssText = "margin-top:10px;padding:10px;border:1px solid #444;border-radius:8px;";
+      // 1. which ads
+      const l1 = document.createElement("label");
+      l1.textContent = "For ads whose title holds all of these words (a comma = or)";
+      const words = document.createElement("input");
+      words.type = "text";
+      words.value = set.ads || "";
+      words.placeholder = "macbook air, macbook pro";
+      words.addEventListener("change", async () => { set.ads = words.value.trim(); renderAdSets(); await saveAdSets("Saved"); });
+      const pick = document.createElement("select");
+      const o0 = document.createElement("option");
+      o0.value = "";
+      o0.textContent = adsSeen.length ? "…or pick an ad the bots answered in the last 5 days" : "(no ad was answered in the last 5 days: type the words)";
+      pick.appendChild(o0);
+      adsSeen.slice(0, 80).forEach((ad) => {
+        const o = document.createElement("option");
+        o.value = ad.item;
+        const where = Object.keys(ad.pcs).map((k) => (adPcs.find((p) => p.key === k) || { show: k }).show).join(", ");
+        o.textContent = truncTxt(ad.item, 60) + " (" + ad.n + (where ? " · " + where : "") + ")";
+        pick.appendChild(o);
+      });
+      pick.addEventListener("change", async () => {
+        if (!pick.value) return;
+        // a title is ONE alternative: its own commas, semicolons and line breaks must not split it into several
+        const one = String(pick.value).replace(/[,;\n]+/g, " ").replace(/\s+/g, " ").trim();
+        const cur = String(set.ads || "").trim();
+        set.ads = cur ? cur + ", " + one : one;
+        renderAdSets();
+        await saveAdSets("Saved");
+      });
+      card.appendChild(l1);
+      card.appendChild(words);
+      card.appendChild(pick);
+      // 2. which computers
+      const l2 = document.createElement("label");
+      l2.textContent = "Only on these computers (none ticked = every computer)";
+      card.appendChild(l2);
+      const pcsRow = document.createElement("div");
+      pcsRow.className = "row";
+      const known = adPcs.slice();
+      for (const k of set.pcs) if (!known.some((p) => p.key === k)) known.push({ key: k, show: k, ver: "" });
+      if (!known.length) pcsRow.appendChild(document.createTextNode("(no computer has answered in the last 5 days)"));
+      known.forEach((p) => {
+        const old = p.ver && verLess(p.ver, AD_MIN_VER) ? " (v" + p.ver + ": updates itself first)" : "";
+        pcsRow.appendChild(check(p.show + old, set.pcs.includes(p.key), async (on) => {
+          set.pcs = set.pcs.filter((x) => x !== p.key).concat(on ? [p.key] : []);
+          renderAdSets();
+          await saveAdSets("Saved");
+        }));
+      });
+      card.appendChild(pcsRow);
+      // 3. its videos
+      const l3 = document.createElement("label");
+      l3.textContent = "Video(s) these ads get, instead of the general one";
+      card.appendChild(l3);
+      set.clips.forEach((v, k) => {
+        const row = document.createElement("div");
+        row.className = "row";
+        const a = document.createElement("a");
+        a.href = v.url;
+        a.target = "_blank";
+        a.textContent = (k + 1) + ". " + (v.name || "video");
+        const meta = document.createElement("span");
+        meta.className = "hint";
+        meta.textContent = (v.size > 0 ? " " + fmtMB(v.size) : "") + (v.size > HEAVY_CLIP_BYTES ? " — heavy: a 720p export (3–5 MB) sends much faster" : "");
+        const del = document.createElement("button");
+        del.type = "button";
+        del.className = "danger";
+        del.textContent = "Remove";
+        del.addEventListener("click", async () => { set.clips.splice(k, 1); renderAdSets(); await saveAdSets("Removed"); });
+        row.appendChild(a);
+        row.appendChild(meta);
+        row.appendChild(del);
+        card.appendChild(row);
+      });
+      const up = document.createElement("input");
+      up.type = "file";
+      up.accept = "video/mp4,video/*";
+      up.addEventListener("change", async () => {
+        const f = up.files && up.files[0];
+        if (!f) return;
+        const st = $("adSetStatus");
+        const say = (cls, msg) => { if (st) { st.className = cls; st.textContent = msg; } };
+        if (set.clips.some((o) => sameClip(o, { name: f.name, size: f.size }))) { say("hint", f.name + " is already in this set: not added twice."); up.value = ""; return; }
+        say("hint", "Uploading " + f.name + "…");
+        const safe = f.name.replace(/[^a-zA-Z0-9._-]/g, "_");
+        const path = session.user.id + "/" + Date.now() + "-" + safe;
+        const res = await client.storage.from(VIDEO_BUCKET).upload(path, f, { upsert: true, contentType: f.type || "video/mp4" });
+        if (res.error) { say("err", "Upload failed: " + res.error.message); return; }
+        set.clips.push({ name: f.name, url: client.storage.from(VIDEO_BUCKET).getPublicUrl(path).data.publicUrl, size: f.size || 0 });
+        renderAdSets();
+        await saveAdSets("Uploaded");
+      });
+      card.appendChild(up);
+      // 4. is it active, and which answered ads it gets
+      const hasWords = !!String(set.ads || "").trim(), hasClip = set.clips.some((v) => v && v.url);
+      // usable by the bots' own reading: a price or an advert word such as "liquidation" is not a title word
+      const usable = hasWords && hasClip && (adCore && typeof adCore.adVideoSets === "function" ? adCore.adVideoSets({ adVideoSets: [set] }).length > 0 : true);
+      const fits = usable ? adSetFits(set) : null;
+      const state = document.createElement("div");
+      state.className = "hint";
+      state.textContent = !hasWords ? "Not active yet: type the words of the ad's title, or pick an ad."
+        : !hasClip ? "Not active yet: add a video."
+        : !usable ? "Not active: these words hold nothing an ad's title is read by (a price, or a word like liquidation, is left out). Type words from the title itself."
+        : "Active. " + (fits == null ? "" : fits.length ? "Of the ads answered in the last 5 days it gets: " + truncTxt(fits.slice(0, 6).join(" | "), 300) + (fits.length > 6 ? " … (" + fits.length + " ads)" : "") + "." : "None of the ads answered in the last 5 days holds these words yet.");
+      card.appendChild(state);
+      const rm = document.createElement("button");
+      rm.type = "button";
+      rm.className = "danger";
+      rm.textContent = "Remove this set";
+      rm.addEventListener("click", async () => {
+        if (!confirm("Remove this set? Its ads go back to the general video.")) return;
+        sets.splice(i, 1);
+        renderAdSets();
+        await saveAdSets("Removed");
+      });
+      card.appendChild(rm);
+      el.appendChild(card);
+    });
+    const behind = adPcs.filter((p) => p.ver && verLess(p.ver, AD_MIN_VER));
+    if (sets.length && behind.length) {
+      const w = document.createElement("div");
+      w.className = "hint";
+      w.textContent = "Still on a version older than " + AD_MIN_VER + " (they send the general video to every ad until they update, which they do by themselves): " + behind.map((p) => p.show + " v" + p.ver).join(", ") + ".";
+      el.appendChild(w);
+    }
+    if (!(settings.demoVideoUrls || []).length) renderDemoVideos(true); // the empty general list says what the sets mean for the other ads
+  }
+  if ($("addAdSet")) $("addAdSet").addEventListener("click", () => { adSetsList().push({ id: newAdSetId(), ads: "", pcs: [], clips: [] }); renderAdSets(); ensureAdCore(); });
+
   function renderAll() {
     settings.listings = settings.listings || [];
     settings.followUps = settings.followUps || [];
@@ -411,6 +633,7 @@
     renderFollowUps();
     renderVideos();
     renderDemoVideos();
+    renderAdSets(); // (v0.21.96) the video sets made for one ad
     renderCoaching();
     wireAutoSave();       // (v0.21.55) every field auto-saves from here on
     renderTeachPreview(); // and the "what the bot learns" panel tracks it
@@ -479,6 +702,7 @@
     loadFleet(); // which computers answer with this teaching (never blocks the load)
     loadCost(); // (v0.21.74) what the AI cost, measured and estimated (never blocks the load)
     loadVideoReport(); // (v0.21.75) the video delivery report on the Videos tab
+    loadAdsSeen(); // (v0.21.96) the ads the bots answered, for the video-per-ad picker
     try { // (v0.21.70) the draft offer is in the finally: nothing on this load may clear it first
     // (v0.21.66) A DEAD account — no API key AND nothing it has been taught — is
     // what a blank-form save leaves behind, and what the operator was looking at:
@@ -743,7 +967,7 @@
    * `baseConfig` is the row as this page last knew it, in the form a save writes. */
   let baseConfig = null;
   const cj = (v) => JSON.stringify(teachCanon(v === undefined ? null : v));
-  const LIST_KEYS = ["listings", "followUps", "videos", "demoVideoUrls", "coaching"];
+  const LIST_KEYS = ["listings", "followUps", "videos", "demoVideoUrls", "adVideoSets", "coaching"];
   function normalizeForSave(o) {
     const c = Object.assign({}, o);
     delete c.enabled; // per-machine
@@ -833,6 +1057,7 @@
     renderFollowUps();
     renderVideos();
     renderDemoVideos(true);
+    renderAdSets(); // (v0.21.96)
     renderCoaching();
   }
 
@@ -1346,7 +1571,7 @@
   // same site). The two markers are comments in that file; store/smoke-teach.js fails if they move.
   const CORE_BEGIN = "/* ===================== (v0.21.73) THE OWNER IS THE ONLY TEACHER";
   const CORE_END = "/* ---------------- video fetch ---------------- */";
-  const CORE_VER = "20261110"; // (v0.21.94) [CLIP] + the neutral seed; (v0.21.93) the API line; (v0.21.88) the listing line + the owner's entry for the item
+  const CORE_VER = "20261112"; // (v0.21.96) a video per ad (adVideoPick, adClipNote); (v0.21.94) [CLIP] + the neutral seed; (v0.21.93) the API line; (v0.21.88) the listing line + the owner's entry for the item
   let teachCore = null, teachCoreErr = "";
   async function loadTeachCore() {
     if (teachCore) return teachCore;
@@ -1356,7 +1581,7 @@
       const src = await res.text();
       const a = src.indexOf(CORE_BEGIN), b = a < 0 ? -1 : src.indexOf(CORE_END, a);
       if (a < 0 || b < 0) throw new Error("the bots' prompt code was not found");
-      teachCore = new Function("DEFAULTS", "fetch", src.slice(a, b) + "\nreturn { buildSystemPrompt: buildSystemPrompt, lessonFor: lessonFor, callClaude: callClaude, parseReply: parseReply, writeReply: typeof writeReply === \"function\" ? writeReply : null };")(DEFAULTS, (u, o) => fetch(u, o));
+      teachCore = new Function("DEFAULTS", "fetch", src.slice(a, b) + "\nreturn { buildSystemPrompt: buildSystemPrompt, lessonFor: lessonFor, callClaude: callClaude, parseReply: parseReply, writeReply: typeof writeReply === \"function\" ? writeReply : null, adVideoPick: typeof adVideoPick === \"function\" ? adVideoPick : null, adVideoSets: typeof adVideoSets === \"function\" ? adVideoSets : null };")(DEFAULTS, (u, o) => fetch(u, o));
       return teachCore;
     } catch (e) { teachCoreErr = String((e && e.message) || e); return null; }
   }

@@ -127,6 +127,7 @@ const DEFAULTS = {
   // central demo videos (hosted in Supabase Storage, served via the config URL).
   // The extension downloads each and sends it as a NATIVE attachment, once per chat.
   demoVideoUrls: [], // [{ name, url }]
+  adVideoSets: [], // (v0.21.96) A VIDEO PER AD: [{ id, ads, pcs, clips: [{ name, url, size }] }]; a chat whose ad fits a set gets that set instead of the general list above (adVideoPick)
   demoVideoDelaySec: 10, // pause before the FIRST video (after the reply)
   demoVideoBetweenSec: 8, // pause BETWEEN videos when several are configured
   // (v0.21.47) evidence-based delivery: native attach retries per chat before the
@@ -298,7 +299,7 @@ const CFG_BACKUP_MAX = 5;
 // empty strings as highly as a full one, so the fields the operator would grieve
 // over are weighted explicitly.
 const CFG_TEXT_KEYS = ["apiKey", "model", "businessInfo", "instructions", "closerGoals", "priceList", "examples", "businessName", "businessAddress", "businessHoursText", "visitConfirmMessage"];
-const CFG_LIST_KEYS = ["listings", "followUps", "demoVideoUrls", "videos", "coaching"];
+const CFG_LIST_KEYS = ["listings", "followUps", "demoVideoUrls", "adVideoSets", "videos", "coaching"];
 function configWeight(c) {
   if (!c || typeof c !== "object") return 0;
   let w = 0;
@@ -421,13 +422,16 @@ function ownerWroteOf(base) {
 }
 function getSettings() {
   return new Promise((resolve) => {
-    chrome.storage.local.get(["settings", "enabledLocal", "remoteConfig", "cloudConfig"], (res) => {
+    chrome.storage.local.get(["settings", "enabledLocal", "remoteConfig", "cloudConfig", "machineId"], (res) => {
       const finish = (base) => {
         const merged = Object.assign({}, DEFAULTS, base);
         // (v0.21.73) Which teaching boxes the OWNER filled, as opposed to this
         // file's DEFAULTS text standing in for an empty one. Non-enumerable: it
         // is never serialized, saved or pushed — only buildSystemPrompt reads it.
         Object.defineProperty(merged, "ownerWrote", { enumerable: false, value: ownerWroteOf(base) });
+        // (v0.21.96) this computer's install id, for the video sets written for one computer (adVideoPick).
+        // Non-enumerable like ownerWrote: never serialized, saved or pushed.
+        Object.defineProperty(merged, "machineId", { enumerable: false, value: String((res && res.machineId) || "") });
         // `enabled` is PER-MACHINE: enabledLocal always wins (shared config never
         // turns a machine on/off for you).
         if (typeof res.enabledLocal === "boolean") merged.enabled = res.enabledLocal;
@@ -2830,6 +2834,83 @@ function listingContext(settings, threadName, opts) {
   }
   return L.join("\n");
 }
+/* ===== (v0.21.96) A VIDEO PER AD (pure; store/smoke-advideo.js) =====
+ * The owner, Nov 12 2026: "I want to put a different video for a different ad, I don't want to
+ * send the same video for all the ads", and a video for the computer the bot runs on. One clip
+ * list for every chat sent the iPhone clip to a MacBook buyer. Now the account's settings may
+ * carry AD VIDEO SETS (dashboard, Videos tab): settings.adVideoSets = [{ id, ads, pcs, clips }]
+ *   ads   = words of the ad's title; a comma, a semicolon or a new line separates
+ *           alternatives ("macbook air, macbook pro"). An alternative fits an ad when the
+ *           title holds every one of its words (whole words; accents and case aside).
+ *   pcs   = the computers the set is for (install ids, "PC-xxxxx"); empty = every computer.
+ *   clips = [{ name, url, size }], the same shape as demoVideoUrls.
+ * A chat whose ad fits a set receives that set INSTEAD of the general list (demoVideoUrls);
+ * every other chat receives the general list, as before. The longest alternative wins (the
+ * most words), then a set written for this computer, then the order of the list.
+ * WHICH, never WHETHER: the .94 gate (videoWhen, [CLIP], the buyer's own ask) still decides if
+ * a chat gets a clip at all; a set only decides which one.
+ * ONE LIST PER CHAT: the set a chat was given is remembered (storage key videoSetOf, written
+ * by CHAT_CLIPS), and a chat that already holds a clip, a video mark or a retry without one
+ * stays on the general list, so making or changing a set never sends a second, different
+ * video into a chat that was served. No set configured = none of this is entered. */
+// A title's or a phrase's words: lower case, accents off, a storage size written one way
+// ("128 Go" = "128GB" = "128gb"), and only the tokens that hold a letter or a digit.
+const adWords = (s) => lessonNorm(s).replace(/\b(\d{2,4}) ?(?:gb|go)\b/g, "$1gb").replace(/\b([12]) ?(?:tb|to)\b/g, "$1tb").split(" ").filter((w) => /[\p{L}\p{N}]/u.test(w));
+// A set's alternatives, each read the way a title is read (prices and advert words out), so
+// words copied from an ad still fit that ad.
+const adSetPhrases = (set) => String((set && set.ads) || "").split(/[,;\n]+/).map((alt) => adWords(stripPrices(stripPrices(alt).replace(ADVERT_RE, " ")))).filter((w) => w.length > 0);
+const adSetClips = (set) => (set && Array.isArray(set.clips) ? set.clips : []).filter((v) => v && v.url);
+const adSetPcs = (set) => (set && Array.isArray(set.pcs) ? set.pcs : []).map((p) => String(p || "").trim().toLowerCase()).filter(Boolean);
+// The sets that can send something: an id, at least one alternative, at least one clip.
+function adVideoSets(settings) {
+  const list = settings && Array.isArray(settings.adVideoSets) ? settings.adVideoSets : [];
+  return list.filter((s) => s && s.id && adSetPhrases(s).length > 0 && adSetClips(s).length > 0);
+}
+// The set for this ad on this computer, or null (= the general list).
+function adVideoPick(settings, item, machineId) {
+  const title = new Set(adWords(item));
+  if (!title.size) return null;
+  const me = String(machineId || "").trim().toLowerCase();
+  let best = null, bestN = 0, bestMine = false;
+  for (const s of adVideoSets(settings)) {
+    const pcs = adSetPcs(s);
+    if (pcs.length && !(me && pcs.includes(me))) continue; // written for other computers
+    const mine = pcs.length > 0;
+    for (const ph of adSetPhrases(s)) {
+      if (!ph.every((w) => title.has(w))) continue;
+      if (ph.length > bestN || (ph.length === bestN && mine && !bestMine)) { best = s; bestN = ph.length; bestMine = mine; }
+    }
+  }
+  return best;
+}
+// Which list a chat sends. stored = what CHAT_CLIPS remembered for it ({ set }) or null;
+// served = the chat already holds a clip, a video mark or a retry in progress.
+// → { set: the set's id or "" (the general list), clips: the set's clips or null (general),
+//     gone: the chat's set no longer exists and the chat was served (nothing more to send),
+//     store: remember this choice, forget: drop a remembered set that is gone (the chat was
+//     never served and is chosen again), touch: the remembered set is in use (kept young) }
+function chatClipChoice(settings, stored, served, item, machineId) {
+  const general = (forget) => ({ set: "", clips: null, gone: false, store: false, forget: !!forget, touch: false });
+  const setId = stored && typeof stored.set === "string" ? stored.set : "";
+  if (setId) {
+    const s = adVideoSets(settings).find((x) => x.id === setId);
+    if (s) return { set: s.id, clips: adSetClips(s), gone: false, store: false, forget: false, touch: true };
+    if (served) return { set: setId, clips: [], gone: true, store: false, forget: false, touch: false }; // it keeps what it has
+  }
+  if (served) return general(false); // served on the general list, or before the sets existed
+  const pick = adVideoPick(settings, item, machineId);
+  // a never-served chat whose remembered set is gone is chosen afresh, and the stale id must not come back later
+  return pick ? { set: pick.id, clips: adSetClips(pick), gone: false, store: true, forget: false, touch: false } : general(!!setId);
+}
+// One line for the model, beside the buyer's message, only when sets exist: which video this
+// chat has. "" = say nothing (the general video, or no set at all).
+function adClipNote(settings, threadName) {
+  if (!adVideoSets(settings).length || String((settings && settings.videoWhen) || "asked") === "never") return "";
+  const pick = adVideoPick(settings, listingFromTitle(threadName), settings.machineId);
+  if (pick) return "The short video that goes out in this chat is the one the owner made for this listing: if you mention it, call it a short video of this item.";
+  const general = Array.isArray(settings.demoVideoUrls) && settings.demoVideoUrls.some((v) => v && v.url);
+  return general ? "" : "There is no video for this listing: never write [CLIP] here and never promise a video; if they ask to see it, invite them to see it in hand at the shop and still answer their question.";
+}
 // A lesson about another model is never offered for this one; a lesson the owner
 // tied to an item is offered only when the chat is about that same model.
 function lessonClash(c, buyerMessage, item) {
@@ -2962,7 +3043,7 @@ function buildOwnerPrompt(settings) {
   // (v0.21.91) emoji are read now (a lone 👍 reaches the model): a first message is never silence.
   L.push("  Never [SKIP] a buyer's FIRST message in a chat, not even a lone emoji, a sticker or a bare \"ok\": greet them and ask what they are looking for. [SKIP] a closing only after you have already answered them.");
   // (v0.21.94) the clip line is true only when the dashboard holds clips; otherwise the model must never promise one
-  const clipsOn = Array.isArray(settings.demoVideoUrls) && settings.demoVideoUrls.some((v) => v && v.url);
+  const clipsOn = (Array.isArray(settings.demoVideoUrls) && settings.demoVideoUrls.some((v) => v && v.url)) || adVideoSets(settings).length > 0; // (v0.21.96) …or a video made for one ad (adClipNote says, per chat, when an ad has none)
   const clipWhen = String(settings.videoWhen || "asked"); // (v0.21.94) "asked" (default) / "always" / "never"
   if (!clipsOn || clipWhen === "never") L.push("You never send a video, a photo or a link yourself, and you never promise one: if they ask to see the phone, invite them to see it in hand at the shop and still answer their question.");
   else if (clipWhen === "always") L.push("A short demo video is sent to each buyer automatically, once per chat. You never send a video or a link yourself. If they ask to see the phone, say a short video is on its way and still answer their question.");
@@ -3383,6 +3464,7 @@ async function callClaude(settings, buyerMessage, extraContext, memory, retry, t
   const gone = !!(entry && entry.listing && entry.listing.available === false); // a unit the owner marked gone: no "still available" lesson
   const lesson = lessonFor(settings, buyerMessage, item, gone ? { skipSubjects: ["#availability"] } : undefined);
   const listing = listingContext(settings, threadName, { hasLesson: !!lesson });
+  const clipNote = adClipNote(settings, threadName); // (v0.21.96) which video this chat has; "" unless the owner made videos for ads
   const body = {
     model: settings.model || "claude-haiku-4-5",
     max_tokens: 1024,
@@ -3398,6 +3480,7 @@ async function callClaude(settings, buyerMessage, extraContext, memory, retry, t
           (extraContext ? extraContext + "\n\n" : "") +
           (memory ? String(memory) + "\n" : "") + // (v0.21.71) memory of this chat — user turn only, the system prompt stays cached
           (listing ? listing + "\n" : "") + // (v0.21.88) which item, and the owner's entry for it
+          (clipNote ? clipNote + "\n" : "") + // (v0.21.96) a video made for this ad, or none for it
           (lesson ? lesson + "\n" : "") +
           nowLine() + "\n" +
           "Buyer's latest message:\n" +
@@ -5334,7 +5417,7 @@ async function buildDiagnostic() {
         "supabaseAnonKey", "supabaseUrl", "credsFallback",
         "videoSentThreads", "videoAttempts", "videoUrlFails", "waitingSince", "videoPending",
         "videoCatchUp", "autoCatchUp01213", "autoCatchUp01217", "videoEnabled", "demoVideos",
-        "videoCache", "replyLog", "sudBase", "sudDirName", "sudLastCheck", "sudStatus", "cdpStats", "videoDisk", "winRestoreN", "winRestoreAt", "attachPref",
+        "videoCache", "replyLog", "sudBase", "sudDirName", "sudLastCheck", "sudStatus", "cdpStats", "videoDisk", "videoSetOf", "winRestoreN", "winRestoreAt", "attachPref",
         "cooldowns", "replyCounts", "lastHandled", "videoAttachTrace",
         "attachChannelStats", "attachMiss", "videoDoctorLast", "tabActivateN", "tabActivateAt", "fgN", "fgAt", "winSlot", "fgFail", "pipN", "pipAt", "pipFail",
         "videoForeground", "videoPip", "videoTrustedChannels", "videoActivateTab",
@@ -5421,7 +5504,7 @@ async function buildDiagnostic() {
   const central = Array.isArray(settings.demoVideoUrls) ? settings.demoVideoUrls.filter((v) => v && v.url) : [];
   const localVids = (Array.isArray(st.demoVideos) ? st.demoVideos : []).filter((v) => v && v.dataUrl).length;
   L.push(
-    "videos: central=" + central.length +
+    "videos: central=" + central.length + (adVideoSets(settings).length ? " adSets=" + adVideoSets(settings).length : "") +
     (central.length ? " [" + central.map((v) => {
       const c = cache[v.url];
       return cut(v.name || "clip", 12) + "@" + host(v.url) + (c && c.base64 ? " cached" + Math.round(c.base64.length * 0.75 / 1048576) + "MB(" + ageM(c.at) + ")" : " NOT-cached");
@@ -5551,14 +5634,21 @@ async function buildDiagnostic() {
   {
     const vc = st.videoClips || {};
     const ids = central.map((v) => { const u = String(v.url).split(/[?#]/)[0]; let b = u.slice(u.lastIndexOf("/") + 1); try { b = decodeURIComponent(b); } catch (e) { /* raw */ } return b; });
+    // (v0.21.96) a chat on a video set made for its ad is judged against that set's clips (videoSetOf), not the general list
+    const setOfD = st.videoSetOf || {};
+    const idOfD = (v) => { const u = String(v.url).split(/[?#]/)[0]; let b = u.slice(u.lastIndexOf("/") + 1); try { b = decodeURIComponent(b); } catch (e) { /* raw */ } return b; };
+    const setIdsD = {};
+    for (const sD of adVideoSets(settings)) setIdsD[sD.id] = adSetClips(sD).map(idOfD);
+    let adChatsD = 0;
     let lc = 0, full = 0, miss = 0, tried = 0;
     for (const k of Object.keys(vc)) {
       const e = vc[k] || {}; const s = e.s || {}; const t = e.t || {};
       lc++; tried += Object.keys(t).length;
-      const lacking = ids.filter((x) => !s[x] && !t[x]).length;
-      if (ids.length && lacking === 0) full++; else if (lacking > 0) miss++;
+      const own = setOfD[k] && setOfD[k].set ? (adChatsD++, setIdsD[setOfD[k].set] || []) : ids; // (v0.21.96) a chat on an ad set: its own list
+      const lacking = own.filter((x) => !s[x] && !t[x]).length;
+      if (own.length && lacking === 0) full++; else if (lacking > 0) miss++;
     }
-    L.push("clips: completeSet=" + (settings.videoCompleteSet === false ? "OFF" : "on") + " configured=" + ids.length + (ids.length ? " [" + ids.map((x) => cut(x.replace(/^\d{10,}-/, ""), 22)).join(" + ") + "]" : "") + " | ledger: chats=" + lc + " complete=" + full + " missing-a-clip=" + miss + " tried-unconfirmed=" + tried);
+    L.push("clips: completeSet=" + (settings.videoCompleteSet === false ? "OFF" : "on") + " configured=" + ids.length + (ids.length ? " [" + ids.map((x) => cut(x.replace(/^\d{10,}-/, ""), 22)).join(" + ") + "]" : "") + " | ledger: chats=" + lc + " complete=" + full + " missing-a-clip=" + miss + " tried-unconfirmed=" + tried + (adChatsD ? " onAdSets=" + adChatsD : ""));
   }
   const oldest = (m) => { let o = null; for (const k of Object.keys(m || {})) { const v = m[k]; if (typeof v === "number" && (o == null || v < o)) o = v; } return o; };
   const cd = st.cooldowns || {}; let cdFut = 0; for (const k of Object.keys(cd)) if (cd[k] > now) cdFut++;
@@ -5623,6 +5713,40 @@ async function buildDiagnostic() {
     if (all.length) await bankConfig(all[0].config, all[0].from.indexOf("cloud") >= 0 ? "cloud" : "save");
   } catch (e) { /* never block startup */ }
 })();
+
+/* (v0.21.96) A VIDEO PER AD — the answer to content.js's CHAT_CLIPS: which clip list a chat sends
+ * (chatClipChoice, pure) and the memory of it. videoSetOf = { chatId: { set, at } }: written when a
+ * chat is given a set, kept young while the chat uses it, dropped when a never-served chat's set is
+ * gone, 3000 chats at most (the oldest out). One question at a time: read → choose → write must
+ * not interleave between two tabs. content.js asks only when a usable set exists or the chat has a
+ * remembered one, so an account that never made a set never gets here. */
+const VIDEO_SET_OF_MAX = 3000;
+let chatClipsChain = Promise.resolve();
+function chatClipsAnswer(msg) {
+  const run = async () => {
+    const sCC = await getSettings();
+    const tid = String((msg && msg.threadId) || "");
+    const map = await new Promise((r) => chrome.storage.local.get(["videoSetOf"], (x) => { void chrome.runtime.lastError; r((x && x.videoSetOf) || {}); }));
+    const ch = chatClipChoice(sCC, tid ? map[tid] : null, !!(msg && msg.served), listingFromTitle(msg && msg.threadName), await getMachineId());
+    const now = Date.now();
+    let dirty = false;
+    if (tid && ch.store) { map[tid] = { set: ch.set, at: now }; dirty = true; }
+    else if (tid && ch.forget && map[tid]) { delete map[tid]; dirty = true; }
+    else if (tid && ch.touch && map[tid] && now - (Number(map[tid].at) || 0) > 6 * 3600 * 1000) { map[tid] = { set: map[tid].set, at: now }; dirty = true; }
+    if (dirty) {
+      const keys = Object.keys(map);
+      if (keys.length > VIDEO_SET_OF_MAX) {
+        keys.sort((a, b) => ((map[a] && map[a].at) || 0) - ((map[b] && map[b].at) || 0));
+        for (const k of keys.slice(0, keys.length - VIDEO_SET_OF_MAX)) delete map[k];
+      }
+      await new Promise((r) => chrome.storage.local.set({ videoSetOf: map }, () => { void chrome.runtime.lastError; r(); }));
+    }
+    return { ok: true, set: ch.set, clips: ch.clips, gone: ch.gone };
+  };
+  const p = chatClipsChain.then(run, run);
+  chatClipsChain = p.then(() => {}, () => {});
+  return p;
+}
 
 chrome.runtime.onMessage.addListener((msg, _sender, sendResponse) => {
   (async () => {
@@ -6225,6 +6349,11 @@ chrome.runtime.onMessage.addListener((msg, _sender, sendResponse) => {
           sendResponse({ ok: true });
           break;
         }
+        case "CHAT_CLIPS": {
+          // (v0.21.96) A VIDEO PER AD: which clip list this chat sends (chatClipsAnswer, one question at a time)
+          sendResponse(await chatClipsAnswer(msg));
+          break;
+        }
         case "FETCH_VIDEO": {
           sendResponse(await fetchVideo(msg.url));
           break;
@@ -6518,19 +6647,37 @@ async function prewarmDemoClips(settings) {
   prewarmBusy = true;
   try {
     const list = (Array.isArray(settings && settings.demoVideoUrls) ? settings.demoVideoUrls.filter((v) => v && v.url) : []).slice(0, 8);
+    // (v0.21.96) …and the clips of the ad sets this computer can send (adVideoPick): after the general
+    // list, eight clips in all. The in-extension copy holds five clips, so with sets only the first five
+    // are warmed there; any other is downloaded the first time a buyer needs it.
+    // Only the general list is put ON DISK ahead of time: every disk copy is a download the computer
+    // shows, and the disk index holds nine clips (more would be downloaded again and again).
+    const generalP = new Set(list.map((v) => v.url));
+    const adOn = adVideoSets(settings).length > 0;
+    if (adOn) {
+      const meP = String((settings && settings.machineId) || "").toLowerCase();
+      const seenP = new Set(generalP);
+      for (const s of adVideoSets(settings)) {
+        const pcsP = adSetPcs(s);
+        if (pcsP.length && !(meP && pcsP.includes(meP))) continue;
+        for (const v of adSetClips(s)) if (!seenP.has(v.url) && list.length < 8) { seenP.add(v.url); list.push(v); }
+      }
+    }
     if (!list.length) return;
     const st = await new Promise((r) => chrome.storage.local.get(["clipPrewarm"], (x) => r((x && x.clipPrewarm) || {})));
     const now = Date.now();
     const next = {};
     const warm = [];
     let changed = false;
+    let slotP = 0;
     for (const v of list) {
+      const warmable = !adOn || slotP++ < 5; // (v0.21.96) the in-extension copy holds five clips
       const e = Object.assign({}, st[v.url]);
-      if (!e.diskAt || now - e.diskAt > 10 * 60 * 1000) {
+      if (generalP.has(v.url) && (!e.diskAt || now - e.diskAt > 10 * 60 * 1000)) { // (v0.21.96) the general list only
         e.diskAt = now; changed = true;
         Promise.resolve(ensureVideoOnDisk({ url: v.url, name: v.name })).catch(() => { /* the visit-time path retries */ });
       }
-      if (!e.b64At || now - e.b64At > 24 * 3600 * 1000) { e.b64At = now; changed = true; warm.push(v.url); }
+      if (warmable && (!e.b64At || now - e.b64At > 24 * 3600 * 1000)) { e.b64At = now; changed = true; warm.push(v.url); }
       next[v.url] = e;
     }
     if (changed || Object.keys(st).length !== list.length) await new Promise((r) => chrome.storage.local.set({ clipPrewarm: next }, () => { void chrome.runtime.lastError; r(); }));

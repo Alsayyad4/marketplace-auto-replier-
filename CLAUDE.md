@@ -18,6 +18,27 @@ all chrome.debugger/CDP work) + Supabase dashboard in docs/. Live branch:
 - The operator wants zero manual steps in normal operation.
 
 ## Known state (v0.21.95 PUBLISHED on the Web Store Nov 11 2026 ~19:25 EST — uploaded ~18:45 EST and in review at once with no Submit click, the review took ~40 min, the fleet installs it by itself within ~2 h; b2478aa (shopDigits converts only the owner's own phone numbers) is on the branch for .96, not in the published build; it carries shopDigits, the family price line, the buyer's-register voice line and the memory note's last text; v0.21.94 PUBLISHED on the Web Store Nov 11 2026 ~05:00 EST — submitted by the owner Nov 10 ~17:10 EST, the Google review took ~12 h; the fleet installs it by itself within ~2 h; v0.21.93 PUBLISHED on the Web Store Nov 5 2026 ~15:22 local — the API line + an outage never silences a buyer for good; the fleet installs a published build by itself within ~2 h; the submit button is the owner's click, Auto mode refuses it)
+- A VIDEO PER AD (.96, Nov 12 2026, owner: "a different video for a different ad, I don't want to send the
+  same video for all the ads"; a video for the computer the bot runs on; "choose the ad from the Facebook
+  account that is open"; "not every listing I will put a video"). New cloud key `adVideoSets` = [{ id, ads,
+  pcs, clips }], made on the dashboard's Videos tab (words of the ad's title, or an ad picked from the ads
+  the bots answered in the last 5 days; computers ticked; clips uploaded), read-only in Settings.
+  background.js pure block `A VIDEO PER AD` in the Try-it slice: `adVideoPick` (the title holds every word;
+  a comma = or; the longest alternative, then a set for this computer, then list order), `chatClipChoice`,
+  `adClipNote` (one USER-turn line), and outside it `chatClipsAnswer` behind the message `CHAT_CLIPS`
+  (serialized; a chat's set is remembered in `videoSetOf`, 3000 chats). content.js `maybeSendVideo` asks it
+  AFTER the .94 gate, when a usable set exists or the chat has a remembered one, and swaps `central`.
+  WHICH, NEVER WHETHER: `videoWhen` / [CLIP] still decide if a clip goes out. ONE LIST PER CHAT: a
+  remembered set stands; a chat with a video mark, a ledger entry or a retry and no remembered set stays on
+  the general list (a set made later never adds a second video); a set that is gone — even when no set is
+  left — = the served chat keeps what it has, the never-served one is chosen again and the stale id
+  forgotten; no answer from the worker = queued, never a guess. An ad with no set gets the general list, or
+  nothing when that list is empty. AN ACCOUNT THAT NEVER MADE A SET IS ON THE .95 PATH (nothing asked,
+  signature and prompt byte-identical). A set's clip is never put on disk on the store build; the
+  in-extension copy holds five clips. `store/smoke-advideo.js` (32/32 mutants), `store/page-advideo.cjs`
+  (the real dashboard page, headless), boot-store's CHAT_CLIPS + Settings checks; one independent review,
+  ten of eleven findings fixed (HANDOFF). NOT verified on a live Messenger send. Never move the question
+  above the gate; never let a served chat change list. HANDOFF "Open after v0.21.96".
 - TEACHING v28 = NO CAROL IN THE CLOSE, THE SHOP'S OWN DIGITS, THE CLOSE COMPOSED (Nov 10 2026, later that
   evening; owner: "every chat you keep mention carol stop that; the address and phone number should be like
   7️⃣5️⃣7️⃣ rue Beaubien E and the number in these emojis; the most optimized for three replies, non detectable
