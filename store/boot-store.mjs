@@ -27,15 +27,32 @@ execFileSync("node", [path.join(root, "store/webstore-manifest.js"), path.join(r
 const mf = JSON.parse(fs.readFileSync(path.join(stage, "manifest.json"), "utf8"));
 ok(mf.version === "0.21.97" && !mf.key && mf.name === "Liquidation Téléphone Montréal Auto-Reply", "store manifest: v" + mf.version + ", no key, name '" + mf.name + "'");
 
-const get = (p) => new Promise((res, rej) => http.get({ host: "127.0.0.1", port: PORT, path: p }, (r) => { let d = ""; r.on("data", (c) => (d += c)); r.on("end", () => res(d)); }).on("error", rej));
-const put = (p) => new Promise((res, rej) => { const q = http.request({ host: "127.0.0.1", port: PORT, path: p, method: "PUT" }, (r) => { let d = ""; r.on("data", (c) => (d += c)); r.on("end", () => res(d)); }); q.on("error", rej); q.end(); });
+// (Nov 13 2026) EVERY CALL TO THE BROWSER HAS A TIME LIMIT. One run in five hung for ever right after the
+// manifest check: a browser of the run before was still closing on this port, the loop below attached to
+// one of ITS workers, the browser went away, and the question was never answered (no limit, no close
+// handler). Now a connection that closes fails what was asked on it, a question unanswered after 60 s
+// fails, and the debug port's own pages answer in 8 s or fail: a bad start is a visible "boot threw" or
+// one more turn of the loop, never a run that sits there.
+const get = (p) => new Promise((res, rej) => { const q = http.get({ host: "127.0.0.1", port: PORT, path: p, timeout: 8000 }, (r) => { let d = ""; r.on("data", (c) => (d += c)); r.on("end", () => res(d)); }); q.on("error", rej); q.on("timeout", () => q.destroy(new Error("no answer from the debug port in 8 s"))); });
+const put = (p) => new Promise((res, rej) => { const q = http.request({ host: "127.0.0.1", port: PORT, path: p, method: "PUT", timeout: 8000 }, (r) => { let d = ""; r.on("data", (c) => (d += c)); r.on("end", () => res(d)); }); q.on("error", rej); q.on("timeout", () => q.destroy(new Error("no answer from the debug port in 8 s"))); q.end(); });
 const WS = globalThis.WebSocket;
 async function cdp(wsUrl) {
   const ws = new WS(wsUrl);
-  await new Promise((r, j) => { ws.onopen = r; ws.onerror = () => j(new Error("ws error")); });
+  await new Promise((r, j) => { const t = setTimeout(() => j(new Error("ws: no connection in 10 s")), 10000); ws.onopen = () => { clearTimeout(t); r(); }; ws.onerror = () => { clearTimeout(t); j(new Error("ws error")); }; });
   let id = 0; const pend = new Map(); const events = [];
-  ws.onmessage = (ev) => { const m = JSON.parse(typeof ev.data === "string" ? ev.data : String(ev.data)); if (m.id && pend.has(m.id)) { pend.get(m.id)(m); pend.delete(m.id); } else if (m.method) events.push(m); };
-  return { events, send: (method, params) => new Promise((r) => { const i = ++id; pend.set(i, r); ws.send(JSON.stringify({ id: i, method, params: params || {} })); }), close: () => { try { ws.close(); } catch (e) { /* ignore */ } } };
+  const failAll = (why) => { for (const [i, p] of Array.from(pend)) { pend.delete(i); clearTimeout(p.t); p.rej(new Error(why)); } };
+  ws.onclose = () => failAll("the browser closed the connection");
+  ws.onmessage = (ev) => { const m = JSON.parse(typeof ev.data === "string" ? ev.data : String(ev.data)); if (m.id && pend.has(m.id)) { const p = pend.get(m.id); pend.delete(m.id); clearTimeout(p.t); p.res(m); } else if (m.method) events.push(m); };
+  return {
+    events,
+    send: (method, params) => new Promise((res, rej) => {
+      const i = ++id;
+      const t = setTimeout(() => { if (pend.has(i)) { pend.delete(i); rej(new Error("no answer to " + method + " in 60 s")); } }, 60000);
+      pend.set(i, { res, rej, t });
+      try { ws.send(JSON.stringify({ id: i, method, params: params || {} })); } catch (e) { pend.delete(i); clearTimeout(t); rej(e); }
+    }),
+    close: () => { try { ws.close(); } catch (e) { /* ignore */ } },
+  };
 }
 async function evalIn(c, expression) {
   const r = await c.send("Runtime.evaluate", { expression, awaitPromise: true, returnByValue: true });
@@ -47,9 +64,10 @@ async function closeBrowserOnPort() {
     const v = JSON.parse(await get("/json/version"));
     if (!v || !v.webSocketDebuggerUrl) return false;
     const b = await cdp(v.webSocketDebuggerUrl);
-    await Promise.race([b.send("Browser.close"), sleep(3000)]);
+    await Promise.race([b.send("Browser.close").catch(() => { /* it closed: that is the answer */ }), sleep(3000)]);
     b.close();
-    for (let i = 0; i < 20; i++) { await sleep(300); try { await get("/json/version"); } catch (e) { return true; } }
+    // the port must be FREE before a new browser is started on it (a closing browser can take several seconds)
+    for (let i = 0; i < 50; i++) { await sleep(300); try { await get("/json/version"); } catch (e) { return true; } }
     return true;
   } catch (e) { return false; }
 }
@@ -65,11 +83,17 @@ try {
     let list = [];
     try { list = JSON.parse(await get("/json/list")).filter((t) => t.type === "service_worker" && /\/background\.js$/.test(t.url)); } catch (e) { /* not up yet */ }
     for (const t of list) {
-      const c = await cdp(t.webSocketDebuggerUrl);
-      let name = "";
-      try { name = await evalIn(c, 'chrome.runtime.getManifest().name'); } catch (e) { /* not ours or not ready */ }
-      if (name === mf.name) { worker = t; w = c; break; }
-      c.close();
+      // a worker that cannot be attached to, or does not answer its first question in 5 s (it is still
+      // starting, or it belongs to a browser that is going away), is asked again on the next turn
+      let c = null, name = "", why = "";
+      try { c = await cdp(t.webSocketDebuggerUrl); } catch (e) { why = "attach: " + e.message; }
+      if (c) {
+        // (an answer that is an error = not our worker: the browser's own helper has no such manifest; said only when nothing answered)
+        try { name = await Promise.race([evalIn(c, 'chrome.runtime.getManifest().name'), sleep(5000).then(() => { throw new Error("no answer in 5 s"); })]); } catch (e) { if (/no answer|closed the connection/.test(String(e && e.message))) why = "first question: " + e.message; }
+      }
+      if (c && name === mf.name) { worker = t; w = c; break; }
+      if (why) console.log("  (turn " + i + ": the worker at " + t.url + " — " + why + ")");
+      if (c) c.close();
     }
   }
   ok(!!worker, "the store build's worker is listed and is ours: " + (worker && worker.url));

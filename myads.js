@@ -288,8 +288,11 @@
     order = out.map((a) => a.key);
     return out;
   }
+  // The status lines that are part of the page itself (not of a card) are emptied when their note is gone.
+  const clearGoneNotes = () => document.querySelectorAll("[data-note]").forEach((b) => { if (!notes[b.getAttribute("data-note")]) { b.textContent = ""; b.className = "status"; } });
   function render() {
     const s = state;
+    clearGoneNotes();
     if (!s) { Object.keys(notes).forEach(paintNote); return; }
     const notesBox = $("notes"), list = $("ads");
     $("who").textContent = "— " + (s.label ? s.label + " (" + s.machine + ")" : s.machine || "this Chrome");
@@ -342,7 +345,12 @@
   }
   async function load(byHand) {
     const n = ++loadSeq;
-    if (byHand === true) resort = true;
+    if (byHand === true) {
+      resort = true;
+      // Refresh shows things as they are now: a "Saved" line of a moment ago goes (it could still read
+      // "this Chrome takes it within a minute" under an ad that now shows its video); what failed stays.
+      for (const k of Object.keys(notes)) if (notes[k] && notes[k].cls === "ok") delete notes[k];
+    }
     const got = await ask({ type: "MYADS_LIST", byHand: byHand === true });
     if (n !== loadSeq) return; // a newer question is out: its answer draws, never this older one over it
     if (!got || !got.ok) {

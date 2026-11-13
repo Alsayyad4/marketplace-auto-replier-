@@ -218,8 +218,10 @@ const baseSeed = () => ({
   await cMax.locator(".status.ok").waitFor({ timeout: 15000 });
   ok(uploads.length === upMid + 1 && /It is in the account; this Chrome takes it within a minute/.test(await cMax.locator(".status").textContent()), "“Save again” saves the file that is already up; when this Chrome has not read it back yet, the page says the choice is in the account");
   await page.click("#refresh");
-  await page.waitForFunction(() => /✅ Its own video: promax\.mp4/.test(document.getElementById("ads").textContent), null, { timeout: 8000 });
+  // wait for the list read by that click to be drawn (the card already showed the video: the fake worker answers at once)
+  await page.waitForFunction(() => { const c = Array.from(document.querySelectorAll(".card")).find((x) => /iPhone 13 Pro Max 256 Go/.test(x.querySelector(".title").textContent)); return !!c && /✅ Its own video: promax\.mp4/.test(c.querySelector(".state").textContent) && c.querySelector(".status").textContent.trim() === ""; }, null, { timeout: 8000 }).catch(() => { /* the two checks below say what is wrong */ });
   ok(/✅ Its own video: promax\.mp4/.test(await cMax.locator(".state").textContent()), "…and Refresh shows it");
+  ok((await cMax.locator(".status").textContent()).trim() === "" && (await card(page, "MacBook Air M2").locator(".status").textContent()).trim() === "", "Refresh shows things as they are now: the “Saved” lines of a moment ago are gone (never a stale “takes it within a minute” under an ad that shows its video)");
 
   /* ---- 7. an ad that is not in the list yet ---- */
   await page.locator("#notListed summary").click();
