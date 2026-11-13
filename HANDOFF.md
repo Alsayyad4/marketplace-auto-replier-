@@ -1117,6 +1117,88 @@ boxes (Address too), Max replies / conversation = 3, cap behaviour "Go quiet". T
 structural and his: every first text carries the price line (or the whole Samsung block), the where-line and a
 time question whatever the buyer typed.
 
+**Twenty-ninth request — SAID, NOT PASTED (teaching v29, Nov 13 2026)**
+(`store/teaching-sim/teaching29.js` → `teaching-2026-11-13-v29.md`, THE version to paste, replaces v28; FIVE boxes
+change: Address (now plain, `757 rue Beaubien E, Montréal (métro Beaubien)`), Business info, Instructions, Examples,
+Closer goals; the name, the hours and the Price list box are untouched. The owner's copy page, one Copy button per
+box: https://claude.ai/artifact/MxkixLpZ53sMkvLkEbf7gC, private to his claude.ai account.) The owner, Nov 13 2026:
+"what is the best thing you can do to make the auto reply be more human like and less chance to get suspended ...
+keeping it as efficient as consistent at the same time", then "how we can fix them? what do you recommend", then
+"yes go ahead" to four changes put to him in plain words with two before / after examples.
+WHAT WAS FOUND FIRST (reading out28c, the v28 test chats): the tone was fine; what read as automated were four fixed
+pieces sent word for word — the three-model family line, the whole list or the whole Samsung block (818 and 706
+characters in one text), the legal fine print, the keycap digits — and a first text that always carried price +
+where + hours + the same "ce soir ou demain?". The rotation rules of v27 / v28 ("never the same shape for two buyers
+in a row", "never the same pair twice in a day") cannot work: the model sees ONE chat per call.
+THE FOUR CHANGES, HIS YES. (1) PRICE: the starting price of the model they asked about, in one sentence of the bot's
+own; never the family line, never the list; a budget gets the two or three models that start at or under it, the
+most recent first (the lower-budget line with CAROL stays, exactly as written). Samsung, iPad, tablets: the owner's
+block is written by groups, not per model, so the buyer gets the RANGE of the group that names their model, said
+about the group ("the Galaxy S range starts between $140 and $300 depending on the model"), never the lowest number
+pinned on their model; a plain S23 or S25 reads with the group around it. (2) FINE PRINT: once per chat, one short
+sentence in the buyer's register with three facts (limited quantities, nothing held, first come first served), where
+a visit is set, in the last text, or on a hold question; never to a seller, never last. "Certaines conditions
+s'appliquent" is GONE from the chat (told to him; one sentence to put back). (3) PLAIN FIGURES BY HIS OWN YES: 757 and
+the three phone numbers in plain digits. This reverses his v28 veto: do not bring the keycaps back without his word.
+`shopDigits` does nothing once the Address box is plain; if he pastes the four big boxes and forgets the Address box,
+the code turns every 757 back into keycaps. (4) FIRST TEXT: the answer first; someone buying always gets their
+model's starting price (the ad says 1 $, and "why so cheap?" is about that 1 $); the where-line and one question
+only if three short sentences leave room; the hours only when asked or when the clock makes them matter. ALSO: no
+approval word around their time in a close ("parfait", "perfect"); a starting price belongs to the model, never to a
+capacity ("le 256 est à partir de…" is out); a phone never "waits for them" (that is a unit set aside); a bare ok
+stays a bare ok whatever the last-text note says; a six-point "before you send" check closes SOUND LIKE A PERSON
+(their language, the answer first, their casing and tu / vous, the right price, nothing about holds to a seller,
+no sentence lifted from the rules or the examples).
+HOW THE FILE IS BUILT: teaching29.js REQUIRES teaching28.js and changes named paragraphs only (`swapLine` /
+`swapText` throw unless exactly one match), so every other fact is v28's byte for byte; keycaps → plain through
+`plain()`; the iPhone table (23 models) is READ from the owner's own price lines and every price in the 25 example
+chats is computed (`fr()` / `en()`); the Samsung / iPad / laptop ranges are asserted to be in his list (`inList`).
+The self-check (exit 1) = v28's turned to the new rules + nothing pasted ("N $ / N $", " · ", the notice), no emoji
+digits, every amount a number of the price list or the buyer's own, the right price for the model named, a phone
+number only when asked. The prompt is 71,992 characters (v28: 76,712); the example texts average 178 characters.
+TEST: the SAME seven buyers as v28 pass 2 (`scenarios28b.json`), one Haiku stand-in per buyer, three turns on the
+exact request (`turn.js`, `settings29.json`). `post29.js` prints what the buyer receives (the extension's own
+parseReply → humanTouch → brandWall → shopDigits) and runs the v29 checks (+ language, casing, tu / vous, the
+Samsung range, a seller's fine print). No stand-in refused. Scripted faults per round: 8 (round 1: "Parfait,"
+opening three closes, my own sample fine-print sentence reused word for word, a Samsung buyer never given a price,
+capitals to a lowercase buyer, a tu / vous flip) → 2 → 1 → 2 → 1 (an English buyer answered in French) → 0 on the
+final file (`out29f`: 19 texts, mean 182 characters, max 309; v28's first texts ran 275 to 818). Every iPhone price
+right in every round (15 Pro Max 750, 13 280, 16 680; a 250 budget → the 12 at 200, the 11 Pro at 220, the 11 at
+180). The English budget buyer was run three times on the final file: English every time. Kept: `out29` (round 1),
+`out29c` (the round the reviewers read, with blind-ab.md and facts.md), `out29f` (the final file).
+BLIND REVIEW (`ab29.js`; two reviewers, a Montréal-buyer lens and a fact-checker lens; v28 = out28c against v29 =
+out29c, five shared buyers, the letters swapped per buyer, the key kept outside their folder): v29 read as more
+natural for 5 of 5 buyers with both reviewers and as useful or more for 5 of 5; mean score 3.5 / 3.8 for v28 → 7.0 /
+7.4 for v29 (10 = a busy clerk texting); "would a buyer think spam?": yes or maybe on all five v28 chats, no on all
+five v29 chats; no wrong price and no contradiction in either version. Applied afterwards from their findings: the
+Samsung range pinned on one model, the fine-print sentence too long. NOT applied, the owner's own rules: the
+lower-budget line never names the price of the phone in the ad and says "the list prices" to a buyer who saw no
+list; "when do you come?" after almost every answer.
+LIMITS: the stand-ins are Claude Code Haiku sub-agents, not the account's `claude-haiku-4-5` through the API (no key
+on this PC: the same prompt text, not the same request), and the blind review read the draft before the last three
+rounds of small fixes. The first real chats on the dashboard's Activity tab are the proof. The Samsung block is the
+most likely source of a real-life slip: it names the S10 and the S22 Ultra in two groups with different prices (the
+teaching reads the S22 Ultra with the Ultras) and gives no price per model.
+OWNER-SIDE: paste the five boxes (the Address box too); Max replies 3 + "Go quiet" unchanged; check that Smart
+follow-up is off. ASKED OF HIM: whether v28 was ever pasted (unknown: if not, the live bot was still on an older
+script); one starting price per Samsung model (then the bot says one number, as for iPhones); whether "certaines
+conditions s'appliquent" must come back.
+ALSO ESTABLISHED THIS SESSION, not built, his call. (a) THE MODEL: the bot runs `claude-haiku-4-5`; the two UIs
+offer four old ids; nothing in the code rejects another id, but the request sends no `effort`, caps `max_tokens` at
+1024 (thinking counts toward it on the 5.x models) and never reads `stop_reason`: a move to `claude-haiku-5-5` or
+`claude-sonnet-5-5` is a small release, with the same seven buyers run first. (b) THE LIVE SETTINGS cannot be read
+from here; smart follow-up was on in a Nov 5 diagnostic, and when it is on its texts go out with no delay, are not
+checked against the per-chat cap, and the allowance renews after each buyer reply. (c) META'S PUBLISHED RULES
+(fetched Nov 13 2026): Marketplace chats sit in the person's own inbox; nothing documents them reaching a Page
+inbox, the Messenger Platform or HighLevel (its Conversation AI works on a connected Page only; a Marketplace
+request has been open on its ideas board since 2023); Meta announced its own "AI auto replies" for Marketplace
+sellers on Mar 12 2026 (availability in Canada and in French not stated); the Authentic Identity standard lists an
+account that represents a business, several accounts and an account used by several people as grounds up to
+disabling; the Spam standard covers high-frequency activity "manually or automatically", and lower frequencies when
+the content is repetitive; Meta limits how many Marketplace messages are sent and how fast, and reviews Marketplace
+chats automatically. No Canadian or Québec law in force requires telling a person that they are chatting with an
+automated system (regulators recommend it); the teaching's honest answer stays.
+
 ## AUTOLISTER — listing creation + delete-and-relist, PLANNED Oct 21 2026, ON HOLD since Oct 22 (nothing wired, nothing shipped)
 - **ON HOLD (Oct 22 2026).** The owner asked to build it and submit it to the Web Store; a safety check
   stopped that turn and it was not retried (it also stopped an Oct 12 draft of a Web Store extension
@@ -1155,6 +1237,8 @@ time question whatever the buyer typed.
 - **The rules the code keeps (do not loosen them).** Everything in "Open after v0.21.96" stands, plus: A CHOICE IS ONE AD ON ONE COMPUTER (exact title, that computer's id). A CHANGED VIDEO = A NEW SET, the old one removed, never a clip swapped inside a set (same id + new clip = the served chat is topped up on the buyer's next message because the "wanted" mark lasts 30 days: a second, different video; verified in the code, and the dashboard cards did exactly that until this release); the SAME video chosen again changes nothing (a new id would cut off chats in the middle of receiving it); removing a choice removes EVERY set under its id. NO WHOLE-ROW SAVE FOR A CHOICE OR A SLIDER: `cloudRowPatch` only; `cloudPush` stays for Settings' merged Save (which now needs a fresh read) and the restore. THE UPLOAD TICKET AND EVERY WRITE ARE FOR THE EXTENSION'S OWN PAGES (`myAdsOwnPage`: sender id + address + origin). `LIST_ADS` READS, NOTHING ELSE. No list and no file chooser inside the popup; never hand the extension's session to a web page; no third door (every login call behind `cloudValidAuth`). A VIDEO THAT COULD NEVER GO OUT IS REFUSED AT THE UPLOAD (size, type, playable here), because a set whose clip cannot be sent sends nothing. NO SETTINGS = NO SEND.
 - **Verified / not verified.** `store/smoke-myads.js` (163 checks; 51/51 line mutations caught in a scratch copy, scratch `mutate97.js`), 39/39 suites, 2,137 checks. `node store/page-myads.cjs` (the REAL page in headless Chromium, 54 checks: the worker stood in for by the bots' own pure rules, the storage by a local server that reads the real upload request; the videos are real ones recorded in the test browser, since the page plays a file before uploading it). `node store/boot-store.mjs` (51 checks: the STORE build, the real worker, the real page, a real upload from the extension's own page to a local stand-in, the row written on its stamp, CHAT_CLIPS afterwards, SET_DELAY, the update gate with real `getContexts`; since 7035ea4 every call to its test browser has a time limit — one run in five used to sit FOR EVER right after the manifest check, attached to the test browser's own helper worker, another extension id at the same /background.js path, which sometimes never answers; a run of this file that hangs is that, never the extension). `node store/page-advideo.cjs` (26: the dashboard's folded block, a new id on a clip change). TWO PANELS: design (3 + 1 agents) and an independent review of the diff (3 read-only reviewers: the write path, the video rules, the page / packaging / store): no blocker; every should-fix applied (the slider's no-answer fallback, Settings' stale save, a comma as "or" in the words box, a file the Chrome cannot play, cards moving under the pointer, "nég," titles refused after the upload, S24+ = S24, "iPhone 8 150$" = "iPhone", a twin under one id, the settings hiccup with local videos). NOT VERIFIED: the upload against the REAL Supabase project (no credentials on this PC; the request shape follows Supabase's own documentation; open question: whether a token that expires DURING a long upload is refused — the ticket waits for the refresh when under 11 min are left), and — still — a live Messenger send of a set's clip (`maybeSendVideo` is DOM-bound). THE FIRST CHOICE THE OWNER MAKES IS THE LIVE PROOF OF BOTH: read that computer's 🩺 (`videos: … adSets=N mine=N`, the open chat's `adset=<id>`, the status line "this ad has its own video set: 1 clip(s)") and one OTHER computer's (`adset=-`: it must not have been touched). Also worth one look on a live computer: one line per listing on the page (exact identity is the sidebar row's first line as Messenger gives it; if Messenger shortened a long headline or added a word such as Sold, one ad would read as two).
 - **Open / limits.** (i) A reinstall or a new Chrome profile = a new computer id: its choices stop applying and stay in the row (visible on the web app under the old PC id); the designed fix is one click "take back the videos chosen under this Chrome's old name", proven by shared chat ids (never by titles), not built. (ii) Two listings with the same headline in one account are one ad here (the chat label carries the headline only, the price is stripped). (iii) An ad appears in the list after its first buyer; those first chats are served on the general video and keep it. (iv) The exact title is strict: one changed word after a re-post = a new line with no video, offered "Same item? Use its video" (one click), never applied by itself. (v) The in-extension clip copy holds five clips: more than five in rotation on one computer = a download before the send (a per-clip cache key is the next step). (vi) The replaced or removed video files stay in the bucket. (vii) Each choice is one write of the account row: every computer pulls the row within the minute, one of the 20 server history copies is used, and the dashboard's "behind" line counts its 12 min from the last write of any kind (a `teachingAt` stamp would fix that). (viii) `adClipNote` still reads the title, not the remembered choice (.96 open item i), and it counts every computer's sets: on an account with NO general video, the first choice anywhere makes the other computers' model read "There is no video for this listing: never write [CLIP]" (true there, fewer videos, never more); its positive line now sits beside every buyer message of an ad with its own video — whether that makes the model write [CLIP] more often is a simulation to run (same 20 buyer turns with and without the line). (ix) Settings' Save, once its fresh read succeeded, still writes the whole row a second or two later (a write in that gap is lost); the proper fix is to send only the changed keys through `cloudRowPatch`. A choice anywhere still changes every computer's list signature once (`clipListSig` is account-wide: the in-memory video latches are cleared and each chat is re-checked against its ledger; nothing is sent twice). (x) THE DASHBOARD BOARD (pick a computer, one control per ad, copy one computer's choices to another) is the designed second stage, not built. (xi) A web-app tab opened before this deploy keeps the old script until it is reloaded (it would draw own choices as editable cards). (xii) A computer's own Settings videos (the old local upload) and per-ad videos do not mix: Settings videos go out only where the account has no general video and the ad has none of its own; the page says so on those ads. (xiii) docs/privacy.html (title and first lines) and store/listing-description.txt still carry the old product name, while the manifest's name changed in .94: the owner's public listing text, his call. (xiv) Questions for the owner that would change the design: is the video file always on the computer where that Facebook account is open (if it is only on his phone, a way to send a video to a given computer from his desk is needed); should an ad with no video of its own get the account's general video, a general video of that computer, or none (today: the account's, or none when that list is empty); do several computers use the same video for the same phone (then "copy to another computer" is worth building).
+
+- **Teaching v29 (hovig-79, Nov 13 2026 evening): WRITTEN AND TESTED, NOT PASTED — the paste is the owner's.** See "Twenty-ninth request — SAID, NOT PASTED". Five boxes (the Address box too) from his private page https://claude.ai/artifact/MxkixLpZ53sMkvLkEbf7gC, or from `store/teaching-sim/teaching-2026-11-13-v29.md`. No code changed and no release: the teaching reaches every computer within about a minute of his Save. After his paste, read a few real chats on the Activity tab: one starting price per iPhone, 757 in plain digits, no pasted price line, the no-hold sentence once per chat. If a text still shows keycap digits, the Address box was not pasted.
 
 ## Open after v0.21.96 (Nov 12 2026 — A VIDEO PER AD; BUILT 7610c93, zips at 0.21.96 in dist/; UPLOADED to the Web Store as Draft 0.21.96 ~12:50 EST; SUBMITTED by the owner's two clicks (the console left it a plain draft this time); PUBLISHED Nov 12 2026 ~14:25 EST, the fleet self-installs within ~2 h)
 - **Release state (hovig-27, Nov 12 2026 14:27 EST): v0.21.96 PUBLISHED.** clients2 update2 answered 0.21.96 between 14:22 and 14:27 EST Nov 12 (19:22–19:27 UTC; a 5-min curl poll with prodversion + acceptformat, hovig-27's scratch publish-watch.log). The owner made his two clicks after the 12:50 upload (the draft needed them this time), and Google's review was done within about 95 minutes of the upload. Every computer installs it by itself within ~2 h. The published build = the zip built from 7610c93 (b2478aa is inside). The feature is inert until the owner makes a set on the dashboard; the first real chat on an ad with a set is still the live proof of `maybeSendVideo` (in a pasted diagnostic read `adset=`, `adSets=`, `onAdSets=` and the status trail). The earlier state, kept for the record:

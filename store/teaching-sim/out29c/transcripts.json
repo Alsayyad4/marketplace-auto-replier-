@@ -1,0 +1,242 @@
+[
+  {
+    "id": "c1_vous_price_fr",
+    "listing": "iPhone 15 Pro Max 256 Go 1$",
+    "turns": [
+      {
+        "buyer": "Bonjour, il est toujours disponible?",
+        "raw": "Bonjour! Oui, il est disponible, on en a plusieurs. Le 15 Pro Max est à partir de 750 $ cette semaine, au 757 rue Beaubien E à côté du métro Beaubien. Vous pensez passer ce soir?",
+        "sent": "Bonjour! Oui, il est disponible, on en a plusieurs. Le 15 Pro Max est à partir de 750 $ cette semaine, au 757 rue Beaubien E à côté du métro Beaubien. Vous pensez passer ce soir?",
+        "kind": "text",
+        "visit": "",
+        "clip": false,
+        "gap": false
+      },
+      {
+        "buyer": "Quel est le prix exact pour le 256?",
+        "raw": "Le prix exact suit votre choix, remis à neuf, usagé ou neuf en 256 Go, et on vous fait le prix liquidation dessus au comptoir après l'avoir comparé en main.",
+        "sent": "Le prix exact suit votre choix, remis à neuf, usagé ou neuf en 256 Go, et on vous fait le prix liquidation dessus au comptoir après l'avoir comparé en main.",
+        "kind": "text",
+        "visit": "",
+        "clip": false,
+        "gap": false
+      },
+      {
+        "buyer": "D'accord, je passerai jeudi vers midi",
+        "raw": "[VISIT:yes] Jeudi vers midi, on vous attend au 757 rue Beaubien E. Juste à savoir: on ne réserve rien par téléphone ni en ligne, c'est premier arrivé premier servi et les quantités sont limitées. Si vous avez un ancien téléphone, apportez-le, ça fait baisser le prix.",
+        "sent": "Jeudi vers midi, on vous attend au 757 rue Beaubien E. Juste à savoir: on ne réserve rien par téléphone ni en ligne, c'est premier arrivé premier servi et les quantités sont limitées. Si vous avez un ancien téléphone, apportez-le, ça fait baisser le prix.",
+        "kind": "text",
+        "visit": "yes",
+        "clip": false,
+        "gap": false
+      }
+    ],
+    "faults": []
+  },
+  {
+    "id": "c2_budget_en",
+    "listing": "iPhone 14 Pro 128GB $1",
+    "turns": [
+      {
+        "buyer": "hey whats the lowest you can do, i got like 250",
+        "raw": "250 gets you the 12, starts at $200, or the 11 Pro, starts at $220. Don't worry about the list prices: with your budget we find you lower prices too, we work it out at the counter, just say CAROL when you get here. 757 rue Beaubien E by Beaubien metro, you coming tonight?",
+        "sent": "250 gets you the 12, starts at $200, or the 11 Pro, starts at $220. Don't worry about the list prices: with your budget we find you lower prices too, we work it out at the counter, just say CAROL when you get here. 757 rue Beaubien E by Beaubien metro, you coming tonight?",
+        "kind": "text",
+        "visit": "",
+        "clip": false,
+        "gap": false
+      },
+      {
+        "buyer": "do u take trade ins? i have a 11",
+        "raw": "yes, bring it. on a trade toward a newer phone your 11 is worth more than cash, so it brings the price down even more",
+        "sent": "yes, bring it. on a trade toward a newer phone your 11 is worth more than cash, so it brings the price down even more",
+        "kind": "text",
+        "visit": "",
+        "clip": false,
+        "gap": false
+      },
+      {
+        "buyer": "ok might swing by later today",
+        "raw": "[VISIT:yes] later today works, we're open till 9pm. 757 rue Beaubien E, right by Beaubien metro. just so you know, nothing gets held by phone or online, it's first come first served and quantities are limited. see you later today",
+        "sent": "later today works, we're open till 9pm. 757 rue Beaubien E, right by Beaubien metro. just so you know, nothing gets held by phone or online, it's first come first served and quantities are limited. see you later today",
+        "kind": "text",
+        "visit": "yes",
+        "clip": false,
+        "gap": false
+      }
+    ],
+    "faults": []
+  },
+  {
+    "id": "c3_number_photo_fr",
+    "listing": "Samsung Galaxy S23 256 Go 1$",
+    "turns": [
+      {
+        "buyer": "allo, vous avez un numéro pour vous joindre?",
+        "raw": "oui, le numéro c'est le 438 801-6771. on est au 757 rue Beaubien E, juste à côté du métro Beaubien. vous passez quand?",
+        "sent": "oui, le numéro c'est le 438 801-6771. on est au 757 rue Beaubien E, juste à côté du métro Beaubien. vous passez quand?",
+        "kind": "text",
+        "visit": "",
+        "clip": false,
+        "gap": false
+      },
+      {
+        "buyer": "ok pis le s23 il est neuf? envoie une photo",
+        "raw": "[CLIP] je vous envoie une petite vidéo tout de suite. le s23 est là en neuf, remis à neuf ou usagé aussi, on en a plusieurs, avec la garantie jusqu'à 1 à 2 ans.",
+        "sent": "je vous envoie une petite vidéo tout de suite. le s23 est là en neuf, remis à neuf ou usagé aussi, on en a plusieurs, avec la garantie jusqu'à 1 à 2 ans.",
+        "kind": "text",
+        "visit": "",
+        "clip": true,
+        "gap": false
+      },
+      {
+        "buyer": "merci",
+        "raw": "avec plaisir, on est là jusqu'à 21h ce soir, 7 jours sur 7, pour le voir en main.",
+        "sent": "avec plaisir, on est là jusqu'à 21h ce soir, 7 jours sur 7, pour le voir en main.",
+        "kind": "text",
+        "visit": "",
+        "clip": false,
+        "gap": false
+      }
+    ],
+    "faults": [
+      "3rd text has no address"
+    ]
+  },
+  {
+    "id": "c4_battery_far_fr",
+    "listing": "iPhone 13 128 Go 1$",
+    "turns": [
+      {
+        "buyer": "la batterie est à combien de pourcent?",
+        "raw": "il y en a plusieurs du même modèle avec des batteries différentes, tu choisis celle qui a la meilleure au comptoir pis on t'aide. le 13 est à partir de 280 $ cette semaine, tu passes ce soir? on est au 757 rue Beaubien E, à côté du métro Beaubien",
+        "sent": "il y en a plusieurs du même modèle avec des batteries différentes, tu choisis celle qui a la meilleure au comptoir pis on t'aide. le 13 est à partir de 280 $ cette semaine, tu passes ce soir? on est au 757 rue Beaubien E, à côté du métro Beaubien",
+        "kind": "text",
+        "visit": "",
+        "clip": false,
+        "gap": false
+      },
+      {
+        "buyer": "c'est trop loin je suis à longueuil",
+        "raw": "plein de nos clients viennent de la Rive-Sud, ça vaut le détour, pis le métro Beaubien est juste là. on est ouverts jusqu'à 21h au 757 rue Beaubien E",
+        "sent": "plein de nos clients viennent de la Rive-Sud, ça vaut le détour, pis le métro Beaubien est juste là. on est ouverts jusqu'à 21h au 757 rue Beaubien E",
+        "kind": "text",
+        "visit": "",
+        "clip": false,
+        "gap": false
+      },
+      {
+        "buyer": "bon je vais y penser",
+        "raw": "[SKIP]",
+        "sent": "",
+        "kind": "skip",
+        "visit": "",
+        "clip": false,
+        "gap": false
+      }
+    ],
+    "faults": []
+  },
+  {
+    "id": "c5_legit_en",
+    "listing": "Samsung Galaxy S24 128GB $1",
+    "turns": [
+      {
+        "buyer": "why so cheap? is this a scam",
+        "raw": "no, it's real, we're a real store right by beaubien metro, 757 rue Beaubien E. it's liquidation week so prices are 20-40% under the usual, the S24 starts at $140 to $300 depending on the model. you around tonight?",
+        "sent": "no, it's real, we're a real store right by beaubien metro, 757 rue Beaubien E. it's liquidation week so prices are 20-40% under the usual, the S24 starts at $140 to $300 depending on the model. you around tonight?",
+        "kind": "text",
+        "visit": "",
+        "clip": false,
+        "gap": false
+      },
+      {
+        "buyer": "are you a real person or a bot lol",
+        "raw": "the shop's automated assistant answers here, the people at the counter take over when you come in. we're open till 9 tonight",
+        "sent": "the shop's automated assistant answers here, the people at the counter take over when you come in. we're open till 9 tonight",
+        "kind": "text",
+        "visit": "",
+        "clip": false,
+        "gap": false
+      },
+      {
+        "buyer": "ok where exactly and till what time",
+        "raw": "757 rue Beaubien E, right beside beaubien metro, open till 9 tonight and 7 days a week. nothing gets held by phone or online, it's first come first served and quantities are limited. bring your old phone if you have one, it brings the price down",
+        "sent": "757 rue Beaubien E, right beside beaubien metro, open till 9 tonight and 7 days a week. nothing gets held by phone or online, it's first come first served and quantities are limited. bring your old phone if you have one, it brings the price down",
+        "kind": "text",
+        "visit": "",
+        "clip": false,
+        "gap": false
+      }
+    ],
+    "faults": []
+  },
+  {
+    "id": "c6_seller_en",
+    "listing": "(no listing: someone selling)",
+    "turns": [
+      {
+        "buyer": "hi i want to sell my iphone 12, how much you give",
+        "raw": "best price around, paid cash on the spot, the exact amount gets set in front of you in a few minutes at 757 rue Beaubien E, by beaubien metro. when can you come by?",
+        "sent": "best price around, paid cash on the spot, the exact amount gets set in front of you in a few minutes at 757 rue Beaubien E, by beaubien metro. when can you come by?",
+        "kind": "text",
+        "visit": "",
+        "clip": false,
+        "gap": false
+      },
+      {
+        "buyer": "its 128gb, battery 88%, screen perfect",
+        "raw": "no number over text, we set it in front of you in minutes, cash in hand. got anything else to sell? bring it, several devices get a better offer",
+        "sent": "no number over text, we set it in front of you in minutes, cash in hand. got anything else to sell? bring it, several devices get a better offer",
+        "kind": "text",
+        "visit": "",
+        "clip": false,
+        "gap": false
+      },
+      {
+        "buyer": "ok ill come saturday morning",
+        "raw": "[VISIT:yes] saturday morning, doors open at 9am at 757 rue Beaubien E, right by beaubien metro. bring the 12 and the amount gets set right there, cash in hand.",
+        "sent": "saturday morning, doors open at 9am at 757 rue Beaubien E, right by beaubien metro. bring the 12 and the amount gets set right there, cash in hand.",
+        "kind": "text",
+        "visit": "yes",
+        "clip": false,
+        "gap": false
+      }
+    ],
+    "faults": []
+  },
+  {
+    "id": "c7_tu_payments_fr",
+    "listing": "iPhone 16 256 Go 1$",
+    "turns": [
+      {
+        "buyer": "yo c'est quoi le prix du 16",
+        "raw": "le 16 est à partir de 680 $ cette semaine, en liquidation. on est au 757 rue Beaubien E, collé sur le métro Beaubien, ouvert jusqu'à 21h. tu passes ce soir?",
+        "sent": "le 16 est à partir de 680 $ cette semaine, en liquidation. on est au 757 rue Beaubien E, collé sur le métro Beaubien, ouvert jusqu'à 21h. tu passes ce soir?",
+        "kind": "text",
+        "visit": "",
+        "clip": false,
+        "gap": false
+      },
+      {
+        "buyer": "pis on peut payer en plusieurs fois?",
+        "raw": "oui, les paiements par mois c'est possible, on t'explique ça au comptoir.",
+        "sent": "oui, les paiements par mois c'est possible, on t'explique ça au comptoir.",
+        "kind": "text",
+        "visit": "",
+        "clip": false,
+        "gap": false
+      },
+      {
+        "buyer": "ok je passe ce soir vers 7h",
+        "raw": "[VISIT:yes] ce soir vers 19h on t'attend, au 757 rue Beaubien E, collé sur le métro Beaubien, on ferme à 21h. juste à savoir, on réserve rien par téléphone ni en ligne, c'est premier arrivé premier servi et les quantités sont limitées. amène ton vieux téléphone si t'en as un, ça fait baisser le prix.",
+        "sent": "ce soir vers 19h on t'attend, au 757 rue Beaubien E, collé sur le métro Beaubien, on ferme à 21h. juste à savoir, on réserve rien par téléphone ni en ligne, c'est premier arrivé premier servi et les quantités sont limitées. amène ton vieux téléphone si t'en as un, ça fait baisser le prix.",
+        "kind": "text",
+        "visit": "yes",
+        "clip": false,
+        "gap": false
+      }
+    ],
+    "faults": []
+  }
+]

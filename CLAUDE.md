@@ -76,6 +76,25 @@ all chrome.debugger/CDP work) + Supabase dashboard in docs/. Live branch:
   (the real dashboard page, headless), boot-store's CHAT_CLIPS + Settings checks; one independent review,
   ten of eleven findings fixed (HANDOFF). NOT verified on a live Messenger send. Never move the question
   above the gate; never let a served chat change list. HANDOFF "Open after v0.21.96".
+- TEACHING v29 = SAID, NOT PASTED (Nov 13 2026; owner: "make the auto reply more human like and less chance to get
+  suspended ... as efficient as consistent", then "yes go ahead" to four changes). `store/teaching-sim/teaching29.js`
+  → `teaching-2026-11-13-v29.md`, THE paste, replaces v28: FIVE boxes, the Address box too (now plain `757 rue
+  Beaubien E, Montréal (métro Beaubien)`). WRITTEN AND TESTED, NOT PASTED YET (his private copy page:
+  https://claude.ai/artifact/MxkixLpZ53sMkvLkEbf7gC). (1) the starting price of THEIR model in a sentence, never the
+  family line or the list; a budget = the two or three models that fit; Samsung / iPad = the range of their group,
+  said about the group, never the lowest number pinned on their model; (2) the fine print once, one short sentence
+  in plain words (limited quantities, nothing held, first come first served), never the notice, never to a seller;
+  (3) PLAIN FIGURES BY HIS OWN YES: 757 and the phone numbers in plain digits — this reverses the v28 veto in the
+  next entry; do not bring the keycaps back without his word (`shopDigits` is inert once the Address box is plain);
+  (4) the first text answers first and always carries the model's starting price for a buyer. The rules about
+  varying wording from one chat to the next are gone: the model sees one chat per call. Built FROM v28 (`require`,
+  named paragraphs swapped, every other fact byte for byte); every example price is computed from the owner's own
+  price lines. `post29.js` = what the buyer receives + the checks; `ab29.js` = the blind file. Seven buyers × three
+  turns, six rounds of Haiku stand-ins: 8 scripted faults → 0 on the final file (`out29f`), every iPhone price right;
+  blind review (two reviewers, five buyers): v29 more natural 5 of 5, 3.5-3.8 → 7.0-7.4 out of 10, "spam?" yes /
+  maybe → no. NOT tested through the API on `claude-haiku-4-5` (no key on this PC): the first real chats are the
+  proof. Honesty unchanged ("the shop's automated assistant"); no timing, scan or limits code touched; no release.
+  HANDOFF "Twenty-ninth request".
 - TEACHING v28 = NO CAROL IN THE CLOSE, THE SHOP'S OWN DIGITS, THE CLOSE COMPOSED (Nov 10 2026, later that
   evening; owner: "every chat you keep mention carol stop that; the address and phone number should be like
   7️⃣5️⃣7️⃣ rue Beaubien E and the number in these emojis; the most optimized for three replies, non detectable
