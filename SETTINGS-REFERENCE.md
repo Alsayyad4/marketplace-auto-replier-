@@ -149,6 +149,26 @@ list. There is no second place to teach the bot.
   lists the ads the bots answered in the last 5 days, per computer); read-only in the
   extension's Settings. Builds before 0.21.96 ignore the key and send the general list.
   Pure rule: `adVideoPick` / `chatClipChoice` in background.js; `store/smoke-advideo.js`.
+  (v0.21.97) **Videos for my ads.** A set may also carry `exact: true`: it was made on ONE
+  computer, in the extension's own page "🎬 Videos for my ads" (`myads.html`, opened from the
+  popup), for ONE ad of that Chrome. Such a set has that computer alone in `pcs`, the ad's
+  title as its single alternative, and fits only the ad whose title has exactly those words
+  (word order, case, accents and "256 Go"/"256GB" aside; a "+" at the end of a word is part of
+  it: "S24+" is not "S24") — never another ad whose title merely holds them. The stored title
+  is read by its words alone (`adWordsExact`), never re-read for prices and advert words. On
+  a tie it goes before a words set. The page lists the ads of THAT
+  computer's own chats (its local log + the inbox rows its Messenger tab shows), uploads the
+  mp4 into the account's storage folder with that computer's login, and writes the choice with
+  a compare-and-set on the row's stamp that changes `adVideoSets` only (`myAdsWrite`).
+  Changing an ad's video makes a NEW set (new id) and removes the old one, so a chat already
+  served keeps what it has; the same video chosen again changes nothing. Such a set has no
+  card on the dashboard: one line with a Remove, under its computer (`#adOwnChoices`);
+  changing its video is done on that computer. The same page can also make a WORDS set for
+  that computer alone ("My ad is not in the list": no mark, one alternative, a comma never
+  means "or" there). Videos: mp4 / mov the Chrome can play, 50 KB to 25 MB. Builds before
+  0.21.97 would read an exact set by the words rule; they never see one unless it was made
+  for them. The set list is read ONE SET PER ID (the first). `store/smoke-myads.js`,
+  `store/page-myads.cjs`.
 - `videoCompleteSet` — bool (default `true`). (v0.21.72) **Every clip, exactly once per chat.**
   Each chat keeps a ledger of the clips it was handed, by file (`videoClips` in the
   machine's local storage: `s` = sent, `t` = handed over but never confirmed; both mean

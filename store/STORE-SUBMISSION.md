@@ -89,7 +89,7 @@ already filled in.)
 | `downloads` | Keeps the operator's own demo video clips on disk (Downloads/SubSell-videos). |
 | Host `*.messenger.com`, `*.facebook.com` | The extension only works inside the operator's own Marketplace/Messenger chats. |
 | Host `api.anthropic.com` | Generates the replies with the operator's own API key. |
-| Host `*.supabase.co` | The operator's own settings/cloud sync project (configured by the operator). |
+| Host `*.supabase.co` | The operator's own settings/cloud sync project (configured by the operator), and the operator's demo videos kept there: downloaded by the extension, and uploaded from its own page "Videos for my ads" when the operator picks a video file. |
 
 ---
 

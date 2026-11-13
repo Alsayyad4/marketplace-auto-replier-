@@ -308,14 +308,23 @@
     if (!sets.length) { el.textContent = "None: every ad gets the general video(s) above."; return; }
     const paint = (me) => {
       el.textContent = "";
+      let others = 0;
       sets.forEach((s) => {
         const pcs = (Array.isArray(s.pcs) ? s.pcs : []).map((p) => String(p || "").toLowerCase()).filter(Boolean);
         const clips = (Array.isArray(s.clips) ? s.clips : []).filter((v) => v && v.url);
-        const where = !pcs.length ? "every computer" : pcs.includes(me) ? "this computer" : "other computers, not this one";
+        // (v0.21.97) the sets made for other computers are counted, not listed: with every computer choosing
+        // the videos of its own ads, forty computers' lines would bury this one's
+        if (pcs.length && !pcs.includes(me)) { others++; return; }
+        const where = !pcs.length ? "every computer" : "this computer";
         const row = document.createElement("div");
-        row.textContent = "• Ads with: " + (String(s.ads || "").trim() || "(no words yet)") + " — " + (clips.length ? clips.map((v) => v.name || "video").join(" + ") : "(no video yet)") + " — " + where;
+        row.textContent = "• " + (s.exact === true ? "This ad only: " : "Ads with: ") + (String(s.ads || "").trim() || "(no words yet)") + " — " + (clips.length ? clips.map((v) => v.name || "video").join(" + ") : "(no video yet)") + " — " + where;
         el.appendChild(row);
       });
+      if (others) {
+        const more = document.createElement("div");
+        more.textContent = "• + " + others + " for other computers (not sent from this one)";
+        el.appendChild(more);
+      }
     };
     paint("");
     try {
@@ -331,6 +340,8 @@
       });
     } catch (e) { /* the list without this computer's own line */ }
   }
+  // (v0.21.97) MY ADS: the page where this computer's own ads get their video (myads.html)
+  if ($("openMyAds")) $("openMyAds").addEventListener("click", () => chrome.tabs.create({ url: chrome.runtime.getURL("myads.html"), active: true }));
   // Read-only list of central demo videos (uploaded/removed in the web app).
   function renderCentralVideos() {
     renderAdVideoSets(); // (v0.21.96) the sets made for one ad, under the general list
@@ -570,11 +581,19 @@
   }
   // (v0.21.89) the account as of NOW: with a login, a pull first (bounded — a cloud that
   // does not answer must not hold the Save), then the merged read every page uses.
+  // (v0.21.97) …and with a login the row must have been READ just now, or nothing is saved: a pull that
+  // failed, or did not answer in time, used to let the merge run over this computer's OLDER copy, and the
+  // save (the whole row) then undid what the web app or another computer had written since — now that
+  // every computer writes its own video choices into that row. → the settings, or { refused: why }.
   async function currentSettings() {
     const st = await ask("CLOUD_STATUS");
-    if (st.res && st.res.loggedIn) await Promise.race([ask("CLOUD_PULL"), new Promise((r) => setTimeout(r, PULL_WAIT_MS))]);
+    if (st.res && st.res.loggedIn) {
+      const pulled = await Promise.race([ask("CLOUD_PULL"), new Promise((r) => setTimeout(() => r(null), PULL_WAIT_MS))]);
+      const p = pulled && pulled.res;
+      if (!(p && p.ok)) return { refused: (p && p.error) || (pulled && pulled.err) || "no answer from the account in " + Math.round(PULL_WAIT_MS / 1000) + " s" };
+    }
     const got = await ask("GET_SETTINGS");
-    if (!got.res || !got.res.settings) return null;
+    if (!got.res || !got.res.settings) return { refused: "the extension did not answer" };
     return withLists(Object.assign({}, DEFAULTS, got.res.settings));
   }
   // (v0.21.89) every save of this page goes through here (Save, "Get Claude's reply"):
@@ -583,7 +602,9 @@
     if (!loadedBase) return { r: null, err: null, notLoaded: true, changed: null, kept: null };
     formToFields();
     const current = await currentSettings();
-    const m = current ? mergeOverCurrent(loadedBase, settings, current) : { config: settings, changed: null, kept: null };
+    // (v0.21.97) never the page's own snapshot in place of the account's current settings: no read = no save
+    if (!current || current.refused) return { r: null, err: null, notLoaded: false, changed: null, kept: null, refused: (current && current.refused) || "no answer" };
+    const m = mergeOverCurrent(loadedBase, settings, current);
     const out = await ask("SAVE_SETTINGS", { settings: m.config });
     const r = out.res;
     if (r && !(r.cloud && r.cloud.ok === false)) {
@@ -600,7 +621,7 @@
   }
   function save() {
     // Synced across all computers on the same Google account (via background).
-    saveMergedSettings().then(({ r, err, notLoaded, kept }) => {
+    saveMergedSettings().then(({ r, err, notLoaded, kept, refused }) => {
       // (v0.21.61) When the guard folds values back into a save that would have
       // cleared them, say so — a silent repair is how you find out months later.
       const rep = (r && r.repaired) || [];
@@ -620,6 +641,9 @@
       let bad = true;
       if (notLoaded) {
         text = "Not saved — this page is still loading your settings; press Save again in a moment.";
+      } else if (refused) {
+        // (v0.21.97) the account's current settings could not be read first: saving over an older copy is refused
+        text = "Not saved — the account's current settings could not be read first (" + refused + "), and saving over an older copy could undo what another computer or the web app just changed. Nothing was changed: press Save again.";
       } else if (err || !r) {
         text = "Not saved — the extension did not answer (" + (err || "no reply") + "). Reload the extension and try again.";
       } else if (c && c.ok === false) {

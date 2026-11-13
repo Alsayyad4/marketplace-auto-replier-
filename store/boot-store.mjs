@@ -1,4 +1,4 @@
-// Headless boot of the v0.21.96 STORE build (same staging as store/build-webstore-zip.ps1): the real
+// Headless boot of the v0.21.97 STORE build (same staging as store/build-webstore-zip.ps1): the real
 // worker in a real browser, Anthropic stubbed by overriding self.fetch inside it. Proves the worker's
 // top level runs with the .94 code, the name rule, the brand wall, the bursts, the [CLIP] parse, the
 // three-way clip sentence, writeReply's wall, the 🩺 lines and the renamed popup. Pattern: e2e-api.mjs.
@@ -21,11 +21,11 @@ const ok = (c, m) => { console.log((c ? "  PASS  " : "  FAIL  ") + m); if (!c) f
 const sleep = (ms) => new Promise((r) => setTimeout(r, ms));
 
 const stage = fs.mkdtempSync(path.join(os.tmpdir(), "ltm-boot94-"));
-for (const f of ["content.js", "options.html", "options.js", "popup.html", "popup.js", "managed_schema.json", "icon16.png", "icon48.png", "icon128.png"]) fs.copyFileSync(path.join(root, f), path.join(stage, f));
+for (const f of ["content.js", "options.html", "options.js", "popup.html", "popup.js", "myads.html", "myads.js", "managed_schema.json", "icon16.png", "icon48.png", "icon128.png"]) fs.copyFileSync(path.join(root, f), path.join(stage, f));
 execFileSync("node", [path.join(root, "store/webstore-background.js"), path.join(root, "background.js"), path.join(stage, "background.js")], { stdio: "inherit" });
 execFileSync("node", [path.join(root, "store/webstore-manifest.js"), path.join(root, "manifest.json"), path.join(stage, "manifest.json")], { stdio: "inherit" });
 const mf = JSON.parse(fs.readFileSync(path.join(stage, "manifest.json"), "utf8"));
-ok(mf.version === "0.21.96" && !mf.key && mf.name === "Liquidation Téléphone Montréal Auto-Reply", "store manifest: v" + mf.version + ", no key, name '" + mf.name + "'");
+ok(mf.version === "0.21.97" && !mf.key && mf.name === "Liquidation Téléphone Montréal Auto-Reply", "store manifest: v" + mf.version + ", no key, name '" + mf.name + "'");
 
 const get = (p) => new Promise((res, rej) => http.get({ host: "127.0.0.1", port: PORT, path: p }, (r) => { let d = ""; r.on("data", (c) => (d += c)); r.on("end", () => res(d)); }).on("error", rej));
 const put = (p) => new Promise((res, rej) => { const q = http.request({ host: "127.0.0.1", port: PORT, path: p, method: "PUT" }, (r) => { let d = ""; r.on("data", (c) => (d += c)); r.on("end", () => res(d)); }); q.on("error", rej); q.end(); });
@@ -111,7 +111,7 @@ try {
   ok(wr2 && wr2.kind === "held" && /brand wall/.test(wr2.reason), "…a brand-only answer is held: " + (wr2 && wr2.reason));
   const diag = await evalIn(w, "buildDiagnostic()");
   const theatreField = (diag.match(/typingLive=on|typingLive=off|burst=\d|human=on|human=off|rhythm=/) || [])[0] || "";
-  ok(/clip=asked/.test(diag) && !theatreField && /Marketplace Auto-Reply v0.21.96/.test(diag), "the 🩺 reads clip=asked, no timing-theatre fields, header renamed" + (theatreField ? " — found: " + theatreField : ""));
+  ok(/clip=asked/.test(diag) && !theatreField && /Marketplace Auto-Reply v0.21.97/.test(diag), "the 🩺 reads clip=asked, no timing-theatre fields, header renamed" + (theatreField ? " — found: " + theatreField : ""));
   ok(!/SubSell/.test(diag.split("\n").slice(0, 3).join("\n")), "…and its header has no SubSell");
   const pop = JSON.parse(await put("/json/new?chrome-extension://" + extId + "/popup.html"));
   const p = await cdp(pop.webSocketDebuggerUrl);
@@ -148,7 +148,9 @@ try {
   await o.send("Runtime.enable");
   let adList = "";
   for (let i = 0; i < 12 && !/Ads with/.test(adList); i++) { await sleep(500); try { adList = await evalIn(o, 'document.getElementById("adVideoList").textContent'); } catch (e) { /* the page is still loading */ } }
-  ok(/Ads with: macbook air, macbook pro — m\.mp4 — every computer/.test(adList) && /Ads with: s24 ultra — s\.mp4 — other computers, not this one/.test(adList), "Settings lists the sets read-only and says which apply on this computer: " + adList);
+  for (let i = 0; i < 8 && !/for other computers/.test(adList); i++) { await sleep(400); try { adList = await evalIn(o, 'document.getElementById("adVideoList").textContent'); } catch (e) { /* the page is still loading */ } }
+  ok(/Ads with: macbook air, macbook pro — m\.mp4 — every computer/.test(adList) && !/s24 ultra/.test(adList) && /\+ 1 for other computers \(not sent from this one\)/.test(adList) && /this computer is: PC-test1/.test(adList), "Settings lists the sets that apply on this computer, read-only, and only counts the other computers': " + adList);
+  ok(await evalIn(o, '!!document.getElementById("openMyAds")'), "…with the door to this Chrome's own “Videos for my ads” page");
   o.close();
   // two tabs asking at once must not lose a choice (the worker answers one question at a time)
   const many = await evalIn(p, 'Promise.all(["u1","u2","u3","u4","u5","u6"].map((id) => new Promise((r) => chrome.runtime.sendMessage({ type: "CHAT_CLIPS", threadId: id, threadName: "Buyer · MacBook Pro 14", served: false }, (x) => { void chrome.runtime.lastError; r(x && x.set); })))).then((a) => a.join(","))');
@@ -164,6 +166,92 @@ try {
   ok(!!c6 && c6.set === "" && c6.clips === null && !c6.gone && !afterGone.u1 && !!afterGone.t1 && !!afterGone.u2, "…a chat that was never served goes back to the general list and its stale choice is forgotten; the others are untouched");
   const c7 = await askP({ type: "CHAT_CLIPS", threadId: "t2", threadName: "Buyer · MacBook Pro 14", served: true });
   ok(!!c7 && c7.set === "" && c7.clips === null && !c7.gone, "…a chat that never had a set is on the general list, as before");
+
+  // (v0.21.97) MY ADS, MY VIDEOS in the real extension: the real page (myads.html) asks the real worker over the
+  // real message path, uploads with a real request, and the choice lands in the account's row. The account is
+  // stood in for twice: its settings row by self.fetch inside the worker (a row with a stamp), its video storage
+  // by a local server run here (the page's upload is a real cross-origin request from the extension's own page).
+  const ups = [];
+  const stor = http.createServer((req, res) => {
+    const cors = { "access-control-allow-origin": "*", "access-control-allow-headers": "apikey, authorization, content-type, cache-control", "access-control-allow-methods": "POST, OPTIONS" };
+    if (req.method === "OPTIONS") { res.writeHead(204, cors); res.end(); return; }
+    const chunks = [];
+    req.on("data", (c) => chunks.push(c));
+    req.on("end", () => { ups.push({ path: decodeURIComponent(String(req.url)), origin: req.headers.origin || "", auth: req.headers.authorization || "", apikey: req.headers.apikey || "", type: req.headers["content-type"] || "", bytes: Buffer.concat(chunks).length }); res.writeHead(200, Object.assign({ "content-type": "application/json" }, cors)); res.end("{}"); });
+  });
+  await new Promise((r) => stor.listen(0, "127.0.0.1", r));
+  const SB = "http://127.0.0.1:" + stor.address().port;
+  const rowCfg = { apiKey: "sk-test", model: "claude-haiku-4-5", businessInfo: "Shop.", instructions: "Short.", demoVideoUrls: [{ name: "g.mp4", url: "https://x/g.mp4" }], adVideoSets: [{ id: "mac", ads: "macbook air, macbook pro", pcs: [], clips: [{ name: "m.mp4", url: "https://x/m.mp4" }] }] };
+  const logSeed = [{ at: new Date().toISOString(), thread: "Jimmy · iPhone 13 Pro 256 Go 650$", threadId: "t1", action: "text", buyer: "dispo?", reply: "oui" }, { at: new Date().toISOString(), thread: "Paul · MacBook Air M2", threadId: "t2", action: "text", buyer: "allo", reply: "allo" }, { at: new Date().toISOString(), thread: "Messenger", threadId: "t9", action: "video" }];
+  await evalIn(w, "new Promise((r) => chrome.storage.local.set(" + JSON.stringify({ cloudConfig: rowCfg, replyLog: logSeed, machineId: "PC-test1", machineLabel: "Front desk", videoSetOf: {}, supabaseUrl: SB, supabaseAnonKey: "anon-test", cloudAuth: { access_token: "tok-1", refresh_token: "ref-1", expires_at: Date.now() + 3600000, ttl_ms: 3600000, user_id: "uid-1", email: "owner@example.com" } }) + ", r))");
+  await evalIn(w, "(() => { const row = self.__row = { config: " + JSON.stringify(rowCfg) + ", updated_at: 's1' }; const calls = self.__calls = []; self.fetch = async (url, init) => { const u = String(url), m = (init && init.method) || 'GET'; calls.push(m + ' ' + u.slice(u.indexOf('/', 8))); if (u.indexOf('/rest/v1/subsell_configs') < 0) return new Response('{}', { status: 200 }); if (m === 'GET') return new Response(JSON.stringify([{ config: row.config, updated_at: row.updated_at, config_key: 'k1' }]), { status: 200 }); const st = decodeURIComponent((u.split('updated_at=eq.')[1] || '').split('&')[0]); if (st !== row.updated_at) return new Response('[]', { status: 200 }); row.config = JSON.parse(init.body).config; row.updated_at = 's' + (Number(row.updated_at.slice(1)) + 1); return new Response(JSON.stringify([{ config: row.config, updated_at: row.updated_at }]), { status: 200 }); }; return true; })()");
+  ok(await evalIn(w, 'typeof myAdsState === "function" && typeof myAdsWrite === "function" && typeof myAdSetsPut === "function" && typeof myAdsRows === "function"'), "the worker carries the My ads rules");
+  ok(await evalIn(p, '!!document.getElementById("myAds") && /Videos for my ads/.test(document.getElementById("myAds").textContent)'), "the popup has the “Videos for my ads” button");
+  const myT = JSON.parse(await put("/json/new?chrome-extension://" + extId + "/myads.html"));
+  const my = await cdp(myT.webSocketDebuggerUrl);
+  await my.send("Runtime.enable");
+  const inMy = (expr) => evalIn(my, expr);
+  let sumMy = "";
+  for (let i = 0; i < 20 && !/on this Chrome/.test(sumMy); i++) { await sleep(400); try { sumMy = await inMy('document.getElementById("sum").textContent'); } catch (e) { /* the page is still loading */ } }
+  const cardsMy = () => inMy('Array.from(document.querySelectorAll(".card")).map((c) => c.querySelector(".title").textContent + " => " + c.querySelector(".state").textContent).join(" || ")');
+  ok(/^2 ads on this Chrome · 0 have their own video$/.test(sumMy) && /Front desk \(PC-test1\)/.test(await inMy('document.getElementById("who").textContent')), "the real page, asked of the real worker, lists this computer's two ads (its own log; the row with no listing is not one): " + sumMy);
+  const c0My = await cardsMy();
+  ok(/iPhone 13 Pro 256 Go => No video of its own: it gets the general video \(g\.mp4\)\./.test(c0My) && /MacBook Air M2 => Gets m\.mp4, set on the web app for ads with the words “macbook air, macbook pro”\./.test(c0My), "…each with the video the bots would send: " + c0My);
+  const askMy = (m) => inMy("new Promise((r) => chrome.runtime.sendMessage(" + JSON.stringify(m) + ", (x) => { void chrome.runtime.lastError; r(JSON.stringify(x || null)); }))").then((s) => JSON.parse(s));
+  const tk = await askMy({ type: "MYADS_TICKET" });
+  ok(!!tk && tk.ok === true && tk.url === SB && tk.key === "anon-test" && tk.token === "tok-1" && tk.userId === "uid-1" && tk.bucket === "subsell-videos", "the extension's own page gets the upload ticket (this computer's login, the account's folder)");
+  // the button's click appends the hidden file input (the chooser itself needs a person's click); the file is handed
+  // to it here. It is a REAL video, recorded in this page (a canvas through MediaRecorder): the page tries a file on
+  // the browser before it uploads it, and bytes that are not a video are refused.
+  const bootBytes = await inMy('(async () => { const c = document.createElement("canvas"); c.width = 320; c.height = 240; const g = c.getContext("2d"); const rec = new MediaRecorder(c.captureStream(30), { mimeType: "video/webm;codecs=vp8", videoBitsPerSecond: 2500000 }); const chunks = []; rec.ondataavailable = (e) => { if (e.data && e.data.size) chunks.push(e.data); }; const done = new Promise((r) => { rec.onstop = r; }); rec.start(100); const t0 = performance.now(); await new Promise((res) => { const draw = () => { const id = g.createImageData(320, 240); for (let i = 0; i < id.data.length; i += 4) { id.data[i] = Math.random() * 255; id.data[i + 1] = Math.random() * 255; id.data[i + 2] = Math.random() * 255; id.data[i + 3] = 255; } g.putImageData(id, 0, 0); if (performance.now() - t0 < 900) setTimeout(draw, 33); else res(); }; draw(); }); rec.stop(); await done; const blob = new Blob(chunks); const card = Array.from(document.querySelectorAll(".card")).find((x) => /iPhone 13 Pro 256 Go/.test(x.querySelector(".title").textContent)); card.querySelector("button").click(); const inp = document.querySelector(\'input[type="file"]\'); const dt = new DataTransfer(); dt.items.add(new File([blob], "boot-demo.mp4", { type: "video/mp4" })); inp.files = dt.files; inp.dispatchEvent(new Event("change")); return blob.size; })()');
+  let c1My = "";
+  for (let i = 0; i < 30 && !/Its own video: boot-demo\.mp4/.test(c1My); i++) { await sleep(400); try { c1My = await cardsMy(); } catch (e) { /* drawing */ } }
+  const up = ups[0] || {};
+  ok(ups.length === 1 && /^\/storage\/v1\/object\/subsell-videos\/uid-1\/\d{13}-boot-demo\.mp4$/.test(up.path) && up.origin === "chrome-extension://" + extId && up.auth === "Bearer tok-1" && up.apikey === "anon-test" && up.type === "video/mp4" && up.bytes === bootBytes && bootBytes > 60000, "the page's own upload: one request from the extension's page into the account's folder, whole: " + JSON.stringify(up));
+  const rowNow = JSON.parse(await evalIn(w, "JSON.stringify(self.__row)"));
+  const callsNow = JSON.parse(await evalIn(w, "JSON.stringify(self.__calls)"));
+  const mineSet = (rowNow.config.adVideoSets || []).find((x) => x.exact === true) || { clips: [{}], pcs: [] };
+  ok(rowNow.config.adVideoSets.length === 2 && rowNow.config.adVideoSets[0].id === "mac" && mineSet.ads === "iPhone 13 Pro 256 Go" && JSON.stringify(mineSet.pcs) === '["pc-test1"]' && mineSet.clips[0].url === SB + up.path.replace("/storage/v1/object/", "/storage/v1/object/public/") && mineSet.clips[0].size === bootBytes, "the choice is in the account's row: this computer alone, this ad, this file — " + JSON.stringify(mineSet));
+  ok(rowNow.config.apiKey === "sk-test" && rowNow.config.businessInfo === "Shop." && rowNow.config.instructions === "Short." && rowNow.config.demoVideoUrls.length === 1 && rowNow.config.videoLinkFallback === false, "…and nothing else in the row moved (the key, the teaching, the general video)");
+  const iGet = callsNow.findIndex((c) => /^GET \/rest\/v1\/subsell_configs\?select=config,updated_at$/.test(c));
+  const iPatch = callsNow.findIndex((c) => /^PATCH \/rest\/v1\/subsell_configs\?user_id=eq\.uid-1&updated_at=eq\.s1$/.test(c));
+  const iPull = callsNow.findIndex((c, i) => i > iPatch && /^GET \/rest\/v1\/subsell_configs\?select=config,updated_at,config_key$/.test(c));
+  ok(iGet >= 0 && iPatch > iGet && iPull > iPatch && callsNow.filter((c) => /^PATCH /.test(c)).length === 1 && !callsNow.some((c) => /^POST \/rest\/v1\/subsell_configs/.test(c)), "the worker read the row, wrote on its stamp once, then pulled its own choice; never the whole-row save");
+  ok(await evalIn(w, 'getSettings().then((s) => { const a = adVideoPick(s, "iPhone 13 Pro 256 Go", s.machineId), b = adVideoPick(s, "iPhone 13 Pro Max 256 Go", s.machineId), c = adVideoPick(s, "iPhone 13 Pro 256 Go", "PC-other"); return !!a && a.exact === true && !b && !c; })'), "this computer's settings now give that ad its video, and neither the 13 Pro Max nor another computer");
+  const c8 = await askP({ type: "CHAT_CLIPS", threadId: "n1", threadName: "Buyer · iPhone 13 Pro 256 Go 650$", served: false });
+  const c9 = await askP({ type: "CHAT_CLIPS", threadId: "n2", threadName: "Buyer · iPhone 13 Pro Max 256 Go", served: false });
+  ok(!!c8 && c8.set === mineSet.id && c8.clips.length === 1 && /boot-demo\.mp4$/.test(c8.clips[0].url) && !!c9 && c9.set === "" && c9.clips === null, "CHAT_CLIPS, as content.js asks it: a new chat on that ad gets the choice, a chat on the 13 Pro Max gets the general list");
+  ok(/^2 ads on this Chrome · 1 has its own video$/.test(await inMy('document.getElementById("sum").textContent')) && /✓ Saved: boot-demo\.mp4/.test(await inMy('document.querySelector(".status.ok").textContent')), "the page shows the ad's own video and says it is saved");
+  ok(/videos: central=1 adSets=2 mine=1/.test(await evalIn(w, "buildDiagnostic()")), "the diagnostic counts this computer's own choice (mine=1)");
+  const dropped = await askMy({ type: "MYADS_DROP", setId: mineSet.id });
+  const refusedWeb = await askMy({ type: "MYADS_DROP", setId: "mac" });
+  const rowEnd = JSON.parse(await evalIn(w, "JSON.stringify(self.__row)"));
+  ok(!!dropped && dropped.ok === true && !!refusedWeb && refusedWeb.ok === false && rowEnd.config.adVideoSets.length === 1 && rowEnd.config.adVideoSets[0].id === "mac", "taking the choice back removes it from the row; the web app's set cannot be removed from a computer's page");
+  const c10 = await askP({ type: "CHAT_CLIPS", threadId: "n1", threadName: "Buyer · iPhone 13 Pro 256 Go 650$", served: true });
+  ok(!!c10 && c10.gone === true && c10.clips.length === 0, "…and the chat that was served on it keeps what it has: nothing more is sent");
+  // the popup's delay slider: ONE key into the row through the same narrow writer (never the whole row)
+  const patchN = async () => JSON.parse(await evalIn(w, "JSON.stringify(self.__calls)")).filter((c) => /^PATCH /.test(c)).length;
+  const pBefore = await patchN();
+  const sd = await askP({ type: "SET_DELAY", sec: 45 });
+  const rowSd = JSON.parse(await evalIn(w, "JSON.stringify(self.__row)"));
+  ok(!!sd && sd.ok === true && rowSd.config.responseDelaySec === 45 && rowSd.config.apiKey === "sk-test" && rowSd.config.businessInfo === "Shop." && rowSd.config.adVideoSets.length === 1 && (await patchN()) === pBefore + 1, "SET_DELAY from the popup writes the one key into the row on its stamp; the key, the teaching and the video sets stand");
+  const sd2 = await askP({ type: "SET_DELAY", sec: 45 });
+  ok(!!sd2 && sd2.ok === true && sd2.same === true && (await patchN()) === pBefore + 1 && (await evalIn(w, "getSettings().then((s) => s.responseDelaySec === 45)")), "…the same delay again writes nothing, and this computer reads the new delay at once");
+  // the update gate: Settings / the popup open hold a store update as before; "Videos for my ads" holds it only in use
+  ok((await evalIn(w, "storeUpdUiOpen()")) === true, "with Settings and the popup open, an update waits (as before)");
+  await get("/json/close/" + pop.id);
+  await get("/json/close/" + optT.id);
+  await sleep(700);
+  const ctxNow = await evalIn(w, 'chrome.runtime.getContexts({ contextTypes: ["TAB", "POPUP"] }).then((c) => c.map((x) => x.contextType + " " + String(x.documentUrl).split("/").pop()).join(","))');
+  await inMy('Object.defineProperty(document, "visibilityState", { configurable: true, get: () => "hidden" }); true');
+  const gateIdle = await evalIn(w, "storeUpdUiOpen()");
+  await inMy('Object.defineProperty(document, "visibilityState", { configurable: true, get: () => "visible" }); document.dispatchEvent(new Event("pointerdown")); true');
+  const gateUsed = await evalIn(w, "storeUpdUiOpen()");
+  ok(ctxNow === "TAB myads.html" && gateIdle === false && gateUsed === true, "with only “Videos for my ads” open (" + ctxNow + "): left alone it holds nothing (" + gateIdle + "), in use it holds the update (" + gateUsed + ")");
+  const myErr = my.events.filter((e) => e.method === "Runtime.exceptionThrown");
+  ok(myErr.length === 0, "no uncaught exception in the page" + (myErr.length ? " — " + JSON.stringify(myErr[0].params.exceptionDetails).slice(0, 300) : ""));
+  my.close();
+  stor.close();
   p.close(); w.close();
 } catch (e) {
   ok(false, "boot threw: " + (e && e.message));

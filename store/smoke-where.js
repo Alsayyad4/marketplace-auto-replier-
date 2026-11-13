@@ -86,8 +86,11 @@ ok(/function save\(\) \{[\s\S]{0,160}saveMergedSettings\(\)\.then\(/.test(opt), 
 ok(!/sendMessage\(\{ type: "SAVE_SETTINGS"/.test(opt), "no raw SAVE_SETTINGS sender is left in options.js");
 ok((opt.match(/loadedBase = clone\(settings\);/g) || []).length === 2, "load() snapshots the row, and a landed save re-snapshots it");
 ok(/if \(!loadedBase\) return \{ r: null, err: null, notLoaded: true/.test(opt) && /Not saved — this page is still loading your settings/.test(opt), "a save before the row is read is refused, and says so");
-ok(/if \(st\.res && st\.res\.loggedIn\) await Promise\.race\(\[ask\("CLOUD_PULL"\), new Promise\(\(r\) => setTimeout\(r, PULL_WAIT_MS\)\)\]\);/.test(opt) && /const PULL_WAIT_MS = 10 \* 1000;/.test(opt),
+ok(/if \(st\.res && st\.res\.loggedIn\) \{\s*const pulled = await Promise\.race\(\[ask\("CLOUD_PULL"\), new Promise\(\(r\) => setTimeout\(\(\) => r\(null\), PULL_WAIT_MS\)\)\]\);/.test(opt) && /const PULL_WAIT_MS = 10 \* 1000;/.test(opt),
    "with a login the account is pulled first, bounded to 10 s; without one nothing is asked of the cloud");
+// (v0.21.97) no read of the account's current row = no save: never the merge over this computer's older copy, never the page's own snapshot
+ok(/if \(!\(p && p\.ok\)\) return \{ refused: /.test(opt) && /if \(!got\.res \|\| !got\.res\.settings\) return \{ refused: "the extension did not answer" \};/.test(opt) && /if \(!current \|\| current\.refused\) return \{ r: null, err: null, notLoaded: false, changed: null, kept: null, refused: /.test(opt) && !/\{ config: settings, changed: null, kept: null \}/.test(opt) && /could not be read first/.test(opt),
+   "a pull that failed or did not answer refuses the save and says so (v0.21.97): the whole row is never written from an older copy");
 ok(/mergeOverCurrent\(loadedBase, settings, current\)/.test(opt), "the merge runs on the page's snapshot, the form and the current read");
 ok(/if \(r && !\(r\.cloud && r\.cloud\.ok === false\)\) \{[\s\S]{0,400}fieldsToForm\(\);\s*renderListings\(\);\s*renderFollowUps\(\);\s*renderVideos\(\);\s*renderCentralVideos\(\);/.test(opt),
    "a landed save puts the merged copy on screen; a refused one leaves the typed text alone");
@@ -108,7 +111,7 @@ ok(/function showTab\(name\)/.test(app) && /function applyHashTab\(\)/.test(app)
 ok(/loadConfig\(\)\.then\(applyHashTab, applyHashTab\);/.test(app), "the hash tab is applied once the row is read after the login");
 ok(/if \(name === "activity"\) loadActivity\(\);/.test(app), "#activity loads the log");
 ok(/history\.replaceState\(null, "", "#" \+ t\.dataset\.tab\);/.test(app), "a click writes the hash back");
-ok(/app\.js\?v=20261112/.test(html), "the dashboard cache-buster is bumped");
+ok(/app\.js\?v=20261113/.test(html), "the dashboard cache-buster is bumped");
 ok(/^0\.21\.(89|9[0-9])$/.test(manifest.version), "manifest v0.21.89 or later — " + manifest.version); // (v0.21.90) the release after carries this page unchanged
 ok(/"options\.html", "options\.js", "popup\.html", "popup\.js"/.test(ps1), "the store zip carries the four page files (nothing new to add)");
 

@@ -3750,7 +3750,15 @@
   // remembers it (CHAT_CLIPS, storage key videoSetOf). Here: is any set configured, and the clip list of
   // a given set ("" = the general list). With no set configured both read exactly as before.
   // (function declarations, hoisted: the watcher above this point calls them)
-  function adSetsOn(s) { return !!(s && Array.isArray(s.adVideoSets) && s.adVideoSets.some((x) => x && x.id && /[\p{L}\p{N}]/u.test(String(x.ads || "")) && Array.isArray(x.clips) && x.clips.some((v) => v && v.url))); }
+  // (v0.21.97) `me` = this computer's install id (lower case). Given, a set made for OTHER computers alone
+  // does not count: with every computer choosing the videos of its own ads (the "Videos for my ads"
+  // page), a choice made on one computer must not change what the others SEND — they keep the general-
+  // list path they had before any set existed, and ask the worker nothing. (What the others still see of
+  // it: the list signature below moves once, so their in-memory latches are re-checked against the
+  // ledger; and with no general video their model is told, truthfully, that this listing has no video.)
+  // The rule is the worker's own (adVideoPick): no computer named = every computer. Not given = any set.
+  function adSetHere(x, me) { const pcs = (x && Array.isArray(x.pcs) ? x.pcs : []).map((p) => String(p || "").trim().toLowerCase()).filter(Boolean); return !pcs.length || (!!me && pcs.includes(me)); }
+  function adSetsOn(s, me) { return !!(s && Array.isArray(s.adVideoSets) && s.adVideoSets.some((x) => x && x.id && /[\p{L}\p{N}]/u.test(String(x.ads || "")) && Array.isArray(x.clips) && x.clips.some((v) => v && v.url) && (me === undefined || adSetHere(x, me)))); }
   function generalClips(s) { return s && Array.isArray(s.demoVideoUrls) ? s.demoVideoUrls.filter((v) => v && v.url) : []; }
   function clipsOfSet(s, setId) {
     if (!setId) return generalClips(s);
@@ -3878,6 +3886,7 @@
       const cfg = await getLocal([
         "videoEnabled", "demoVideos", "demoVideo", "videoDelaySec", "videoSentThreads", "videoAttempts", "videoJustSend",
         "videoSetOf", // (v0.21.96) the video set this chat was given, if any (written by the worker's CHAT_CLIPS)
+        "machineId", // (v0.21.97) this computer's install id: only the sets that can apply HERE open the question below
       ]);
       // JUST-SEND is the default (v0.21.43); a machine-local `videoJustSend:false`
       // or the dashboard's `videoJustSend:false` brings the verdict engine back.
@@ -3936,7 +3945,13 @@
       // chat is queued), never a guess.
       let adSetChatA = false; // this visit sends a set's clips
       const rememberedA = safe(() => { const e = cfg.videoSetOf && cfg.videoSetOf[id]; return e && typeof e.set === "string" ? e.set : ""; }, "") || "";
-      if (settingsOk && (adSetsOn(sCfg) || rememberedA)) {
+      // (v0.21.97) only a set that can apply on THIS computer (one made for every computer, or for this one)
+      // opens the question: a computer no set is for stays on the general list, exactly as before any set.
+      // An id that could not be read (the local read failed, or the id is not made yet) opens the question as
+      // in 0.21.96 — any usable set — because "an unreadable state keeps the chat on the list it has": the
+      // worker reads its own storage and answers with the chat's remembered set.
+      const meA = String(cfg.machineId || "").trim().toLowerCase() || undefined;
+      if (settingsOk && (adSetsOn(sCfg, meA) || rememberedA)) {
         let servedA = true; // an unreadable state keeps the chat on the list it has
         try {
           const ledA = await clipLedgerGet(id);
@@ -3962,11 +3977,15 @@
           if (!central.length) { clearPend(); vstat("the video set of this chat's ad holds no clip (" + (name || id) + ")"); return; }
           adSetChatA = true;
           vstat("this ad has its own video set: " + central.length + " clip(s) (" + (name || id) + ")");
-        } else if (adSetsOn(sCfg) && !central.length && !local.length) {
+        } else if (adSetsOn(sCfg, meA) && !central.length && !local.length) {
           clearPend(); vstat("no video for this ad: the sets are for other ads and there is no general video (" + (name || id) + ")"); return;
         }
       }
-      if (!settingsOk && !central.length && !local.length) {
+      // (v0.21.97) …whatever this computer holds in its own Settings videos: with the settings unread, the
+      // "send the clip" gate and the which-list question above were both skipped, and a computer with a
+      // video in its Settings went on and sent it — into a chat that never asked, or on top of the video
+      // of the chat's own ad. No settings = no send this cycle, always.
+      if (!settingsOk) {
         // Queue instead of dropping: a one-cycle settings hiccup used to consume
         // this chat's visit permanently (next visit could be days away on rotation).
         {
@@ -6708,6 +6727,18 @@
       send({ ok: true, url: location.href, anchorCount: conversationAnchors().length, busy });
       return true;
     }
+    if (msg && msg.type === "LIST_ADS") {
+      // (v0.21.97) MY ADS: the labels of the chats this inbox shows right now ("Buyer · headline"), for
+      // the page where this computer's owner gives an ad its video. READ-ONLY: the rows are read as
+      // they are — nothing is opened, scrolled, clicked or changed.
+      const rows = [];
+      for (const a of conversationAnchors()) {
+        const label = anchorName(a);
+        if (label && rows.length < 200) rows.push({ label: String(label).slice(0, 300), id: String(threadId(a) || "").slice(0, 80) });
+      }
+      send({ ok: true, rows, open: safe(() => openThreadName(), "") || "" });
+      return true;
+    }
     if (msg && msg.type === "PAUSE_SCANS") {
       // Background has an update on disk — hold off on NEW chats so the restart
       // isn't blocked by nonstop activity. Current send finishes untouched.
@@ -6729,7 +6760,7 @@
           const now = Date.now();
           const ageM = (t) => (typeof t === "number" && t > 0 ? Math.round((now - t) / 60000) + "m" : "-");
           const det = (fn) => { try { return fn() ? "Y" : "n"; } catch (e) { return "err"; } };
-          const st = await getLocal(["videoSentThreads", "videoAttempts", "videoSetOf"]);
+          const st = await getLocal(["videoSentThreads", "videoAttempts", "videoSetOf", "machineId"]); // (v0.21.97) machineId: "adset=" below reads "-" on a computer no set is for
           const vt = st.videoSentThreads || {};
           const am = st.videoAttempts || {};
           const anchors = conversationAnchors();
@@ -6792,7 +6823,7 @@
               " legacyBadge=" + det(legacyBadgeDetect) +
               " | mark=" + (vt[m[1]] ? JSON.stringify(vt[m[1]]).slice(0, 90) : "-") +
               // (v0.21.96) which video list this chat is on: a set made for its ad (the worker's CHAT_CLIPS) or the general one
-              " adset=" + (((st.videoSetOf || {})[m[1]] || {}).set || (adSetsOn(lastSettings) ? "general" : "-"))
+              " adset=" + (((st.videoSetOf || {})[m[1]] || {}).set || (adSetsOn(lastSettings, String(st.machineId || "").trim().toLowerCase()) ? "general" : "-"))
             );
           } else {
             L.push("open chat: none");

@@ -54,10 +54,12 @@ const server = http.createServer((req, res) => {
   ok(/Not active yet: add a video/.test(await box()) && (await card().locator('input[type="text"]').inputValue()) === "MacBook Air M2 13 pouces", "the card shows the words and asks for a video");
   const tmp = path.join(os.tmpdir(), "macbook-demo.mp4");
   fs.writeFileSync(tmp, Buffer.alloc(300000, 1));
+  const idPicked = s.cfg.adVideoSets[0].id;
   await card().locator('input[type="file"]').setInputFiles(tmp);
   await page.waitForTimeout(900);
   s = await st();
   const c0 = (s.cfg.adVideoSets[0].clips || [])[0] || {};
+  ok(s.cfg.adVideoSets.length === 1 && s.cfg.adVideoSets[0].id !== idPicked && /^s[a-z0-9]+$/.test(s.cfg.adVideoSets[0].id), "(v0.21.97) a clip added to a set gives the set a NEW id (" + idPicked + " → " + s.cfg.adVideoSets[0].id + "): a chat already served on the old list keeps what it has, never a second video");
   ok(s.uploads.length === 1 && /^u1\/\d+-macbook-demo\.mp4$/.test(s.uploads[0].path) && c0.name === "macbook-demo.mp4" && c0.size === 300000 && /subsell-videos\/u1\/\d+-macbook-demo\.mp4$/.test(c0.url), "a video uploaded into the set lands in the owner's own folder and saves: " + JSON.stringify(c0));
   ok(/Active\. Of the ads answered in the last 5 days it gets: MacBook Air M2 13 pouces\./.test(await box()), "the card says it is active and which answered ad it gets (the bots' own rule): " + ((await box()).match(/Active\.[^.]*\./) || [""])[0]);
   ok(/Uploaded ✓ — saved/.test(await page.textContent("#adSetStatus")), "the set's own status line reports the save: " + (await page.textContent("#adSetStatus")));
@@ -105,6 +107,36 @@ const server = http.createServer((req, res) => {
   await page.waitForTimeout(700);
   s = await st();
   ok(Array.isArray(s.cfg.adVideoSets) && s.cfg.adVideoSets.length === 0 && /No video for a specific ad yet/.test(await box()), "removing the set (after a confirm) saves, and every ad is back on the general video");
+  // (v0.21.97) the computers' OWN choices (made in the extension's "Videos for my ads", exact: true) are one
+  // folded line each under their computer's name, never a card per choice; a words set keeps its card.
+  {
+    const page2 = await browser.newPage({ viewport: { width: 1100, height: 1500 } });
+    page2.on("pageerror", (e) => errors.push("pageerror(2): " + e.message));
+    page2.on("console", (m) => { if (m.type() === "error") errors.push("console(2): " + m.text()); });
+    page2.on("dialog", (d) => d.accept());
+    const U2 = "https://example.supabase.co/storage/v1/object/public/subsell-videos/u1/";
+    const seed2 = Object.assign({}, seedConfig, { adVideoSets: [
+      { id: "mac", ads: "macbook", pcs: [], clips: [{ name: "macbook.mp4", url: U2 + "2-macbook.mp4", size: 5000000 }] },
+      { id: "m1", ads: "MacBook Pro 14 M3", pcs: ["pc-abc12"], clips: [{ name: "own-pro.mp4", url: U2 + "3-own-pro.mp4", size: 3000000 }], exact: true },
+      { id: "m2", ads: "iPhone 13 Pro Max 256 Go", pcs: ["pc-zzz99"], clips: [{ name: "own-max.mp4", url: U2 + "4-own-max.mp4", size: 3100000 }], exact: true },
+    ] });
+    await page2.route("**/supabase-js@2*", (route) => route.fulfill({ contentType: "text/javascript", body: "window.__seedConfig = " + JSON.stringify(seed2) + "; window.__seedFeed = " + JSON.stringify(feed) + ";\n" + stub }));
+    await page2.goto("http://127.0.0.1:" + port + "/docs/index.html#videos");
+    await page2.waitForSelector("#adOwnChoices", { state: "attached" });
+    await page2.waitForTimeout(1800);
+    const own = () => page2.textContent("#adOwnChoices");
+    ok((await page2.locator("#adSets input[type='text']").count()) === 1 && (await page2.locator("#adSets input[type='text']").inputValue()) === "macbook", "a words set keeps its card; the computers' own choices get none");
+    ok(/Chosen on the computers themselves: 2 ads on 2 computers/.test(await own()), "the computers' own choices are one folded block: " + ((await own()).match(/Chosen[^(]*/) || [""])[0].trim());
+    ok(/Front desk/.test(await own()) && /MacBook Pro 14 M3 → own-pro\.mp4/.test(await own()) && /PC-zzz99 \(v0\.21\.95: updates itself first\)/.test(await own()) && /iPhone 13 Pro Max 256 Go → own-max\.mp4/.test(await own()), "…one line per ad under its computer's name (an older version is named)");
+    ok(/it gets: MacBook Air M2 13 pouces\./.test(await page2.textContent("#adSets")) && !/it gets: MacBook Air M2 13 pouces \| MacBook Pro 14 M3/.test(await page2.textContent("#adSets")), "the words card's “it gets” line follows the bots' rule: the MacBook Pro ad now goes to that computer's own choice");
+    const before = await page2.evaluate(() => window.__state.writes);
+    await page2.locator("#adOwnChoices summary").click();
+    await page2.locator("#adOwnChoices button", { hasText: "Remove" }).first().click();
+    await page2.waitForTimeout(800);
+    const s2 = await page2.evaluate(() => JSON.parse(JSON.stringify({ cfg: window.__state.row.config, writes: window.__state.writes })));
+    ok(s2.writes > before && s2.cfg.adVideoSets.length === 2 && !s2.cfg.adVideoSets.some((x) => x.id === "m1") && s2.cfg.adVideoSets.some((x) => x.id === "m2" && x.exact === true) && /Chosen on the computers themselves: 1 ad on 1 computer/.test(await own()), "Remove (after a confirm) takes one choice out and saves; the other computer's choice keeps its mark");
+    await page2.close();
+  }
   ok(errors.length === 0, "no page error, no console error" + (errors.length ? ": " + errors.slice(0, 4).join(" ; ") : ""));
   await browser.close();
   server.close();

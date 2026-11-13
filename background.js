@@ -2723,12 +2723,24 @@ const ADVERT_RE = /\b(?:non\s+)?n[ée]go(?:ciable|tiable|cier)?s?\b|\bn[ée]g\.?
 // The headline alone (what follows the first "·" of "Buyer · headline"), prices and
 // advert words out, the sidebar's time tag out. "" when the label is not a
 // Marketplace chat.
+// (v0.21.97) THE MODEL'S NUMBER IS NOT PART OF THE PRICE. A price right after a short model number was
+// read together with it: "iPhone 8 150$" as 8 150 $ and "MacBook Air M2 900$" as 2 900 $ (the space-led
+// thousands above), "iPhone 13 - 650$" as the range 13 to 650 $ — and the headline came out as "iPhone",
+// "MacBook Air M", "iPhone": the model was told the wrong item, and two different ads read as one
+// (with a video per ad, the iPhone 7 buyers would get the iPhone 8's video). A one- or two-digit number
+// that belongs to a model — glued to letters (S9, M2, A54) or right after a brand word (iPhone 8,
+// Pixel 7) — is fenced off while the prices are taken out, unless a currency follows it directly
+// ("AirPods 80$" is a price). Everything else reads as before.
+const MODEL_GUARD = String.fromCharCode(1);
+const MODEL_NUM_RE = /(?:(?<=\p{L})|\b(?:iphone|ipad|ipod|macbook|imac|airpods|watch|galaxy|pixel|samsung|apple|google|huawei|xiaomi|oneplus|motorola|moto|lg|sony|playstation|ps|xbox|switch|nintendo|tab)\s+)\d{1,2}(?![\d.,]|\s?(?:\$|€|(?:cad|usd|dollars?|piasses?|balles?|bucks|euros?)\b))/giu;
 function listingFromTitle(threadName) {
   const s = String(threadName == null ? "" : threadName);
   const cut = s.indexOf("·");
   if (cut < 1) return "";
   let item = s.slice(cut + 1).replace(/\s*[·•]\s*\d{1,3}\s?(?:min|m|h|hr|j|d|sem|w|y)\b.*$/i, "").replace(/\s+/g, " ").trim();
+  item = item.split(MODEL_GUARD).join("").replace(MODEL_NUM_RE, (m) => m + MODEL_GUARD);
   item = stripPrices(stripPrices(item).replace(ADVERT_RE, " "));
+  item = stripPrices(item.split(MODEL_GUARD).join("")); // the fence out, and what it held back at the end (" -") cleaned
   return item.length >= 2 ? item : "";
 }
 // A model's identity: its number ("13", "s24", "a54", "4a", "16e"), its qualifiers
@@ -2858,27 +2870,46 @@ function listingContext(settings, threadName, opts) {
 const adWords = (s) => lessonNorm(s).replace(/\b(\d{2,4}) ?(?:gb|go)\b/g, "$1gb").replace(/\b([12]) ?(?:tb|to)\b/g, "$1tb").split(" ").filter((w) => /[\p{L}\p{N}]/u.test(w));
 // A set's alternatives, each read the way a title is read (prices and advert words out), so
 // words copied from an ad still fit that ad.
-const adSetPhrases = (set) => String((set && set.ads) || "").split(/[,;\n]+/).map((alt) => adWords(stripPrices(stripPrices(alt).replace(ADVERT_RE, " ")))).filter((w) => w.length > 0);
+// (v0.21.97) The words of ONE exact ad (a choice made on its own computer, exact: true): the title's
+// words as they are. No second reading for prices and advert words: the title was read once already, by
+// listingFromTitle, and a second reading can drop a word the first one kept ("nég," keeps its "nég", then
+// "nég " loses it), so the choice would never fit its own ad. And a "+" at the end of a word stays part
+// of that word: the S24+ is not the S24, "Grade A+" is not "Grade A".
+const adWordsExact = (s) => adWords(String(s == null ? "" : s).replace(/[,;\n]+/g, " ").replace(/([\p{L}\p{N}])\+(?![\p{L}\p{N}+])/gu, "$1plus"));
+const adSetPhrases = (set) => (set && set.exact === true
+  ? [adWordsExact(set.ads)].filter((w) => w.length > 0)
+  : String((set && set.ads) || "").split(/[,;\n]+/).map((alt) => adWords(stripPrices(stripPrices(alt).replace(ADVERT_RE, " ")))).filter((w) => w.length > 0));
 const adSetClips = (set) => (set && Array.isArray(set.clips) ? set.clips : []).filter((v) => v && v.url);
 const adSetPcs = (set) => (set && Array.isArray(set.pcs) ? set.pcs : []).map((p) => String(p || "").trim().toLowerCase()).filter(Boolean);
 // The sets that can send something: an id, at least one alternative, at least one clip.
 function adVideoSets(settings) {
   const list = settings && Array.isArray(settings.adVideoSets) ? settings.adVideoSets : [];
-  return list.filter((s) => s && s.id && adSetPhrases(s).length > 0 && adSetClips(s).length > 0);
+  // (v0.21.97) one set per id, the first one: two sets under one id (two saves that crossed) must not let
+  // the pick and a chat's remembered id name different videos. A list with no repeated id reads as before.
+  const seen = new Set();
+  return list.filter((s) => s && s.id && adSetPhrases(s).length > 0 && adSetClips(s).length > 0 && !seen.has(s.id) && !!seen.add(s.id));
 }
 // The set for this ad on this computer, or null (= the general list).
 function adVideoPick(settings, item, machineId) {
   const title = new Set(adWords(item));
   if (!title.size) return null;
   const me = String(machineId || "").trim().toLowerCase();
-  let best = null, bestN = 0, bestMine = false;
+  let best = null, bestN = 0, bestMine = false, bestExact = false, titleX = null;
   for (const s of adVideoSets(settings)) {
     const pcs = adSetPcs(s);
     if (pcs.length && !(me && pcs.includes(me))) continue; // written for other computers
     const mine = pcs.length > 0;
+    // (v0.21.97) exact: true = made for ONE ad on its own computer (MY ADS, below): the title must be
+    // that ad's, word for word (adWordsExact on both sides), so its video never reaches another ad whose
+    // title only holds its words. On a tie it goes before a set made of words. A set without the mark is
+    // read by the .96 rule, unchanged.
+    const exact = s.exact === true;
     for (const ph of adSetPhrases(s)) {
-      if (!ph.every((w) => title.has(w))) continue;
-      if (ph.length > bestN || (ph.length === bestN && mine && !bestMine)) { best = s; bestN = ph.length; bestMine = mine; }
+      if (exact) {
+        if (!titleX) titleX = new Set(adWordsExact(item));
+        if (new Set(ph).size !== titleX.size || !ph.every((w) => titleX.has(w))) continue;
+      } else if (!ph.every((w) => title.has(w))) continue;
+      if (ph.length > bestN || (ph.length === bestN && ((mine && !bestMine) || (mine === bestMine && exact && !bestExact)))) { best = s; bestN = ph.length; bestMine = mine; bestExact = exact; }
     }
   }
   return best;
@@ -2910,6 +2941,130 @@ function adClipNote(settings, threadName) {
   if (pick) return "The short video that goes out in this chat is the one the owner made for this listing: if you mention it, call it a short video of this item.";
   const general = Array.isArray(settings.demoVideoUrls) && settings.demoVideoUrls.some((v) => v && v.url);
   return general ? "" : "There is no video for this listing: never write [CLIP] here and never promise a video; if they ask to see it, invite them to see it in hand at the shop and still answer their question.";
+}
+/* ===== (v0.21.97) MY ADS, MY VIDEOS (pure; store/smoke-myads.js) =====
+ * The owner, Nov 13 2026: "how will I know which account and which computer and which ad, it is
+ * too many choices … I open the extension that is connected to the Chrome, I see the ads in that
+ * Chrome, nothing else … I choose the ad and an upload button … I put that video."
+ * The page myads.html (opened from the popup) lists the ads THIS computer's chats are about and
+ * gives one its own video. What it writes is an ordinary set (adVideoSets, above) for this one
+ * computer, with exact: true: the set fits the ad whose title has exactly these words and no other
+ * ad. Nothing else changes: WHICH, never WHETHER, and ONE LIST PER CHAT stand as written above.
+ * Changing an ad's video makes a NEW set and removes the old one, so a chat already served on the
+ * old one keeps what it has (chatClipChoice: gone) and never receives a second, different video. */
+// An ad's identity: the words of its title, whatever their order ("" = nothing to recognise it by).
+const adKey = (item) => Array.from(new Set(adWordsExact(item))).sort().join(" ");
+// A title is ONE alternative: its own commas, semicolons and line breaks must not split it.
+const adOneAlt = (item) => String(item == null ? "" : item).replace(/[,;\n]+/g, " ").replace(/\s+/g, " ").trim();
+// A set made for this computer alone.
+const adSetMine = (set, me) => { const pcs = adSetPcs(set); return !!me && pcs.length === 1 && pcs[0] === me; };
+// The ad an exact set was made for ("" when the set is made of words).
+const adSetExactKey = (set) => { if (!(set && set.exact === true)) return ""; const ph = adSetPhrases(set); return ph.length === 1 ? Array.from(new Set(ph[0])).sort().join(" ") : ""; };
+const myAdClip = (clip) => ({ name: String((clip && clip.name) || "video").slice(0, 120), url: String((clip && clip.url) || ""), size: Number(clip && clip.size) || 0 });
+// Give this ad its own video on this computer: { ok, list, set } or { ok: false, error }.
+function myAdSetsPut(list, machineId, item, clip, id) {
+  const me = String(machineId || "").trim().toLowerCase();
+  const alt = adOneAlt(item);
+  const key = adKey(alt);
+  if (!me) return { ok: false, error: "this computer has no name yet: open the extension once more" };
+  if (!key) return { ok: false, error: "this ad's title holds no word to recognise it by" };
+  if (!(clip && clip.url)) return { ok: false, error: "no video was given" };
+  if (!id) return { ok: false, error: "no id for the new choice" };
+  const set = { id: String(id), ads: alt, pcs: [me], clips: [myAdClip(clip)], exact: true };
+  // the bots' own rule must give this very ad this very set, or the choice would be a dead one
+  const pick = adVideoPick({ adVideoSets: [set] }, alt, me);
+  if (!pick || adSetExactKey(set) !== key) return { ok: false, error: "this ad's title cannot be matched word for word: use \"My ad is not in the list\" with two or three words of its title" };
+  const cur = Array.isArray(list) ? list : [];
+  const old = cur.filter((s) => s && adSetMine(s, me) && adSetExactKey(s) === key);
+  // the same video chosen again (the same file picked twice, a "Save again" after an answer that was lost
+  // while the save had landed): nothing changes. A new id would cut off the chats that are in the middle
+  // of receiving it.
+  if (old.length === 1 && adSetClips(old[0]).length === 1 && adSetClips(old[0])[0].url === set.clips[0].url) return { ok: true, list, set: old[0] };
+  return { ok: true, list: cur.filter((s) => !old.includes(s)).concat([set]), set };
+}
+// A video for this computer's ads whose title holds these words (an ad that has no chat yet).
+function myAdWordsPut(list, machineId, words, clip, id) {
+  const me = String(machineId || "").trim().toLowerCase();
+  if (!me) return { ok: false, error: "this computer has no name yet: open the extension once more" };
+  if (!(clip && clip.url)) return { ok: false, error: "no video was given" };
+  if (!id) return { ok: false, error: "no id for the new choice" };
+  // one alternative: a comma typed or pasted with a title must never mean "or" here (it would make three
+  // unrelated word groups out of one ad's title, and hand its video to other ads)
+  const set = { id: String(id), ads: adOneAlt(words).slice(0, 200), pcs: [me], clips: [myAdClip(clip)] };
+  if (adVideoSets({ adVideoSets: [set] }).length !== 1) return { ok: false, error: "these words hold nothing an ad's title is read by (a price, or a word like liquidation, is left out): type words from the title itself" };
+  const same = adSetPhrases(set).map((p) => p.slice().sort().join(" ")).sort().join("|");
+  const kept = (Array.isArray(list) ? list : []).filter((s) => !(s && adSetMine(s, me) && s.exact !== true && adSetPhrases(s).map((p) => p.slice().sort().join(" ")).sort().join("|") === same));
+  return { ok: true, list: kept.concat([set]), set };
+}
+// Take back a choice made on this computer (never a set made on the web app for other computers too).
+function myAdSetsDrop(list, machineId, setId) {
+  const me = String(machineId || "").trim().toLowerCase();
+  const cur = Array.isArray(list) ? list : [];
+  const hit = cur.find((s) => s && s.id === setId);
+  if (!hit) return { ok: true, list: cur, set: null }; // already gone
+  if (!adSetMine(hit, me)) return { ok: false, error: "that video was set on the web app for more than this computer: change it there" };
+  // every set under that id goes: a second one hidden under the same id (two saves that crossed, before the
+  // web app merged by id) would otherwise take the id over, and a served chat would read ITS video
+  return { ok: true, list: cur.filter((s) => !(s && s.id === setId)), set: null };
+}
+// What the page shows. seen = [{ label: "Buyer · headline", id: chat id, at: ms, inbox: position or -1 }],
+// the chats of THIS computer only (its own log, its own inbox). → the ads, each with the video the
+// bots would send in its chats right now (by adVideoPick, never a second guess).
+function myAdsRows(settings, machineId, seen, openLabel, now) {
+  const me = String(machineId || "").trim().toLowerCase();
+  const general = (settings && Array.isArray(settings.demoVideoUrls) ? settings.demoVideoUrls : []).filter((v) => v && v.url).map(myAdClip);
+  const openKey = adKey(adOneAlt(listingFromTitle(openLabel)));
+  const by = new Map();
+  for (const e of Array.isArray(seen) ? seen : []) {
+    const item = adOneAlt(listingFromTitle(e && e.label));
+    const key = item ? adKey(item) : "";
+    if (!key) continue;
+    const at = Number(e.at) || 0, pos = Number.isFinite(Number(e.inbox)) && Number(e.inbox) >= 0 ? Number(e.inbox) : -1;
+    let cur = by.get(key);
+    if (!cur) { cur = { item, key, chats: new Set(), last: 0, inbox: -1 }; by.set(key, cur); }
+    if (e.id) cur.chats.add(String(e.id));
+    if (at > cur.last) { cur.last = at; cur.item = item; }
+    if (pos >= 0 && (cur.inbox < 0 || pos < cur.inbox)) cur.inbox = pos;
+  }
+  const verdict = (item, key) => {
+    const pick = adVideoPick(settings, item, me);
+    if (!pick) return general.length ? { kind: "general", clips: general } : { kind: "none", clips: [] };
+    const own = adSetMine(pick, me) && adSetExactKey(pick) === key;
+    return { kind: own ? "own" : "set", setId: pick.id, clips: adSetClips(pick).map(myAdClip), words: own ? "" : String(pick.ads || ""), mineOnly: adSetMine(pick, me) };
+  };
+  const t = Number(now) || 0;
+  const ads = Array.from(by.values()).map((a) => Object.assign({ item: a.item, key: a.key, chats: a.chats.size, last: a.last, inbox: a.inbox >= 0, open: !!openKey && a.key === openKey, rank: Math.max(a.last, a.inbox >= 0 ? t - a.inbox * 1000 : 0) }, verdict(a.item, a.key)));
+  ads.sort((x, y) => (y.open - x.open) || (y.rank - x.rank) || (x.item < y.item ? -1 : 1));
+  const words = [], library = [], seenUrl = new Set();
+  for (const s of adVideoSets(settings)) {
+    if (!adSetMine(s, me)) continue;
+    for (const v of adSetClips(s)) if (!seenUrl.has(v.url)) { seenUrl.add(v.url); library.push(myAdClip(v)); }
+    const k = adSetExactKey(s);
+    if (!k) words.push({ setId: s.id, words: String(s.ads || ""), clips: adSetClips(s).map(myAdClip) });
+    else if (!by.has(k)) ads.push({ item: adOneAlt(s.ads), key: k, chats: 0, last: 0, inbox: false, open: false, rank: 0, quiet: true, kind: "own", setId: s.id, clips: adSetClips(s).map(myAdClip), words: "", mineOnly: true });
+  }
+  // "Same phone?" An ad with no video of its own whose title reads as the same model as an ad that has
+  // one (it was posted again, or a word of its title changed, and a choice is made for one exact title):
+  // the page offers that video in one click. Offered, never applied by itself. An ad whose chats went
+  // quiet is the likelier older posting, then the same storage.
+  const owned = ads.filter((a) => a.kind === "own" && a.clips.length);
+  if (owned.length) for (const a of ads) {
+    if (a.kind === "own") continue;
+    const k = modelKeys(a.item);
+    let best = null, bestScore = -1;
+    for (const o of owned) {
+      const m = sameModel(k, modelKeys(o.item));
+      const score = m.same ? (o.quiet ? 2 : 0) + (m.storageMatch ? 1 : 0) : -1;
+      if (score > bestScore) { bestScore = score; best = o; }
+    }
+    if (best) a.like = { item: best.item, clip: best.clips[0] };
+  }
+  // At most 80 lines, but never at the cost of a choice already made: every ad with its own video stays
+  // (it must remain changeable and removable); the others fill what is left, in order. total = all of them.
+  const ownN = ads.filter((a) => a.kind === "own").length;
+  let room = Math.max(0, 80 - ownN);
+  const shown = ads.filter((a) => a.kind === "own" || room-- > 0);
+  return { when: String((settings && settings.videoWhen) || "asked"), general, ads: shown, total: ads.length, words, library };
 }
 // A lesson about another model is never offered for this one; a lesson the owner
 // tied to an item is offered only when the chat is about that same model.
@@ -5504,7 +5659,7 @@ async function buildDiagnostic() {
   const central = Array.isArray(settings.demoVideoUrls) ? settings.demoVideoUrls.filter((v) => v && v.url) : [];
   const localVids = (Array.isArray(st.demoVideos) ? st.demoVideos : []).filter((v) => v && v.dataUrl).length;
   L.push(
-    "videos: central=" + central.length + (adVideoSets(settings).length ? " adSets=" + adVideoSets(settings).length : "") +
+    "videos: central=" + central.length + (adVideoSets(settings).length ? " adSets=" + adVideoSets(settings).length + " mine=" + adVideoSets(settings).filter((sM) => adSetMine(sM, String(settings.machineId || "").trim().toLowerCase())).length : "") + // (v0.21.97) mine = the sets made for this computer alone (My ads page)
     (central.length ? " [" + central.map((v) => {
       const c = cache[v.url];
       return cut(v.name || "clip", 12) + "@" + host(v.url) + (c && c.base64 ? " cached" + Math.round(c.base64.length * 0.75 / 1048576) + "MB(" + ageM(c.at) + ")" : " NOT-cached");
@@ -5746,6 +5901,194 @@ function chatClipsAnswer(msg) {
   const p = chatClipsChain.then(run, run);
   chatClipsChain = p.then(() => {}, () => {});
   return p;
+}
+
+/* (v0.21.97) MY ADS, MY VIDEOS — the worker's side of myads.html (the pure rules are myAdsRows /
+ * myAdSetsPut / myAdWordsPut / myAdSetsDrop, beside adVideoPick). The page asks four things:
+ *   MYADS_LIST   the ads of THIS computer's chats (its own log + the inbox rows its Messenger tab
+ *                shows right now, read as they are: nothing is opened, scrolled or clicked) and the
+ *                video each one sends;
+ *   MYADS_TICKET where to upload a video: the account's own storage folder, with this computer's
+ *                login (given to this extension's own pages only, never to a web page);
+ *   MYADS_PUT / MYADS_WORDS / MYADS_DROP   one choice made, changed or taken back.
+ * A choice is written into the account's row with a compare-and-set on the row's stamp: the row is
+ * read, ONLY adVideoSets is changed, and the write lands only if nobody saved in between (else it
+ * is read again). Never a whole-row save from a copy this computer held: that is how a Settings
+ * page once overwrote the teaching (.89). One write at a time. Needs the cloud login. */
+const MYADS_BUCKET = "subsell-videos";
+const MYADS_TAB_URLS = ["https://*.messenger.com/*", "https://www.facebook.com/messages/*", "https://www.facebook.com/marketplace/*"];
+const myAdsNewId = () => "m" + Date.now().toString(36) + Math.random().toString(36).slice(2, 6);
+// Only this extension's own pages (myads.html, Settings, the popup) — a content script's sender
+// carries the web page's address.
+function myAdsOwnPage(sender) {
+  try { return !!(sender && sender.id === chrome.runtime.id && typeof sender.url === "string" && sender.url.indexOf(chrome.runtime.getURL("")) === 0 && (sender.origin === undefined || sender.origin === "chrome-extension://" + chrome.runtime.id)); } catch (e) { return false; }
+}
+// The chats of this computer: its own log (the newest 500 entries) and what its inbox shows now.
+async function myAdsSeen() {
+  const st = await new Promise((r) => chrome.storage.local.get(["replyLog"], (x) => { void chrome.runtime.lastError; r(x || {}); }));
+  const seen = [];
+  for (const e of Array.isArray(st.replyLog) ? st.replyLog : []) {
+    if (!e || typeof e.thread !== "string" || e.thread.indexOf("·") < 1) continue;
+    seen.push({ label: e.thread, id: String(e.threadId || ""), at: Date.parse(e.at) || 0, inbox: -1 });
+  }
+  let open = "";
+  const tabs = await new Promise((r) => { try { chrome.tabs.query({ url: MYADS_TAB_URLS }, (t) => r(chrome.runtime.lastError ? [] : t || [])); } catch (e) { r([]); } });
+  let answered = 0;
+  await Promise.all(tabs.slice(0, 8).map((t) => new Promise((res) => {
+    let done = false;
+    const fin = () => { if (!done) { done = true; res(); } };
+    setTimeout(fin, 1500); // a sleeping tab must not hold the page
+    try {
+      chrome.tabs.sendMessage(t.id, { type: "LIST_ADS" }, (r) => {
+        void chrome.runtime.lastError;
+        if (r && r.ok && Array.isArray(r.rows)) {
+          answered++;
+          r.rows.slice(0, 200).forEach((row, i) => { if (row && typeof row.label === "string" && row.label.indexOf("·") > 0) seen.push({ label: row.label.slice(0, 300), id: String(row.id || ""), at: 0, inbox: i }); });
+          if (!open && typeof r.open === "string") open = r.open;
+        }
+        fin();
+      });
+    } catch (e) { fin(); }
+  })));
+  return { seen, open, tabs: tabs.length, answered };
+}
+// byHand = the person pressed Refresh: only then may a login that is waiting out a refusal be tried
+// (the .78 rule: a click may try once per 15 s; a page that redraws by itself never adds a login call).
+async function myAdsState(byHand) {
+  const settings = await getSettings();
+  const me = await getMachineId();
+  const label = await getMachineLabel();
+  const got = await myAdsSeen();
+  const view = myAdsRows(settings, me, got.seen, got.open, Date.now());
+  const auth = await cloudValidAuth(byHand ? { user: true } : undefined);
+  const hold = auth ? null : await getAuthHold();
+  const st = await new Promise((r) => chrome.storage.local.get(["cloudConfig", "cloudAuth"], (x) => { void chrome.runtime.lastError; r(x || {}); }));
+  const managed = await readManagedConfig();
+  const fromCloud = !managed && !!(st.cloudConfig && typeof st.cloudConfig === "object" && Object.keys(st.cloudConfig).length);
+  const loggedIn = !!(st.cloudAuth && st.cloudAuth.refresh_token);
+  const ended = !auth && !!hold && hold.kind === "ended"; // the stored login is dead: only logging in again helps
+  const why = auth && fromCloud ? ""
+    : managed ? "This computer's settings come from a company policy, not from the account. The video of an ad is then chosen on the web app."
+    : !loggedIn ? "This Chrome is not logged in to the account."
+    : ended ? "This Chrome's login to the account has ended. Log in again."
+    : !auth ? "The login of this Chrome is waiting (" + ((hold && authHoldLine(hold)) || "it tries again by itself") + "). Press Refresh to try now."
+    : "The account's settings have not arrived on this Chrome. Wait a minute, then press Refresh.";
+  // This computer's own Settings videos (the older, local upload): they go out only where the account has
+  // no general video and the ad has none of its own (content.js) — the page says so instead of "no video".
+  const loc = await new Promise((r) => chrome.storage.local.get(["videoEnabled", "demoVideos", "demoVideo"], (x) => { void chrome.runtime.lastError; r(x || {}); }));
+  const localList = (Array.isArray(loc.demoVideos) ? loc.demoVideos : loc.demoVideo && loc.demoVideo.dataUrl ? [loc.demoVideo] : []).filter((v) => v && v.dataUrl);
+  const localClips = loc.videoEnabled && !view.general.length ? localList.length : 0;
+  // needLogin = a login in Settings is what unblocks this page (never under a policy: logging in changes nothing there)
+  return Object.assign({ ok: true, version: chrome.runtime.getManifest().version, machine: me, label: label && label !== me ? label : "", messengerTabs: got.tabs, inboxRead: got.answered > 0, canSave: !!auth && fromCloud, loggedIn, needLogin: !managed && (!loggedIn || ended), why, localClips }, view);
+}
+// Would these words make a usable choice? Asked by the page BEFORE the file chooser opens, so a video is
+// never uploaded for words the bots cannot read (a price, an advert word).
+function myAdsWordsCheck(words) {
+  const alt = adOneAlt(words).slice(0, 200);
+  const usable = adVideoSets({ adVideoSets: [{ id: "check", ads: alt, pcs: [], clips: [{ url: "check" }] }] }).length === 1;
+  return usable ? { ok: true, words: alt } : { ok: false, error: "these words hold nothing an ad's title is read by (a price, or a word like liquidation, is left out): type words from the title itself" };
+}
+// ONE NARROW CHANGE INTO THE ACCOUNT'S ROW. The row is read; mutate(live, { url, me }) says which keys
+// change ({ ok: true, set: { key: value }, out } — or { ok: true, same: true }, or a refusal); the row
+// goes back as it was read with those keys changed, and lands only if it is still the row that was
+// read (updated_at=eq.<stamp>; a trigger moves the stamp on every write). Lost the race = read again,
+// four tries. Then this computer pulls, so it reads its own change at once. One at a time.
+// Used by a video choice (myAdsWrite) and by the popup's delay slider (SET_DELAY): neither may save
+// the whole row from the copy this computer happens to hold.
+let rowPatchChain = Promise.resolve();
+function cloudRowPatch(mutate, what) {
+  const run = () => cloudRowPatchNow(mutate, what);
+  const p = rowPatchChain.then(run, run);
+  rowPatchChain = p.then(() => {}, () => {});
+  return p;
+}
+async function cloudRowPatchNow(mutate, what) {
+  try {
+    const auth = await cloudValidAuth({ user: true });
+    if (!auth) { const hold = await getAuthHold(); return { ok: false, login: true, error: (hold && authHoldLine(hold)) || "this Chrome is not logged in to the account" }; }
+    const { url, key } = await getCloudCreds();
+    const me = await getMachineId();
+    const headers = { apikey: key, authorization: "Bearer " + auth.access_token };
+    const held = await new Promise((r) => chrome.storage.local.get(["cloudConfig"], (x) => { void chrome.runtime.lastError; r(x && x.cloudConfig); }));
+    const heldW = held && typeof held === "object" ? configWeight(held) : 0;
+    // No request may hang: Chrome ends a worker whose fetch has had no answer for 30 s, and the page that
+    // asked would then get nothing at all. 20 s, then a plain "no answer".
+    const timed = async (u, init) => {
+      const ctl = typeof AbortController === "function" ? new AbortController() : null;
+      const t = ctl ? setTimeout(() => ctl.abort(), ROW_PATCH_TIMEOUT_MS) : null;
+      try { return await fetch(u, ctl ? Object.assign({ signal: ctl.signal }, init) : init); } finally { if (t) clearTimeout(t); }
+    };
+    for (let n = 0; n < 4; n++) {
+      const resp = await timed(`${url}/rest/v1/subsell_configs?select=config,updated_at`, { headers, cache: "no-store" });
+      if (!resp.ok) return { ok: false, error: "the account did not answer (HTTP " + resp.status + ")" };
+      const rows = await resp.json().catch(() => []);
+      if (!Array.isArray(rows) || !rows.length) return { ok: false, error: "the account has no settings yet: open the web app once" };
+      const live = rows[0].config;
+      const stamp = rows[0].updated_at || "";
+      if (!live || typeof live !== "object" || Array.isArray(live) || !stamp) return { ok: false, error: "the account's settings could not be read" }; // never write without the precondition
+      // the same test a pull applies: a row this computer would refuse as emptied is not ours to touch
+      if (heldW >= 20 && (looksLikeWipe(live, held) || configWeight(live) < heldW * 0.5)) return { ok: false, error: "the account's settings look emptied right now, so nothing was written: try again in a minute" };
+      const res = mutate(live, { url, me });
+      if (!res || !res.ok) return res || { ok: false, error: "nothing to change" };
+      if (res.same || !res.set) return { ok: true, same: true };
+      const patched = Object.assign({}, live, res.set, LEGACY_LINK_OFF); // the row as it is, the named keys changed, nothing dropped
+      const scope = auth.user_id ? `user_id=eq.${encodeURIComponent(auth.user_id)}&` : "";
+      const put = await timed(`${url}/rest/v1/subsell_configs?${scope}updated_at=eq.${encodeURIComponent(stamp)}`, {
+        method: "PATCH",
+        headers: Object.assign({ "content-type": "application/json", prefer: "return=representation" }, headers),
+        body: JSON.stringify({ config: patched }),
+      });
+      const data = await put.json().catch(() => null);
+      if (!put.ok) return { ok: false, error: (data && (data.message || data.error)) || ("the account refused the save (HTTP " + put.status + ")") };
+      if (Array.isArray(data) && data.length) {
+        // The change is IN the account from here on. This computer then reads it back at once; a pull that
+        // is slow or fails does not make the save a failure (the minute pull brings it): the answer says so.
+        let pulled = false;
+        try {
+          const out = await Promise.race([cloudPull(true), new Promise((r) => setTimeout(() => r(null), ROW_PATCH_PULL_MS))]);
+          pulled = !!(out && out.ok && !out.wiped);
+        } catch (e) { /* the minute pull brings it */ }
+        LOG((what || "one key") + ": saved into the account's row" + (pulled ? "" : " (this computer reads it at its next pull)"));
+        return Object.assign({ ok: true, pulled }, res.out || {});
+      }
+      // another save landed between the read and the write: read again
+    }
+    return { ok: false, error: "the account's settings kept changing while saving: try again" };
+  } catch (e) { return { ok: false, error: abortedMsg(e, "the account", ROW_PATCH_TIMEOUT_MS) }; }
+}
+const ROW_PATCH_TIMEOUT_MS = 20 * 1000;
+const ROW_PATCH_PULL_MS = 8 * 1000;
+// A clip of a choice must be a file of the account's own video storage, in this login's own folder: the
+// address is parsed, never matched as a prefix ("…/subsell-videos/../other-bucket/x" starts right and is not).
+function myAdsClipOk(u, base, userId) {
+  try {
+    const raw = String(u || "");
+    if (!raw || /\.\.|%2e|%2f|%5c|\\|[?#\s]/i.test(raw)) return false;
+    const a = new URL(raw), b = new URL(String(base || ""));
+    if (a.origin !== b.origin || a.username || a.password) return false;
+    const pre = "/storage/v1/object/public/" + MYADS_BUCKET + "/" + (userId ? String(userId) + "/" : "");
+    return a.pathname.indexOf(pre) === 0 && a.pathname.length > pre.length;
+  } catch (e) { return false; }
+}
+// One video choice: change = { op: "put" | "words" | "drop", item, words, clip, setId }. Only adVideoSets moves.
+async function myAdsWrite(change) {
+  const c = change || {};
+  if (c.clip) { // only a file of the account's own video storage (checked before anything is asked of the account)
+    const { url } = await getCloudCreds();
+    const authC = await getCloudAuth();
+    if (!myAdsClipOk(c.clip.url, url, authC && authC.user_id)) return { ok: false, error: "that video is not in the account's video storage" };
+  }
+  const id = myAdsNewId(); // one id for this choice, whatever the number of tries
+  return cloudRowPatch((live, ctx) => {
+    const cur = Array.isArray(live.adVideoSets) ? live.adVideoSets : [];
+    const res = c.op === "put" ? myAdSetsPut(cur, ctx.me, c.item, c.clip, id)
+      : c.op === "words" ? myAdWordsPut(cur, ctx.me, c.words, c.clip, id)
+      : c.op === "drop" ? myAdSetsDrop(cur, ctx.me, String(c.setId || ""))
+      : { ok: false, error: "unknown change" };
+    if (!res.ok) return res;
+    if (res.list === cur) return { ok: true, same: true };
+    return { ok: true, set: { adVideoSets: res.list }, out: { set: res.set ? res.set.id : "" } };
+  }, "my ads: " + c.op);
 }
 
 chrome.runtime.onMessage.addListener((msg, _sender, sendResponse) => {
@@ -6354,6 +6697,47 @@ chrome.runtime.onMessage.addListener((msg, _sender, sendResponse) => {
           sendResponse(await chatClipsAnswer(msg));
           break;
         }
+        // (v0.21.97) MY ADS, MY VIDEOS — myads.html: this computer's ads and the video each one sends
+        case "MYADS_LIST": {
+          sendResponse(await myAdsState(msg.byHand === true));
+          break;
+        }
+        case "MYADS_CHECK": {
+          sendResponse(myAdsWordsCheck(msg.words));
+          break;
+        }
+        case "MYADS_TICKET": {
+          // where the page uploads a video: the account's own folder, with this computer's login
+          if (!myAdsOwnPage(_sender)) { sendResponse({ ok: false, error: "only the extension's own pages may ask" }); break; }
+          let authT = await cloudValidAuth({ user: true });
+          // a token about to end (the refresh runs in the background): give that refresh a moment, so an
+          // upload that takes minutes does not start on a login with seconds left
+          if (authT && authT.expires_at && authT.expires_at - Date.now() < 11 * 60 * 1000) { await new Promise((r) => setTimeout(r, 2500)); authT = (await cloudValidAuth({ user: true })) || authT; }
+          if (!authT || !authT.access_token) { const holdT = await getAuthHold(); sendResponse({ ok: false, login: true, error: (holdT && authHoldLine(holdT)) || "this Chrome is not logged in to the account" }); break; }
+          if (!authT.user_id) { sendResponse({ ok: false, login: true, error: "this Chrome's login is from an old version: log out and in again in Settings" }); break; }
+          const credsT = await getCloudCreds();
+          sendResponse({ ok: true, url: credsT.url, key: credsT.key, token: authT.access_token, userId: authT.user_id, bucket: MYADS_BUCKET });
+          break;
+        }
+        case "MYADS_PUT":
+        case "MYADS_WORDS":
+        case "MYADS_DROP": {
+          if (!myAdsOwnPage(_sender)) { sendResponse({ ok: false, error: "only the extension's own pages may ask" }); break; }
+          sendResponse(await myAdsWrite({ op: msg.type === "MYADS_PUT" ? "put" : msg.type === "MYADS_WORDS" ? "words" : "drop", item: msg.item, words: msg.words, clip: msg.clip, setId: msg.setId }));
+          break;
+        }
+        case "SET_DELAY": {
+          // (v0.21.97) The popup's Response-delay slider: ONE key into the account's row, on the row's
+          // stamp (cloudRowPatch) — no longer the whole row from the copy this computer holds, which could
+          // undo a video choice or a teaching edit made a moment before on another computer. A computer
+          // with no cloud login answers `fallback` and the popup saves its own copy as it always did.
+          if (!myAdsOwnPage(_sender)) { sendResponse({ ok: false, error: "only the extension's own pages may ask" }); break; }
+          const secD = Math.max(0, Math.min(180, Math.round(Number(msg.sec) || 0)));
+          const authD = await getCloudAuth();
+          if (!(authD && authD.refresh_token)) { sendResponse({ ok: false, fallback: true }); break; }
+          sendResponse(await cloudRowPatch((live) => (Number(live.responseDelaySec) === secD ? { ok: true, same: true } : { ok: true, set: { responseDelaySec: secD } }), "response delay " + secD + " s"));
+          break;
+        }
         case "FETCH_VIDEO": {
           sendResponse(await fetchVideo(msg.url));
           break;
@@ -6657,11 +7041,19 @@ async function prewarmDemoClips(settings) {
     if (adOn) {
       const meP = String((settings && settings.machineId) || "").toLowerCase();
       const seenP = new Set(generalP);
+      // (v0.21.97) This computer's OWN choices go right after the first general clip, the newest first.
+      // The in-extension copy holds five clips and a choice just made is the last in the row: with five
+      // clips ahead of it, it was never warmed and its first buyer waited on the download. With no own
+      // choice the order is the one of 0.21.96 (the general list, then the sets that apply here).
+      const ownP = [], sharedP = [];
       for (const s of adVideoSets(settings)) {
         const pcsP = adSetPcs(s);
         if (pcsP.length && !(meP && pcsP.includes(meP))) continue;
-        for (const v of adSetClips(s)) if (!seenP.has(v.url) && list.length < 8) { seenP.add(v.url); list.push(v); }
+        for (const v of adSetClips(s)) if (!seenP.has(v.url)) { seenP.add(v.url); (adSetMine(s, meP) ? ownP : sharedP).push(v); }
       }
+      ownP.reverse();
+      const restP = list.splice(1); // the general clips after the first one
+      for (const v of ownP.concat(restP, sharedP)) if (list.length < 8) list.push(v);
     }
     if (!list.length) return;
     const st = await new Promise((r) => chrome.storage.local.get(["clipPrewarm"], (x) => r((x && x.clipPrewarm) || {})));
@@ -6852,7 +7244,7 @@ const SUD_RAW = "https://raw.githubusercontent.com/alsayyad4/marketplace-auto-re
 const STORE_BUILD = (() => { try { return !!chrome.runtime.getManifest().update_url; } catch (e) { return false; } })();
 const SUD_FILES = [
   "background.js", "content.js", "options.html", "options.js", "popup.html",
-  "popup.js", "managed_schema.json", "icon16.png", "icon48.png", "icon128.png",
+  "popup.js", "myads.html", "myads.js", "managed_schema.json", "icon16.png", "icon48.png", "icon128.png",
   "manifest.json", // MUST be last: the disk-watcher only reloads once this lands
 ];
 // Every folder layout a normal install can produce inside Downloads. Extract-All
@@ -7238,11 +7630,27 @@ async function storeUpdTabsBusy() {
   for (const t of tabs) { const p = await pingTab(t.id); if (p && p.busy === true) return true; }
   return false;
 }
+// (v0.21.97) Is a person on the "Videos for my ads" page right now, or is it uploading? The page answers
+// only then (myads.js); left open and forgotten in a tab it says nothing.
+function myAdsInUse() {
+  return new Promise((res) => {
+    let done = false;
+    const fin = (v) => { if (!done) { done = true; res(v); } };
+    setTimeout(() => fin(false), 700);
+    try { chrome.runtime.sendMessage({ type: "MYADS_IN_USE" }, (r) => { void chrome.runtime.lastError; fin(!!(r && r.inUse === true)); }); } catch (e) { fin(false); }
+  });
+}
 async function storeUpdUiOpen() {
   try {
     if (chrome.runtime.getContexts) {
       const c = await chrome.runtime.getContexts({ contextTypes: ["TAB", "POPUP"] });
-      return Array.isArray(c) && c.length > 0;
+      if (!Array.isArray(c) || !c.length) return false;
+      // (v0.21.97) The "Videos for my ads" page counts only while someone is using it: forty computers will
+      // leave that tab open somewhere, and a forgotten tab must not hold this computer's updates back for
+      // days. Settings and the popup count as before.
+      const isMyAds = (x) => !!x && x.contextType === "TAB" && /\/myads\.html(?:[?#]|$)/.test(String(x.documentUrl || ""));
+      if (c.some((x) => !isMyAds(x))) return true;
+      return await myAdsInUse();
     }
   } catch (e) { /* older Chrome: no way to know — go on */ }
   return false;

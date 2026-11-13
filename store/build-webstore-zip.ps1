@@ -8,7 +8,7 @@ $ErrorActionPreference = "Stop"
 $repo = Split-Path -Parent (Split-Path -Parent $MyInvocation.MyCommand.Path)
 $stage = Join-Path $env:TEMP ("subsell-webstore-" + [guid]::NewGuid().ToString("N"))
 New-Item -ItemType Directory -Path $stage | Out-Null
-$files = @("content.js", "options.html", "options.js", "popup.html", "popup.js", "managed_schema.json", "icon16.png", "icon48.png", "icon128.png")
+$files = @("content.js", "options.html", "options.js", "popup.html", "popup.js", "myads.html", "myads.js", "managed_schema.json", "icon16.png", "icon48.png", "icon128.png")
 foreach ($f in $files) { Copy-Item (Join-Path $repo $f) (Join-Path $stage $f) }
 # (v0.21.83) background.js without the folder self-updater (store/webstore-background.js)
 & node (Join-Path $repo "store\webstore-background.js") (Join-Path $repo "background.js") (Join-Path $stage "background.js")
@@ -31,3 +31,5 @@ Write-Output ("zip: " + $out)
 Write-Output ("entries (" + $count + "): " + $names)
 Write-Output ("manifest has key: " + $hasKey + "   size: " + (Get-Item $out).Length + " bytes")
 if ($hasKey) { throw "the store manifest still carries the key" }
+# (v0.21.97) the popup opens myads.html: a zip without the page or its script would ship a dead button
+foreach ($need in @("myads.html", "myads.js", "popup.html", "popup.js", "background.js", "content.js", "options.html", "options.js")) { if (($names -split ", ") -notcontains $need) { throw ("the store zip is missing " + $need) } }

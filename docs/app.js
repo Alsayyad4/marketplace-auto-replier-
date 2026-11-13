@@ -281,6 +281,12 @@
    * chat, so a phone's 15 MB original costs each of them several times what a
    * 3–5 MB export does. Sizes missing on older entries are read from the file. */
   const HEAVY_CLIP_BYTES = 8 * 1024 * 1024;
+  // (v0.21.97) Messenger takes a video up to 25 MB (the line above the list has always said so; the
+  // worker's own ceiling is 45 MB), and a set whose clip cannot go out sends nothing at all — so a bigger
+  // file is refused at the upload, with the reason, instead of being listed and never going out. The
+  // videos already in the lists are not touched.
+  const MAX_CLIP_BYTES = 25 * 1024 * 1024;
+  const clipTooBig = (f) => f.name + " is " + (f.size / 1048576).toFixed(0) + " MB: too big. Messenger does not take a video over 25 MB. Export it smaller: a 720p clip of 3–8 MB sends fastest.";
   const fmtMB = (n) => (n > 0 ? (n / 1048576).toFixed(1) + " MB" : "");
   let clipSizeFill = false;
   async function fillClipSizes() {
@@ -384,6 +390,12 @@
         $("demoVideoFile").value = "";
         return;
       }
+      if (f.size > MAX_CLIP_BYTES) { // (v0.21.97) a file the bots can never send is refused here
+        status.className = "err";
+        status.textContent = clipTooBig(f);
+        $("demoVideoFile").value = "";
+        return;
+      }
       status.className = "hint";
       status.textContent = `Uploading ${f.name}…`;
       const safe = f.name.replace(/[^a-zA-Z0-9.\-_]/g, "_");
@@ -469,6 +481,15 @@
     const el = $("adSets");
     if (!el) return;
     const sets = adSetsList();
+    // (v0.21.97) one set per id, the first (the one the bots read): a twin hidden under the same id (two
+    // saves that once crossed) would take the id over when the first is removed or re-made, and a chat
+    // served on the first would then read the twin's video. Dropped here, so the next save cleans the row.
+    for (let i = 0, seenIds = new Set(); i < sets.length; ) {
+      const idI = sets[i] && sets[i].id;
+      if (idI && seenIds.has(idI)) sets.splice(i, 1);
+      else { if (idI) seenIds.add(idI); i++; }
+    }
+    const ownWasOpen = !!($("adOwnChoices") && $("adOwnChoices").open); // the folded block stays as the owner left it
     el.textContent = "";
     if (!sets.length) {
       const none = document.createElement("div");
@@ -489,6 +510,7 @@
       return lb;
     };
     sets.forEach((set, i) => {
+      if (set && set.exact === true) return; // (v0.21.97) a computer's own choice for one ad: listed in one line below, not as a card
       set.clips = Array.isArray(set.clips) ? set.clips : [];
       set.pcs = lower(set.pcs);
       const card = document.createElement("div");
@@ -561,7 +583,11 @@
         del.type = "button";
         del.className = "danger";
         del.textContent = "Remove";
-        del.addEventListener("click", async () => { set.clips.splice(k, 1); renderAdSets(); await saveAdSets("Removed"); });
+        // (v0.21.97) A clip changed inside a set = a NEW set id. Under the old id a chat that was already
+        // served kept the set, saw a clip it had not received and was sent it on the buyer's next message:
+        // a second, different video. With a new id that chat keeps what it has (the bots' chatClipChoice:
+        // its set is gone) and only chats that were never served get the new list.
+        del.addEventListener("click", async () => { set.clips.splice(k, 1); set.id = newAdSetId(); renderAdSets(); await saveAdSets("Removed"); });
         row.appendChild(a);
         row.appendChild(meta);
         row.appendChild(del);
@@ -576,12 +602,14 @@
         const st = $("adSetStatus");
         const say = (cls, msg) => { if (st) { st.className = cls; st.textContent = msg; } };
         if (set.clips.some((o) => sameClip(o, { name: f.name, size: f.size }))) { say("hint", f.name + " is already in this set: not added twice."); up.value = ""; return; }
+        if (f.size > MAX_CLIP_BYTES) { say("err", clipTooBig(f)); up.value = ""; return; } // (v0.21.97) a file the bots can never send is refused here
         say("hint", "Uploading " + f.name + "…");
         const safe = f.name.replace(/[^a-zA-Z0-9._-]/g, "_");
         const path = session.user.id + "/" + Date.now() + "-" + safe;
         const res = await client.storage.from(VIDEO_BUCKET).upload(path, f, { upsert: true, contentType: f.type || "video/mp4" });
         if (res.error) { say("err", "Upload failed: " + res.error.message); return; }
         set.clips.push({ name: f.name, url: client.storage.from(VIDEO_BUCKET).getPublicUrl(path).data.publicUrl, size: f.size || 0 });
+        set.id = newAdSetId(); // (v0.21.97) a changed clip list = a new set id (see Remove above)
         renderAdSets();
         await saveAdSets("Uploaded");
       });
@@ -611,6 +639,67 @@
       card.appendChild(rm);
       el.appendChild(card);
     });
+    // (v0.21.97) THE COMPUTERS' OWN CHOICES. A set with exact: true was made on ONE computer, in the
+    // extension's own page "Videos for my ads", for ONE ad of that Chrome (its title, word for word).
+    // Forty computers with three ads each must not become 120 cards here: one folded line per choice,
+    // under its computer's name, with a Remove. Changing the video is done on that computer.
+    const ownChoices = sets.filter((s) => s && s.exact === true);
+    if (ownChoices.length) {
+      const byPc = new Map();
+      ownChoices.forEach((s) => { const k = lower(s.pcs)[0] || "?"; if (!byPc.has(k)) byPc.set(k, []); byPc.get(k).push(s); });
+      const box = document.createElement("details");
+      box.id = "adOwnChoices";
+      box.open = ownWasOpen;
+      box.style.cssText = "margin-top:10px;padding:8px 10px;border:1px solid #444;border-radius:8px;";
+      const sm = document.createElement("summary");
+      sm.style.cursor = "pointer";
+      sm.textContent = "Chosen on the computers themselves: " + ownChoices.length + (ownChoices.length === 1 ? " ad" : " ads") + " on " + byPc.size + (byPc.size === 1 ? " computer" : " computers") + " (in the extension: 🎬 Videos for my ads)";
+      box.appendChild(sm);
+      byPc.forEach((list, k) => {
+        const head = document.createElement("div");
+        head.style.cssText = "margin-top:8px;font-weight:600;";
+        const known = adPcs.find((p) => p.key === k);
+        head.textContent = known ? known.show + (known.ver && verLess(known.ver, "0.21.97") ? " (v" + known.ver + ": updates itself first)" : "") : k;
+        box.appendChild(head);
+        list.forEach((s) => {
+          const row = document.createElement("div");
+          row.className = "row";
+          const what = document.createElement("span");
+          what.appendChild(document.createTextNode(truncTxt(String(s.ads || "(no title)"), 90) + " → "));
+          // each video is a link that plays it: a file name does not say which phone is in it
+          const clipsS = (Array.isArray(s.clips) ? s.clips : []).filter((v) => v && v.url);
+          if (!clipsS.length) what.appendChild(document.createTextNode("(no video)"));
+          clipsS.forEach((v, n) => {
+            if (n) what.appendChild(document.createTextNode(" + "));
+            const a = document.createElement("a");
+            a.href = v.url;
+            a.target = "_blank";
+            a.rel = "noopener";
+            a.textContent = v.name || "video";
+            what.appendChild(a);
+          });
+          const del = document.createElement("button");
+          del.type = "button";
+          del.className = "danger";
+          del.textContent = "Remove";
+          del.addEventListener("click", async () => {
+            if (!confirm("Remove this computer's video for “" + String(s.ads || "") + "”? That ad goes back to the general video there.")) return;
+            const at = sets.indexOf(s);
+            if (at >= 0) sets.splice(at, 1);
+            renderAdSets();
+            await saveAdSets("Removed");
+          });
+          row.appendChild(what);
+          row.appendChild(del);
+          box.appendChild(row);
+        });
+      });
+      const how = document.createElement("div");
+      how.className = "hint";
+      how.textContent = "Each line is one ad on one computer: only that exact ad gets the video, only there. To change a video, open the extension on that computer (🎬 Videos for my ads).";
+      box.appendChild(how);
+      el.appendChild(box);
+    }
     const behind = adPcs.filter((p) => p.ver && verLess(p.ver, AD_MIN_VER));
     if (sets.length && behind.length) {
       const w = document.createElement("div");
@@ -943,12 +1032,18 @@
   // The headline alone (what follows the first "·" of "Buyer · headline"), prices and
   // advert words out, the sidebar's time tag out. "" when the label is not a
   // Marketplace chat.
+  // (v0.21.97) THE MODEL'S NUMBER IS NOT PART OF THE PRICE (see background.js): "iPhone 8 150$" is the
+  // iPhone 8, not "iPhone"; "iPhone 13 - 650$" is the iPhone 13.
+  const MODEL_GUARD = String.fromCharCode(1);
+  const MODEL_NUM_RE = /(?:(?<=\p{L})|\b(?:iphone|ipad|ipod|macbook|imac|airpods|watch|galaxy|pixel|samsung|apple|google|huawei|xiaomi|oneplus|motorola|moto|lg|sony|playstation|ps|xbox|switch|nintendo|tab)\s+)\d{1,2}(?![\d.,]|\s?(?:\$|€|(?:cad|usd|dollars?|piasses?|balles?|bucks|euros?)\b))/giu;
   function listingFromTitle(threadName) {
     const s = String(threadName == null ? "" : threadName);
     const cut = s.indexOf("·");
     if (cut < 1) return "";
     let item = s.slice(cut + 1).replace(/\s*[·•]\s*\d{1,3}\s?(?:min|m|h|hr|j|d|sem|w|y)\b.*$/i, "").replace(/\s+/g, " ").trim();
+    item = item.split(MODEL_GUARD).join("").replace(MODEL_NUM_RE, (m) => m + MODEL_GUARD);
     item = stripPrices(stripPrices(item).replace(ADVERT_RE, " "));
+    item = stripPrices(item.split(MODEL_GUARD).join("")); // the fence out, and what it held back at the end (" -") cleaned
     return item.length >= 2 ? item : "";
   }
   /* ==== LISTING-MIRROR-END ==== */
@@ -1005,12 +1100,37 @@
     for (const x of mine || []) if (!B.has(cj(x)) && !T.has(cj(x))) out.push(x); // added here → added
     return out;
   }
+  // (v0.21.97) THE VIDEO SETS ARE MERGED BY ID, never as whole items. Item by item, a set that two
+  // editors touched came out as two sets under one id, and a set one side had removed came back when
+  // the other side had edited it — and a set that comes back can hand a chat that was already served a
+  // second, different video. Now that every computer adds its own choices to this list:
+  //   removed on either side = removed · changed on this page = this page's version · changed only
+  //   there = theirs · new on either side = kept · one set per id.
+  function mergeSetsById(base, mine, theirs) {
+    const idOf = (x) => (x && x.id != null && String(x.id) ? String(x.id) : "");
+    const B = new Map(), M = new Map();
+    for (const x of base || []) if (idOf(x) && !B.has(idOf(x))) B.set(idOf(x), cj(x));
+    for (const x of mine || []) if (idOf(x) && !M.has(idOf(x))) M.set(idOf(x), x);
+    const out = [], seen = new Set();
+    for (const t of theirs || []) {
+      const id = idOf(t);
+      if (!id || seen.has(id)) continue; // one set per id; a set with no id is no set
+      seen.add(id);
+      if (B.has(id) && !M.has(id)) continue; // removed on this page
+      const m = M.get(id);
+      out.push(m && cj(m) !== (B.has(id) ? B.get(id) : cj(t)) ? m : t); // changed on this page = this page's; else theirs
+    }
+    for (const [id, m] of M) if (!seen.has(id) && !B.has(id)) { seen.add(id); out.push(m); } // made on this page
+    // in the base (and maybe edited here) but gone from theirs = removed there: it stays removed
+    return out;
+  }
   function mergeOverTheirs(base, mine, theirsRaw) {
     const fresh = Object.assign({}, DEFAULTS, theirsRaw || {});
     const b = base || {}, m = mine || {};
     for (const k of new Set(Object.keys(b).concat(Object.keys(m)))) {
       if (cj(b[k]) === cj(m[k])) continue; // not touched here: their value stands
-      if (LIST_KEYS.includes(k)) fresh[k] = mergeList(b[k], m[k], Array.isArray(fresh[k]) ? fresh[k] : []);
+      if (k === "adVideoSets") fresh[k] = mergeSetsById(b[k], m[k], Array.isArray(fresh[k]) ? fresh[k] : []);
+      else if (LIST_KEYS.includes(k)) fresh[k] = mergeList(b[k], m[k], Array.isArray(fresh[k]) ? fresh[k] : []);
       else if (k in m) fresh[k] = m[k];
       else delete fresh[k];
     }
@@ -1571,7 +1691,7 @@
   // same site). The two markers are comments in that file; store/smoke-teach.js fails if they move.
   const CORE_BEGIN = "/* ===================== (v0.21.73) THE OWNER IS THE ONLY TEACHER";
   const CORE_END = "/* ---------------- video fetch ---------------- */";
-  const CORE_VER = "20261112"; // (v0.21.96) a video per ad (adVideoPick, adClipNote); (v0.21.94) [CLIP] + the neutral seed; (v0.21.93) the API line; (v0.21.88) the listing line + the owner's entry for the item
+  const CORE_VER = "20261113"; // (v0.21.97) the exact-ad rule of My ads (adVideoPick); (v0.21.96) a video per ad (adVideoPick, adClipNote); (v0.21.94) [CLIP] + the neutral seed; (v0.21.93) the API line; (v0.21.88) the listing line + the owner's entry for the item
   let teachCore = null, teachCoreErr = "";
   async function loadTeachCore() {
     if (teachCore) return teachCore;

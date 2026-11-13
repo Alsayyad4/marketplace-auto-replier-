@@ -1,0 +1,60 @@
+<!DOCTYPE html>
+<html lang="en" translate="no">
+  <head>
+    <meta charset="utf-8" />
+    <meta name="viewport" content="width=device-width, initial-scale=1" />
+    <meta name="google" content="notranslate" />
+    <title>Videos for my ads</title>
+    <style>
+      :root { color-scheme: light dark; --line: rgba(127,127,127,.35); --soft: rgba(127,127,127,.08); --blue: #1877f2; --green: #1a8f3c; --amber: #c47f00; --red: #c0392b; }
+      body { font-family: -apple-system, Segoe UI, Roboto, Arial, sans-serif; margin: 0; font-size: 14px; line-height: 1.5; }
+      main { max-width: 760px; margin: 0 auto; padding: 18px 16px 40px; }
+      h1 { font-size: 20px; margin: 0 0 4px; }
+      .lead { margin: 0 0 12px; color: #777; }
+      .muted { color: #888; font-weight: 400; font-size: 13px; }
+      .note { border: 1px solid var(--line); border-radius: 8px; padding: 9px 12px; margin: 0 0 10px; background: var(--soft); }
+      .note.warn { border-color: var(--amber); }
+      .sum { font-weight: 600; margin: 12px 0 8px; display: flex; gap: 10px; align-items: center; flex-wrap: wrap; }
+      .card { border: 1px solid var(--line); border-radius: 10px; padding: 11px 13px; margin: 0 0 9px; }
+      .card.own { border-color: var(--green); }
+      .card .title { font-weight: 600; font-size: 15px; overflow-wrap: anywhere; }
+      .card .meta { color: #888; font-size: 12px; }
+      .card .state { margin: 5px 0 7px; overflow-wrap: anywhere; }
+      .pill { display: inline-block; padding: 1px 8px; border-radius: 999px; font-size: 11px; background: var(--blue); color: #fff; margin-left: 6px; vertical-align: middle; font-weight: 400; }
+      .row { display: flex; gap: 8px; align-items: center; flex-wrap: wrap; }
+      button { font-size: 13px; padding: 7px 12px; border-radius: 6px; border: 1px solid #888; background: #f4f4f4; color: #111; cursor: pointer; }
+      button.primary { background: var(--blue); color: #fff; border-color: var(--blue); }
+      button.danger { color: var(--red); }
+      button:disabled { opacity: .55; cursor: default; }
+      select, input[type="text"] { font-size: 13px; padding: 6px 8px; border: 1px solid #aaa; border-radius: 6px; max-width: 100%; box-sizing: border-box; }
+      input[type="text"] { width: 320px; }
+      .status { font-size: 13px; margin-top: 6px; min-height: 1em; overflow-wrap: anywhere; }
+      .status.ok { color: var(--green); } .status.err { color: var(--red); } .status.work { color: #888; }
+      details { border: 1px dashed var(--line); border-radius: 10px; padding: 9px 13px; margin: 14px 0 9px; }
+      summary { cursor: pointer; font-weight: 600; }
+      a { color: var(--blue); }
+      .foot { color: #888; font-size: 12px; margin-top: 18px; }
+    </style>
+  </head>
+  <body>
+    <main>
+      <h1>🎬 Videos for my ads <span id="who" class="muted"></span> <a href="#" id="rename" class="muted"></a></h1>
+      <p class="lead">Only the ads of <b>this Chrome</b>: the ads buyers wrote about here. Pick an ad, upload its video (mp4). The bot then sends that video in that ad's chats, from this Chrome only.</p>
+      <div id="notes"></div>
+      <div class="sum"><span id="sum">Loading…</span> <a href="#" id="refresh" class="muted">Refresh</a></div>
+      <div id="ads"></div>
+      <details id="notListed">
+        <summary>My ad is not in the list</summary>
+        <p class="muted" style="margin:6px 0;">An ad appears in the list by itself after its first buyer writes on this Chrome. For an ad nobody wrote about yet: type words from its title and upload the video. <b>Every</b> ad of this Chrome whose title has all these words gets this video, so type enough words to tell the ad apart (<i>iphone 13 pro</i> also fits an <i>iPhone 13 Pro Max</i> ad, until that ad has its own video).</p>
+        <div class="row">
+          <input type="text" id="wordsIn" placeholder="words from the ad's title" maxlength="200" />
+          <button id="wordsUp" type="button" disabled>Upload its video (mp4)</button>
+        </div>
+        <div id="wordsStatus" class="status" data-note="__words__"></div>
+        <div id="wordsList"></div>
+      </details>
+      <p class="foot">The general video (the one for ads without their own) and the other computers are on the web app: <a href="#" id="openWeb">open its Videos tab</a>. Click a video's name to watch it.</p>
+    </main>
+    <script src="myads.js"></script>
+  </body>
+</html>

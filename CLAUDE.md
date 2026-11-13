@@ -18,6 +18,43 @@ all chrome.debugger/CDP work) + Supabase dashboard in docs/. Live branch:
 - The operator wants zero manual steps in normal operation.
 
 ## Known state (v0.21.96 PUBLISHED on the Web Store Nov 12 2026 ~14:25 EST — uploaded as Draft ~12:50 EST, submitted by the owner's two clicks (the console left it a plain draft this time), the fleet installs it by itself within ~2 h; it carries A VIDEO PER AD, not yet proven on a live Messenger send; v0.21.95 PUBLISHED on the Web Store Nov 11 2026 ~19:25 EST — uploaded ~18:45 EST and in review at once with no Submit click, the review took ~40 min, the fleet installs it by itself within ~2 h; b2478aa (shopDigits converts only the owner's own phone numbers) is on the branch for .96, not in the published build; it carries shopDigits, the family price line, the buyer's-register voice line and the memory note's last text; v0.21.94 PUBLISHED on the Web Store Nov 11 2026 ~05:00 EST — submitted by the owner Nov 10 ~17:10 EST, the Google review took ~12 h; the fleet installs it by itself within ~2 h; v0.21.93 PUBLISHED on the Web Store Nov 5 2026 ~15:22 local — the API line + an outage never silences a buyer for good; the fleet installs a published build by itself within ~2 h; the submit button is the owner's click, Auto mode refuses it)
+- MY ADS, MY VIDEOS (.97, Nov 13 2026, owner: "how will I know which account and which computer and which
+  ad, it is too many choices … I open the extension that is connected to the Chrome, I see the ads in that
+  Chrome, nothing else … I choose the ad and an upload button … I put that video"). New extension page
+  `myads.html` + `myads.js`, a TAB opened from the popup's "🎬 Videos for my ads" and from Settings → Videos
+  (never a list or a file chooser inside the popup): the ads of THIS computer's chats (its `replyLog` + the
+  inbox rows through the read-only content.js message `LIST_ADS`), one upload button per ad (mp4 / mov the
+  Chrome can play — `probeVideo` — 50 KB to 25 MB), "use a video already uploaded here", "Same item? Use its
+  video", and words for an ad not in the list (`MYADS_CHECK` first; a comma is never "or" there). The cards
+  keep their places on a re-read (only Refresh re-sorts). A choice = an ordinary `adVideoSets` entry for
+  this computer alone with `exact: true` (`adVideoPick`: the title must have exactly the set's words, read
+  by `adWordsExact` on both sides — never re-read for prices / advert words, a trailing "+" is part of its
+  word; a tie goes to exact; no mark = the .96 rule; `adVideoSets()` reads one set per id). Pure block `MY
+  ADS, MY VIDEOS (pure` after `adClipNote` (`myAdSetsPut` / `myAdWordsPut` / `myAdSetsDrop` / `myAdsRows`);
+  impure from `const MYADS_BUCKET`: `cloudRowPatch` = THE NARROW WRITER (re-read the row, change the named
+  keys only, PATCH on `updated_at=eq.<stamp>`, four tries, 20-s limits, then a pull; answers `pulled`),
+  `myAdsClipOk` (the address parsed: host, bucket, this login's folder), `myAdsWrite`, messages `MYADS_LIST`
+  / `MYADS_CHECK` / `MYADS_TICKET` / `MYADS_PUT` / `MYADS_WORDS` / `MYADS_DROP` / `SET_DELAY` (ticket and
+  writes: the extension's own pages only, `myAdsOwnPage`). A CHANGED VIDEO = A NEW SET ID, the old set
+  removed (a clip swapped under the same id tops a served chat up with a second video; the dashboard cards
+  make a new id too now); the same video again = nothing changes; a removal takes every set under the id.
+  `listingFromTitle`: a price no longer takes a short model number with it (`MODEL_NUM_RE`: "iPhone 8 150$"
+  was "iPhone", "MacBook Air M2 900$" was "MacBook Air M"; mirrored in docs/app.js). content.js
+  `adSetsOn(s, me)`: only a set that can apply on THIS computer opens the CHAT_CLIPS question (a choice on
+  one computer does not change what the others send); unread settings = the visit is queued, always (a
+  computer's own Settings videos used to go out with the gate skipped). The popup's delay slider saves ONE
+  key through `cloudRowPatch`, once, when let go (no answer = nothing saved); Settings' Save refuses when the
+  account's row could not be read first. `storeUpdUiOpen`: the My ads tab holds a store update only while
+  in use (`MYADS_IN_USE`). Dashboard: the computers' choices are one folded block (`#adOwnChoices`), sets
+  merge BY ID (`mergeSetsById`), an upload over 25 MB is refused; Settings lists this computer's sets and
+  counts the others. `store/smoke-myads.js` (163 checks, 51/51 mutants), `store/page-myads.cjs` (the real
+  page, headless, real recorded videos), boot-store (the store build: the real page, a real upload to a
+  stand-in, the row written on its stamp); two panels (design 3+1, diff review 3), no blocker, every
+  should-fix applied. NOT verified: the upload against the real Supabase project and a live Messenger send
+  — the owner's first choice is the proof (🩺 `mine=`, `adset=`; another computer must read `adset=-`).
+  Never a whole-row save for a choice or the slider; never swap a clip inside a set; never let a set made
+  for other computers open the question here; never accept a video that could not go out. HANDOFF "Open
+  after v0.21.97".
 - A VIDEO PER AD (.96, Nov 12 2026, owner: "a different video for a different ad, I don't want to send the
   same video for all the ads"; a video for the computer the bot runs on; "choose the ad from the Facebook
   account that is open"; "not every listing I will put a video"). New cloud key `adVideoSets` = [{ id, ads,

@@ -64,8 +64,8 @@ const B = new Function(
 // content.js: the clip identity + the three helpers and the list signature
 const C = new Function(
   between(ct, "  function clipIdsOf(v) {", "  // What the Activity row calls the clip") + "\n" +
-  between(ct, "  function adSetsOn(s) {", "  let videoLockedSig = null;") + "\n" +
-  "return { clipIdsOf, adSetsOn, generalClips, clipsOfSet, clipListSig };"
+  between(ct, "  function adSetHere(x, me) {", "  let videoLockedSig = null;") + "\n" +
+  "return { clipIdsOf, adSetHere, adSetsOn, generalClips, clipsOfSet, clipListSig };"
 )();
 
 const U = "https://x.supabase.co/storage/v1/object/public/subsell-videos/uid/";
@@ -144,7 +144,9 @@ console.log("— 3. WHICH, never WHETHER: the gate comes first —");
   const iIds = eng.indexOf("const cfgIds = local.concat(central).map(clipIdsOf);");
   ok(iNever > 0 && iAsked > iNever && iAsk > iAsked && iIds > iAsk, "inside maybeSendVideo: never → asked → the question to the worker → the clip list frozen (" + [iNever, iAsked, iAsk, iIds].join(" < ") + ")");
   const guard = eng.slice(iAsked, iAsk);
-  ok(/if \(settingsOk && \(adSetsOn\(sCfg\) \|\| rememberedA\)\) \{/.test(guard), "the question is asked only when a usable set exists or this chat was once given one");
+  ok(/if \(settingsOk && \(adSetsOn\(sCfg, meA\) \|\| rememberedA\)\) \{/.test(guard) && /const meA = String\(cfg\.machineId \|\| ""\)\.trim\(\)\.toLowerCase\(\) \|\| undefined;/.test(guard) && /"machineId", \/\/ \(v0\.21\.97\)/.test(eng), "the question is asked only when a set that can apply on THIS computer exists (v0.21.97: its id comes with the same local read; an id that could not be read opens it as in 0.21.96) or this chat was once given one");
+  // (v0.21.97) settings that could not be read = no send this cycle, whatever this computer holds in its own Settings videos
+  ok(/\n      if \(!settingsOk\) \{\n        \/\/ Queue instead of dropping/.test(eng) && !/if \(!settingsOk && !central\.length && !local\.length\)/.test(eng), "with the settings unread the visit is queued, always: the gate and the which-list question were skipped, so nothing may be sent (a computer's own Settings videos included)");
   ok(/const rememberedA = safe\(\(\) => \{ const e = cfg\.videoSetOf && cfg\.videoSetOf\[id\];/.test(guard) && /"videoSetOf", \/\/ \(v0\.21\.96\)/.test(eng), "…and that memory comes with the visit's own storage read: no message to the worker when there is none");
   ok(/const nameA = name && String\(name\)\.indexOf\("·"\) > 0 \? name : \(safe\(\(\) => openThreadName\(\), ""\) \|\| name \|\| ""\);/.test(guard), "a caller with no listing in its name (the popup's manual send) gets the sidebar row's label");
   ok(ct.split('type: "CHAT_CLIPS"').length === 2, "content.js asks the worker in exactly one place");
@@ -208,12 +210,12 @@ console.log("— 5. what the model is told —");
   ok(/const CFG_LIST_KEYS = \[[^\]]*"adVideoSets"[^\]]*\];/.test(bg) && /const LIST_KEYS = \[[^\]]*"adVideoSets"[^\]]*\];/.test(app) && /const LIST_KEYS = \[[^\]]*"adVideoSets"[^\]]*\];/.test(opt), "the wipe guard and both merges treat the sets as a list");
   const pure = between(bg, "/* ===== (v0.21.96) A VIDEO PER AD", "// A lesson about another model is never offered");
   ok(!/chrome\./.test(pure) && bg.indexOf("/* ===== (v0.21.96) A VIDEO PER AD") > bg.indexOf("/* ===================== (v0.21.73) THE OWNER IS THE ONLY TEACHER") && bg.indexOf("/* ===== (v0.21.96) A VIDEO PER AD") < bg.indexOf("/* ---------------- video fetch ---------------- */"), "the rule sits inside the Try-it slice and touches no chrome.*");
-  ok(/adVideoPick: typeof adVideoPick === .{1,3}function.{1,3} \? adVideoPick : null/.test(app) && /const CORE_VER = "20261112";/.test(app), "the dashboard takes the bots' own rule from that slice, under a new cache-buster");
+  ok(/adVideoPick: typeof adVideoPick === .{1,3}function.{1,3} \? adVideoPick : null/.test(app) && /const CORE_VER = "20261113";/.test(app), "the dashboard takes the bots' own rule from that slice, under a new cache-buster");
   ok(/Object\.defineProperty\(merged, "machineId", \{ enumerable: false, value: String\(\(res && res\.machineId\) \|\| ""\) \}\);/.test(bg) && /"cloudConfig", "machineId"\], \(res\) => \{/.test(bg), "getSettings carries this computer's id, never serialized");
   ok(/const adOn = adVideoSets\(settings\)\.length > 0;/.test(bg) && /const warmable = !adOn \|\| slotP\+\+ < 5;/.test(bg), "the pre-download adds the sets' clips only when sets exist");
   ok(/const generalP = new Set\(list\.map\(\(v\) => v\.url\)\);/.test(bg) && /if \(generalP\.has\(v\.url\) && \(!e\.diskAt \|\| now - e\.diskAt > 10 \* 60 \* 1000\)\) \{/.test(bg), "…and only the general list is put on disk ahead of time (a disk copy is a download the computer shows)");
   ok(/const own = setOfD\[k\] && setOfD\[k\]\.set \? \(adChatsD\+\+, setIdsD\[setOfD\[k\]\.set\] \|\| \[\]\) : ids;/.test(bg) && /"cdpStats", "videoDisk", "videoSetOf",/.test(bg), "the diagnostic judges a chat on a set against that set's clips");
-  ok(/id="adSets"/.test(html) && /id="addAdSet"/.test(html) && /id="adSetStatus"/.test(html) && /app\.js\?v=20261112/.test(html), "the page has the section");
+  ok(/id="adSets"/.test(html) && /id="addAdSet"/.test(html) && /id="adSetStatus"/.test(html) && /app\.js\?v=20261113/.test(html), "the page has the section");
   ok(app.split("renderAdSets();").length >= 4 && /\n    loadAdsSeen\(\);/.test(app) && /async function saveVideoList\(what, url, statusEl\) \{\n    const status = statusEl \|\| \$\("demoVideoStatus"\);/.test(app), "the dashboard draws the sets, loads the ads answered and saves them like the general list");
   ok(/if \(adCore \|\| !adSetsList\(\)\.length\) return;/.test(app), "the bots' code is fetched for the picker only once a set exists");
   ok(app.indexOf("const one = String(pick.value).replace(/[,;" + String.fromCharCode(92) + "n]+/g, \" \")") > 0, "an ad picked from the list stays ONE alternative: its own commas do not split it");

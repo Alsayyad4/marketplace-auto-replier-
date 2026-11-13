@@ -199,6 +199,7 @@
         <div id="videoList" class="hint">No videos uploaded yet.</div>
         <div><label>Send the video(s) this many seconds after the reply</label><input type="number" id="videoDelaySec" min="0" max="120" /></div>
         <div class="hint">Keep each under ~25&nbsp;MB for a reliable upload. Stored locally on this computer only (not synced).</div>
+        <div class="hint">Used only when the web app has no general video, and only for an ad that has no video of its own. For a video per ad, use <b>🎬 Videos for my ads</b> (the button in the extension's popup, or the Videos tab here).</div>
       </section>
 
       <!-- BUSINESS -->
@@ -264,8 +265,9 @@
       <section id="videos">
         <label>☁️ Central demo videos <span class="hint">uploaded in the web app (Videos tab) and synced here. Sent as a native attachment, once per chat. Upload/remove them in the web app.</span></label>
         <div id="centralVideoList" class="hint">None set in the web app.</div>
-        <label>🎯 Videos for specific ads <span class="hint">made in the web app (Videos tab). A chat whose ad title holds a set's words gets that set instead of the general video(s) above; every other ad gets the general ones. Whether a buyer gets a video at all is still "Send the clip".</span></label>
+        <label>🎯 Videos for specific ads <span class="hint">made on this Chrome's own page (the button below) or in the web app (Videos tab). A chat on such an ad gets that video instead of the general video(s) above; every other ad gets the general ones. Whether a buyer gets a video at all is still "Send the clip".</span></label>
         <div id="adVideoList" class="hint">None: every ad gets the general video(s) above.</div>
+        <div class="row"><button id="openMyAds" type="button">🎬 Videos for my ads</button> <span class="hint">the ads of this Chrome only: pick an ad, upload its video</span></div>
         <div class="inline">
                     <div class="hint">The clip goes out only when a buyer asks to see the phone (a video, photos), once per chat, right before the reply — chosen on the web app's Videos tab ("Send the clip"), for every computer.</div>
         </div>

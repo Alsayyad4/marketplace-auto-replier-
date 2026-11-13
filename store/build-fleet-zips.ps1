@@ -8,7 +8,7 @@ $ErrorActionPreference = "Stop"
 $repo = Split-Path -Parent (Split-Path -Parent $MyInvocation.MyCommand.Path)
 $stage = Join-Path $env:TEMP ("subsell-fleet-" + [guid]::NewGuid().ToString("N"))
 New-Item -ItemType Directory -Path $stage | Out-Null
-$files = @("background.js", "content.js", "options.html", "options.js", "popup.html", "popup.js", "managed_schema.json", "manifest.json", "icon16.png", "icon48.png", "icon128.png")
+$files = @("background.js", "content.js", "options.html", "options.js", "popup.html", "popup.js", "myads.html", "myads.js", "managed_schema.json", "manifest.json", "icon16.png", "icon48.png", "icon128.png")
 foreach ($f in $files) { Copy-Item (Join-Path $repo $f) (Join-Path $stage $f) }
 [IO.File]::WriteAllText((Join-Path $stage "INSTALL.txt"), "SubSell - Load unpacked (chrome://extensions -> Developer mode -> Load unpacked).`n")
 $out = Join-Path $repo "dist\subsell-extension.zip"
@@ -30,4 +30,4 @@ Write-Output ("zip: " + $out + "  (+ copy " + $copy + ")")
 Write-Output ("entries (" + $count + "): " + $names)
 Write-Output ("manifest has key: " + $hasKey + "   version: " + $ver + "   size: " + (Get-Item $out).Length + " bytes")
 if (-not $hasKey) { throw "the fleet manifest lost its key" }
-if ($count -ne 12) { throw "expected 12 entries, got " + $count }
+if ($count -ne 14) { throw "expected 14 entries, got " + $count }

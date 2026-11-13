@@ -261,11 +261,20 @@
     $("delay").value = d;
     $("delayVal").textContent = d;
   }
+  // (v0.21.97) The number follows the thumb; the save happens ONCE, when the slider is let go, and it
+  // writes one key into the account's row (the worker's SET_DELAY) instead of the whole row from the
+  // copy this computer holds: a video choice or a teaching edit made a moment ago on another computer
+  // can no longer be undone by a slider. With no cloud login the computer saves its own copy as before.
+  function showDelay() { $("delayVal").textContent = Number($("delay").value); }
   async function onDelay() {
-    settings = await getSettings();
-    settings.responseDelaySec = Number($("delay").value);
-    $("delayVal").textContent = settings.responseDelaySec;
-    await saveSettings(settings);
+    const sec = Number($("delay").value);
+    $("delayVal").textContent = sec;
+    const r = await new Promise((res) => { try { chrome.runtime.sendMessage({ type: "SET_DELAY", sec }, (x) => { void chrome.runtime.lastError; res(x || null); }); } catch (e) { res(null); } });
+    if (r && r.ok) return;
+    // only the worker's own "no cloud login here" opens the local save; NO ANSWER is not that (a stalled
+    // request must never end in the whole row being written from this computer's copy)
+    if (r && r.fallback) { settings = await getSettings(); settings.responseDelaySec = sec; await saveSettings(settings); return; }
+    $("delayVal").textContent = sec + " (not saved: " + ((r && r.error) || "no answer") + ")";
   }
 
   /* ----- Wake scanner: re-inject the bot into every open Messenger tab, so the
@@ -475,7 +484,8 @@
   $("openMp").addEventListener("click", openMarketplace);
   $("scan").addEventListener("click", scanNow);
   $("copy").addEventListener("click", copyAll);
-  $("delay").addEventListener("input", onDelay);
+  $("delay").addEventListener("input", showDelay); // (v0.21.97) the number follows the thumb…
+  $("delay").addEventListener("change", onDelay); // …and one save is made when it is let go
   $("openOptions").addEventListener("click", (e) => {
     e.preventDefault();
     chrome.runtime.openOptionsPage();
@@ -486,6 +496,9 @@
   // of a save, with no update of this extension. This popup and Settings only lead to it.
   const DASHBOARD_URL = "https://alsayyad4.github.io/marketplace-auto-replier-/docs/";
   function openDashboard(tab) { chrome.tabs.create({ url: DASHBOARD_URL + "#" + tab, active: true }); }
+  // (v0.21.97) MY ADS: this Chrome's ads and the video each one sends, in a tab of its own (a popup
+  // closes when it loses focus, and an upload must not die with it)
+  if ($("myAds")) $("myAds").addEventListener("click", () => chrome.tabs.create({ url: chrome.runtime.getURL("myads.html"), active: true }));
   $("teachLink").addEventListener("click", (e) => { e.preventDefault(); openDashboard("business"); });
   $("activityLink").addEventListener("click", (e) => { e.preventDefault(); openDashboard("activity"); });
 
