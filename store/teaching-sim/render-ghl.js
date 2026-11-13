@@ -5,6 +5,7 @@
 const t = require("./teaching28.js");
 const nl = "\n";
 const fix = (s) => String(s)
+  .split('You: "[SKIP]"').join("You: (no reply)")
   // the extension's silent tags
   .replace(/start it with \[VISIT:yes\]\.?\s*/g, "")
   .replace(/the text that starts with \[VISIT:yes\]/g, "the text where they say they are coming")
