@@ -1,0 +1,507 @@
+# SubSell marketplace auto-replier — read HANDOFF.md first (KEEP SHORT: loads every turn)
+
+Chrome MV3 extension (content.js runs in messenger.com; background.js = service worker +
+all chrome.debugger/CDP work) + Supabase dashboard in docs/. Live branch:
+`claude/wizardly-noether-Oi6vP` — main is stale, never merge main over it.
+
+## AUTOLISTER (listing creation + delete-and-relist) — ON HOLD since Oct 22 2026
+- The owner asked to build it and submit it to the Web Store; a safety check stopped that turn
+  (Oct 22 2026), as it stopped the Oct 12 draft of a Web Store extension that drives Facebook's
+  posting form. Do not start its work packages and do not retry the build or the submission by
+  another route.
+- What exists is inert: `lister/` (PLAN.md, core, starter library), `store/smoke-lister-core.js`,
+  `supabase/lister.sql` (never pasted). The manifest, the worker and every zip ignore it.
+
+## Standing rules (Sep 11 2026 "virus / random files" incident)
+- Anything that clicks Messenger UI, focuses/moves windows, opens PiP, or adds
+  permissions ships OFF by default behind a cloud setting and goes to ONE machine first.
+- The operator wants zero manual steps in normal operation.
+
+## Known state (v0.21.97 PUBLISHED on the Web Store Nov 13 2026 ~17:24 EST — uploaded ~17:00 EST by a guarded background wait right after the owner's sign-in, his Submit clicks followed, the review took ~20 min, the published package was compared byte for byte with the uploaded zip (13 files identical), each Chrome takes it by itself at its next extension check: 6 h at most while it stays open, a minute after it is reopened — NOT the "~2 h" of the older clauses below (Chrome answers `throttled` to `requestUpdateCheck` for 5 h after each completed ask; read in Chromium's source); it carries MY ADS, MY VIDEOS: on each computer the owner opens the extension, sees the ads of that Chrome and gives one its video; built aec11ad + 7035ea4, the dashboard part is live; not yet proven on the real storage or on a live Messenger send (his first choice on a computer is the proof: HANDOFF "Open after v0.21.97", first bullet); v0.21.96 PUBLISHED on the Web Store Nov 12 2026 ~14:25 EST — uploaded as Draft ~12:50 EST, submitted by the owner's two clicks (the console left it a plain draft this time), the fleet installs it by itself within ~2 h; it carries A VIDEO PER AD, not yet proven on a live Messenger send; v0.21.95 PUBLISHED on the Web Store Nov 11 2026 ~19:25 EST — uploaded ~18:45 EST and in review at once with no Submit click, the review took ~40 min, the fleet installs it by itself within ~2 h; b2478aa (shopDigits converts only the owner's own phone numbers) is on the branch for .96, not in the published build; it carries shopDigits, the family price line, the buyer's-register voice line and the memory note's last text; v0.21.94 PUBLISHED on the Web Store Nov 11 2026 ~05:00 EST — submitted by the owner Nov 10 ~17:10 EST, the Google review took ~12 h; the fleet installs it by itself within ~2 h; v0.21.93 PUBLISHED on the Web Store Nov 5 2026 ~15:22 local — the API line + an outage never silences a buyer for good; the fleet installs a published build by itself within ~2 h; the submit button is the owner's click, Auto mode refuses it)
+- MY ADS, MY VIDEOS (.97, Nov 13 2026, owner: "how will I know which account and which computer and which
+  ad, it is too many choices … I open the extension that is connected to the Chrome, I see the ads in that
+  Chrome, nothing else … I choose the ad and an upload button … I put that video"). New extension page
+  `myads.html` + `myads.js`, a TAB opened from the popup's "🎬 Videos for my ads" and from Settings → Videos
+  (never a list or a file chooser inside the popup): the ads of THIS computer's chats (its `replyLog` + the
+  inbox rows through the read-only content.js message `LIST_ADS`), one upload button per ad (mp4 / mov the
+  Chrome can play — `probeVideo` — 50 KB to 25 MB), "use a video already uploaded here", "Same item? Use its
+  video", and words for an ad not in the list (`MYADS_CHECK` first; a comma is never "or" there). The cards
+  keep their places on a re-read (only Refresh re-sorts). A choice = an ordinary `adVideoSets` entry for
+  this computer alone with `exact: true` (`adVideoPick`: the title must have exactly the set's words, read
+  by `adWordsExact` on both sides — never re-read for prices / advert words, a trailing "+" is part of its
+  word; a tie goes to exact; no mark = the .96 rule; `adVideoSets()` reads one set per id). Pure block `MY
+  ADS, MY VIDEOS (pure` after `adClipNote` (`myAdSetsPut` / `myAdWordsPut` / `myAdSetsDrop` / `myAdsRows`);
+  impure from `const MYADS_BUCKET`: `cloudRowPatch` = THE NARROW WRITER (re-read the row, change the named
+  keys only, PATCH on `updated_at=eq.<stamp>`, four tries, 20-s limits, then a pull; answers `pulled`),
+  `myAdsClipOk` (the address parsed: host, bucket, this login's folder), `myAdsWrite`, messages `MYADS_LIST`
+  / `MYADS_CHECK` / `MYADS_TICKET` / `MYADS_PUT` / `MYADS_WORDS` / `MYADS_DROP` / `SET_DELAY` (ticket and
+  writes: the extension's own pages only, `myAdsOwnPage`). A CHANGED VIDEO = A NEW SET ID, the old set
+  removed (a clip swapped under the same id tops a served chat up with a second video; the dashboard cards
+  make a new id too now); the same video again = nothing changes; a removal takes every set under the id.
+  `listingFromTitle`: a price no longer takes a short model number with it (`MODEL_NUM_RE`: "iPhone 8 150$"
+  was "iPhone", "MacBook Air M2 900$" was "MacBook Air M"; mirrored in docs/app.js). content.js
+  `adSetsOn(s, me)`: only a set that can apply on THIS computer opens the CHAT_CLIPS question (a choice on
+  one computer does not change what the others send); unread settings = the visit is queued, always (a
+  computer's own Settings videos used to go out with the gate skipped). The popup's delay slider saves ONE
+  key through `cloudRowPatch`, once, when let go (no answer = nothing saved); Settings' Save refuses when the
+  account's row could not be read first. `storeUpdUiOpen`: the My ads tab holds a store update only while
+  in use (`MYADS_IN_USE`). Dashboard: the computers' choices are one folded block (`#adOwnChoices`), sets
+  merge BY ID (`mergeSetsById`), an upload over 25 MB is refused; Settings lists this computer's sets and
+  counts the others. `store/smoke-myads.js` (163 checks, 51/51 mutants), `store/page-myads.cjs` (the real
+  page, headless, real recorded videos), boot-store (the store build: the real page, a real upload to a
+  stand-in, the row written on its stamp); two panels (design 3+1, diff review 3), no blocker, every
+  should-fix applied. NOT verified: the upload against the real Supabase project and a live Messenger send
+  — the owner's first choice is the proof (🩺 `mine=`, `adset=`; another computer must read `adset=-`).
+  Never a whole-row save for a choice or the slider; never swap a clip inside a set; never let a set made
+  for other computers open the question here; never accept a video that could not go out. HANDOFF "Open
+  after v0.21.97".
+- A VIDEO PER AD (.96, Nov 12 2026, owner: "a different video for a different ad, I don't want to send the
+  same video for all the ads"; a video for the computer the bot runs on; "choose the ad from the Facebook
+  account that is open"; "not every listing I will put a video"). New cloud key `adVideoSets` = [{ id, ads,
+  pcs, clips }], made on the dashboard's Videos tab (words of the ad's title, or an ad picked from the ads
+  the bots answered in the last 5 days; computers ticked; clips uploaded), read-only in Settings.
+  background.js pure block `A VIDEO PER AD` in the Try-it slice: `adVideoPick` (the title holds every word;
+  a comma = or; the longest alternative, then a set for this computer, then list order), `chatClipChoice`,
+  `adClipNote` (one USER-turn line), and outside it `chatClipsAnswer` behind the message `CHAT_CLIPS`
+  (serialized; a chat's set is remembered in `videoSetOf`, 3000 chats). content.js `maybeSendVideo` asks it
+  AFTER the .94 gate, when a usable set exists or the chat has a remembered one, and swaps `central`.
+  WHICH, NEVER WHETHER: `videoWhen` / [CLIP] still decide if a clip goes out. ONE LIST PER CHAT: a
+  remembered set stands; a chat with a video mark, a ledger entry or a retry and no remembered set stays on
+  the general list (a set made later never adds a second video); a set that is gone — even when no set is
+  left — = the served chat keeps what it has, the never-served one is chosen again and the stale id
+  forgotten; no answer from the worker = queued, never a guess. An ad with no set gets the general list, or
+  nothing when that list is empty. AN ACCOUNT THAT NEVER MADE A SET IS ON THE .95 PATH (nothing asked,
+  signature and prompt byte-identical). A set's clip is never put on disk on the store build; the
+  in-extension copy holds five clips. `store/smoke-advideo.js` (32/32 mutants), `store/page-advideo.cjs`
+  (the real dashboard page, headless), boot-store's CHAT_CLIPS + Settings checks; one independent review,
+  ten of eleven findings fixed (HANDOFF). NOT verified on a live Messenger send. Never move the question
+  above the gate; never let a served chat change list. HANDOFF "Open after v0.21.96".
+- TEACHING v29 = SAID, NOT PASTED (Nov 13 2026; owner: "make the auto reply more human like and less chance to get
+  suspended ... as efficient as consistent", then "yes go ahead" to four changes). `store/teaching-sim/teaching29.js`
+  → `teaching-2026-11-13-v29.md`, THE paste, replaces v28: FIVE boxes, the Address box too (now plain `757 rue
+  Beaubien E, Montréal (métro Beaubien)`). WRITTEN AND TESTED, NOT PASTED YET (his private copy page:
+  https://claude.ai/artifact/MxkixLpZ53sMkvLkEbf7gC). (1) the starting price of THEIR model in a sentence, never the
+  family line or the list; a budget = the two or three models that fit; Samsung / iPad = the range of their group,
+  said about the group, never the lowest number pinned on their model; (2) the fine print once, one short sentence
+  in plain words (limited quantities, nothing held, first come first served), never the notice, never to a seller;
+  (3) PLAIN FIGURES BY HIS OWN YES: 757 and the phone numbers in plain digits — this reverses the v28 veto in the
+  next entry; do not bring the keycaps back without his word (`shopDigits` is inert once the Address box is plain);
+  (4) the first text answers first and always carries the model's starting price for a buyer. The rules about
+  varying wording from one chat to the next are gone: the model sees one chat per call. Built FROM v28 (`require`,
+  named paragraphs swapped, every other fact byte for byte); every example price is computed from the owner's own
+  price lines. `post29.js` = what the buyer receives + the checks; `ab29.js` = the blind file. Seven buyers × three
+  turns, six rounds of Haiku stand-ins: 8 scripted faults → 0 on the final file (`out29f`), every iPhone price right;
+  blind review (two reviewers, five buyers): v29 more natural 5 of 5, 3.5-3.8 → 7.0-7.4 out of 10, "spam?" yes /
+  maybe → no. NOT tested through the API on `claude-haiku-4-5` (no key on this PC): the first real chats are the
+  proof. Honesty unchanged ("the shop's automated assistant"); no timing, scan or limits code touched; no release.
+  HANDOFF "Twenty-ninth request".
+- TEACHING v28 = NO CAROL IN THE CLOSE, THE SHOP'S OWN DIGITS, THE CLOSE COMPOSED (Nov 10 2026, later that
+  evening; owner: "every chat you keep mention carol stop that; the address and phone number should be like
+  7️⃣5️⃣7️⃣ rue Beaubien E and the number in these emojis; the most optimized for three replies, non detectable
+  that it is a bot"). `store/teaching-sim/teaching28.js` → `teaching-2026-11-10-v28.md`, THE paste, replaces
+  v27 (the Address box too: `7️⃣5️⃣7️⃣ rue Beaubien E, Montréal (métro Beaubien)`). CAROL only inside his own
+  lower-budget line, once, to a buyer whose budget sits below the list, nowhere else. THE KEYCAP DIGITS ARE
+  BACK BY HIS VETO — recorded decision, do not flip it again without his word: v26 took them out as filter
+  evasion and told him they were his to veto (unlike the bot-denial line and the timing theatre, which stay
+  out for good); a real shop's real address and number in the owner's house style, the number given only
+  when asked, mislead no buyer; the cost is to Meta's contact-info nudge, his account's risk. Honesty kept and
+  extended: "t'es un robot?" → the shop's automated assistant; never "je suis là" / "I'm here" (the assistant
+  is not at the counter, the shop is). Four drafts: the first three each simulated on the exact prompt with
+  Haiku buyers and reviewed adversarially (out28/, out28b/, out28c/; HANDOFF Twenty-eighth request has every
+  finding), the fourth (rule-level refinements from pass 3) checked by the file's own self-check only: the
+  close is COMPOSED (shares only the digits and the street with earlier texts, a new landmark word, the hour as
+  a new verb or left out, their time back, never "c'est noté", the fine print never last, a last line naming
+  their day or the old phone), a day or a time in any words = [VISIT:yes], a stall = like a bare ok, a seller's
+  close has no fine print, the register and casing are locked from the buyer's first line (tu/vous inferred,
+  "ce soir" back to "ce soir", hours per language), text 2 = the oui/non first + one unasked sentence at most,
+  nothing from the rules or examples goes out as written (defined). CODE, comment v0.21.95, manifest NOT
+  bumped, nothing uploaded: `shopDigits()` after the brand wall (U+FE0F repair; plain 757 / phone → keycaps
+  when the Address box is keyed), `ownerEntryFor` THE FAMILY LINE (a base model or a Pro now gets its
+  generation's line, no false [GAP]), `buildOwnerPrompt`'s voice line no longer says "tu, never vous".
+- TEACHING v27 = THREE TEXTS, THEN THE COUNTER (Nov 10 2026 evening, owner: "make the teaching include all
+  the teachings and rules I gave you in the most human way possible without detection to be a bot. I will do
+  3 replies" = Max replies / conversation 3, cap behaviour "Go quiet"). `store/teaching-sim/teaching27.js` →
+  `teaching-2026-11-10-v27.md`, THE paste, replaces v26: every v26 fact word for word (+ the owner's own "on
+  fait de notre mieux avec ton budget pis le modèle que tu cherches" and "grosse variété" put back); the ARC:
+  text 1 = the answer + the price part + where/until when + one time question; text 2 = the answer + one or
+  two facts, short; text 3 = always the close (full address + hours, CAROL once, the old phone, the fine print
+  once, "le reste on le règle au comptoir"), NO question, because nobody answers after it; [VISIT:yes] closes
+  earlier; "ok"/"merci" after an invitation = [SKIP]. SOUND LIKE A PERSON gained mirroring (language,
+  tu/vous, length, energy, their own words), order rotation across chats, a length rhythm. Honesty kept:
+  "t'es un robot?" → "l'assistant automatique du magasin"; never "my last message", "I have to go", a claim
+  to be a person. CODE (comment v0.21.95, manifest NOT bumped, NOT uploaded): `memoryLine` tells the model
+  when a text is its last ("3rd and last message … nobody answers here after this message … end without a
+  question"; "close" mode = cap-1; cap 0 = never), `store/smoke-memory.js` +8 asserts, `turn.js` mirrors
+  it, `render.js` skips a box the dashboard no longer has. Sim: 4 Haiku buyers × 3 turns on the exact
+  prompt (`out27/`), 0 refusals, every 3rd text a close without a question, 0 banned phrases.
+- SUBSELL OUT + THE CLIP ONLY WHEN ASKED (.94, Nov 10 2026, owner: "remove the SubSell website and name,
+  links, anything that detects a bot; as if a human is sending"; his Facebook account was suspended).
+  NAME: `shopNameFor()` keeps the developer default "SubSell" out of every prompt (`DEFAULTS.businessName`
+  is ""); THE BRAND WALL `brandWall()` drops any sentence naming SubSell or carrying a link / e-mail before
+  a text or follow-up goes out (empty = held; a walled follow-up = a plain skip); THE CLIP ONLY WHEN ASKED
+  (`videoWhen` asked/always/never): a `[CLIP]` prefix from the model or the buyer's own ask → `markVideoWanted`
+  → `maybeSendVideo` sends only to a chat that earned it; the seed is the shop only; manifest / popup /
+  Options / dashboard renamed (no SubSell); the Chrome-sync mirror is retired. DELIBERATELY NOT SHIPPED,
+  and never to be re-added: any human-mimicry timing (a fake "typing…" indicator, waits engineered so no
+  two chats look alike, a night pace, a per-chat typist persona) and any bot-denial line — the simulation
+  agents refused to write such replies and both sessions agreed it is deception of buyers and evasion of
+  Facebook's enforcement; the .93 timing (Response delay + Jitter + typing pace, the .86 break roll) stands.
+  Teaching v26 = THE HUMAN SHAPE, HONESTLY (`store/teaching-sim/teaching-2026-11-10-v26.md`: 1-3 sentences,
+  the buyer's order, each fact once, the close carries address + CAROL + fine print, "t'es un robot?" →
+  "c'est l'assistant automatique du magasin", plain phone numbers, 757 in plain digits).
+  `store/smoke-human.js` + 36 others green; HANDOFF "Open after v0.21.94".
+- THE API LINE (.93, Nov 3 2026, owner's two popup photos: "API key set ✓ · Replying yes ✓ ·
+  Last 24 h 0 / 500" on two computers while a dozen buyers waited up to 4 h; "api connection
+  failed"). The STATUS box had no line for the outcome of the Anthropic call ("last error" sits
+  below the slider), and content `oweOrGiveUp` stamped a buyer handled after three refused API
+  calls of ANY cause — an outage's buyers stayed silent after the API came back. Now: background
+  pure block `THE API LINE` (`apiFold`/`apiErrorHint`/`apiStatusLine`/`apiDiagLine`/
+  `apiReportDue`) + `apiNote` hook from `postClaude` (typeof-guarded: the Try-it slice stays
+  chrome-free) → popup row "Claude" (✓ answered at HH:MM / ✗ not answering for N min — what +
+  fix from Anthropic's error type), 🩺 `api:` line, hidden row kind `apierr` (streak start,
+  hourly, recovery) + one notification per hour; GET_REPLY_SIMPLE answers `api: true` on a
+  failed model call (an empty output does not). Content: `apiParkMessage` keeps the owed turn
+  with no try spent (`oweText(…, {noTry:true})`, an API-opened entry starts at 0) and parks the
+  chat 10 min; `freshLookAtStamp` drops, once per chat (`stampRepaired`), a stamp with no text
+  of ours behind it (no count, no clip pending, 0 confirmed own bubbles; fails closed) so the
+  outage's buyers get answered after the update. Dashboard: `apierr` hidden, `apiHealthLines` →
+  `#fleetApi` on the Activity tab (the refused computers + the fix). `store/smoke-api.js` (99),
+  16/16 mutants, headless-Edge boot of the store build with a stubbed Anthropic (19). From this
+  PC the account's key answers on claude-haiku-4-5 with the v17 teaching (prompt ~22.7k tokens):
+  the fleet's cause needs a 🩺 — HANDOFF "Open after v0.21.93". Never stamp a message handled
+  on an API refusal again; never let a status box hide the API outcome.
+- FACEBOOK'S FRENCH NOTICES FILLED THE CAP (.92, Oct 25 2026, owner: "same account, same issue";
+  🩺 PC-uj2vq on .91: calls=1 vs 7 video rows overnight, replyCapped=68/87 with texts24h=2, a row
+  whose "latest message" was "Afin d'aider à identifier et réduire les arnaques…"). The reader
+  knew only the EN Meta notice; the FR scam notice + the encryption line read as two bubbles of
+  OURS → a new chat was at the two-reply cap before the buyer spoke → `atConvoCap`: question
+  stamped, clip sent, nothing typed; .90 had persisted that count for 68 chats. Fixes: `isNoise`
+  / `SCREEN_RES` / `snippetSuggestsBuyerLast` know the FR/EN notices; `ownTextCount` counts
+  confirmed own bubbles only (painted / echo / right-hugging — no-geometry blocks never);
+  `repairReplyCounts` once per install at load (`replyCountsRepaired92`, 🩺 `counts repaired=`);
+  a pre-send "claimed" owes the text; 🩺 `actions (last 24…)` = the status trail (the current
+  action alone hid 90 min of visits). `store/smoke-mute.js` section 7. Cap value/mode untouched.
+- A CLIP, THEN SILENCE (.91, Oct 24 2026, owner: "some accounts are not sending messages but
+  sending videos"; 🩺 PC-j2qrz: Jimmy "Jimmy: · 1h" replies=0 SUPP, Amel "Amel: 11pro · 20h"
+  replies=1 SUPP, both vmark=sent). Four causes, one rule — the clip is the text's companion:
+  (1) VERDICT BEFORE THE CLIP: handleThread awaits GET_REPLY_SIMPLE BEFORE the video engine;
+  a Claude error / budget hold / [SKIP] / answered elsewhere / guard hold / [HUMAN] sends NO
+  clip; the billed text is memoized before the attach; a text that cannot go out is OWED
+  (`textOwed`, `oweText`, content lane 1.2 after lane 1 — the row reads "You sent a video."
+  by then, so no other lane came back) and replayed free; (2) EMOJI ARE PICTURES: Facebook
+  draws every emoji as <img alt>, so an emoji-only bubble / preview read as nothing →
+  `isEmojiAlt`/`emojiAlt` (reader pass 1 + pass 1.2, `sidebarSnippetBody` → `{emoji:true}`,
+  an empty "Name:" body → `{media:true, blank:true}`); (3) THE SIDEBAR IS THE WITNESS: after
+  the 3rd read that cannot find the message the row attributes to the buyer, `turnFromSidebar`
+  answers the row's own words (transcript ends with that line, key = one more buyer bubble,
+  `fromSidebar`, `sidebarTurnNow` for the pre-send recheck) instead of the idle verdict
+  (6 h SUPP + clip); (4) THE CAP COUNTS OUR BUBBLES: `ownTextCount` (painted / right-hugging /
+  echo; never a left-hugging unpainted "me") → `turn.youTexts` → background `youLinesOf`
+  (falls back to the "You:" line count for an older content script). Also: the E2EE notice
+  and the Marketplace Assistant are not a waiting buyer. 🩺 `rescue: sidebarTurns= textOwed=`.
+  The same-evening audit (3 readers + 6 refuters) added: `isOwnEcho` is exact-or-90 % and LOCAL
+  (`rememberSent` stores `{t, id}`; its substring rule read a buyer's "iPhone 17 Pro Max" as our
+  own bubble); a blank row never adopts an attachment (`mediaHint`); every hook-less clip pass
+  (dedupe / echo / idle / cap) is gated by `chatHasOurText` — no fresh set for a chat with no
+  text of ours; `textOwed` carries the turn (`turn.owed`, adopted on the revisit, 3 tries then
+  let go, lane 1.2 paced by the cooldown); `readConversation` bounds by the PANE's box, not the
+  textbox (short left-hugging bubbles were dropped); "waiting for your response" walls match
+  the system form only; `isChatTitle` ignores a buyer's own name; accidental empty model output
+  is an error (retried), [SKIP] stays silence; `memUnclaim` on every non-delivering verdict; the
+  owner prompt never [SKIP]s a first message; the cap persists only a DELIVERED count
+  (`cloudTexts`). `store/smoke-mute.js` (99), `store/build-fleet-zips.ps1`. The read's
+  attribution itself is unchanged (ambiguity → "me"); atConvoCap still gives a capped chat its
+  one clip set when the chat holds a text of ours (owner's design).
+- A STORE UPDATE INSTALLS ITSELF (.90, Oct 23 2026, owner: "should be only from the link, I
+  don't want to play with developer modes"). Chrome installs a downloaded store update only
+  when the extension is IDLE; SubSell never is (the Messenger tab messages the worker every
+  8 s): .89 sat downloaded 22 h on the owner's PC, computers showed old versions, and a
+  Settings page opened during Chrome's own late swap read "ipompok… is blocked
+  ERR_BLOCKED_BY_CLIENT". background.js block `A STORE UPDATE INSTALLS ITSELF` (after
+  STORE-STRIP:END, so it ships in the store build; pure `storeUpdateDecision`,
+  `store/smoke-storeupdate.js`): `requestUpdateCheck` at start-up + every 2 h;
+  `onUpdateAvailable` → PAUSE_SCANS (send in flight finishes) → 10-s settle, no tab busy →
+  `storeReload()` = `chrome.runtime.reload()` (onInstalled re-injects content.js). Never
+  while Settings/popup is open (`getContexts`); popup "Update now" = force; busy 20 min →
+  resume + rest 1 h; 3 failed reloads → left to Chrome. smoke-store allows exactly this one
+  reload. 🩺 `sud: STORE(installs itself) upd=…`. Computers on ≤ .89 still wait for Chrome's
+  own idle swap (or a Chrome restart) to reach .90 — from .90 on, an update lands at Chrome's next
+  extension check: 6 h at most on a Chrome that stays open, a minute after a restart. NOT "~2 h": after
+  each completed `requestUpdateCheck` Chrome answers `throttled` for 5 h (Chromium source, read Nov 13
+  2026; HANDOFF "Open after v0.21.97", first bullet), so two of three 2-hourly asks are refused.
+- WHERE THE TEACHING LIVES (.89, Oct 21 2026, submitted to the Web Store the same day; the
+  dashboard part is live): the dashboard is the ACCOUNT's page (teaching, fleet line, account-wide Activity),
+  the extension's Settings is ONE computer's page — keep it that way. The popup and Settings
+  now open the dashboard at `#business` / `#activity` (docs/app.js `applyHashTab`), and a
+  Settings save MERGES over the account's current row (options.js pure block `SAVE OVER THE
+  CURRENT ROW`: typed boxes win, untouched boxes keep the account's value, lists item by item;
+  `CLOUD_PULL` first with a login, bounded 10 s) — an .88 page's Save overwrote the whole row
+  with its stale snapshot. Never duplicate the teaching UI into the extension; never iframe
+  the dashboard in it. `store/smoke-where.js`. Release = HANDOFF "Open after v0.21.89".
+- THE LISTING (.88, Oct 19 2026): the chat label "Buyer · headline" gives the ITEM, never
+  its price — `listingFromTitle` (prices + advert words out), `ownerEntryFor` (the owner's
+  Listings row / price-list line for that model, `sameModel`: same number + qualifiers),
+  `listingContext` → the USER turn (sheet unchanged across chats); unavailable row = said,
+  no starting price; no entry = no price + [GAP]. Lessons carry `item`; `lessonClash` keeps
+  another model's lesson out; recall needs a subject from the MESSAGE. Dashboard: gap list
+  per listing + "about:", Teach it/👍/corrections store `item` (`itemBound`), Try-it listing
+  box, LISTING-MIRROR block (parity-tested). `store/smoke-listing.js`. Simulated on Haiku
+  before shipping (6/6 item questions right, 0 headline prices).
+- SETTINGS → ACTIVITY LOG (.87, Oct 19 2026, rides with .88): that tab is THIS install's `replyLog` only (per computer, per extension id —
+  the store copy starts empty; written on delivery). An empty list now explains itself
+  (options.js `emptyLogLines` / `explainEmptyLog`, `#logWhy`): install date, Bot ON/OFF (a
+  new copy starts OFF), cloud login, API key, Messenger tab (`GET_STATUS` `installTs` +
+  `messengerTabs`), today's count, link to the dashboard's Activity — the account-wide log.
+  `store/smoke-logwhy.js`. Web Store probes need `prodversion` + `acceptformat` or the update
+  server answers `noupdate` for every version (the item is fine). Release = HANDOFF
+  "Build / test / ship"; .86 was approved between Oct 14 and 19.
+- THE LIMITS ARE THE LIMITS (.86, Oct 14 2026, operator: "the newest Chrome store extension is
+  not respecting the limit of messages … every setting box … the learning phase"). The old
+  counters counted a reply at GENERATION (aborted = counted, replay = twice), never the
+  courtesy close / timed follow-ups / visit checks, reset in fixed hour/day blocks, lived in
+  each install's storage (the store item = a new extension id = every capped chat back at 0),
+  applied the warm-up ramp to the alarm path only, and the five Human-cadence boxes were read
+  by nothing. Now `background.js` LEDGER block (`/* ===== (v0.21.86) THE MESSAGE LEDGER` →
+  `LEDGER END`, pure, `store/smoke-limits.js`): `sendLedger` = one entry per DELIVERED message
+  from the same `LOG_EVENT` as the Activity row (text / followup / video × `n`); `budgetState`
+  = sliding 60-min / 24-h windows, 0 = unlimited everywhere, asked by GET_STATUS,
+  GET_REPLY_SIMPLE, GET_FOLLOWUP and the alarm handler (parks, never drops); clips count only
+  with `capsCountVideos` (NEW key, off); per-chat cap = the HIGHEST of this computer's count,
+  the chat's own "You: …" lines (`youLineCount` — works with no login, no cloud) and the
+  chat's cloud text rows (`memTextCount`, 5-day retention) in GET_REPLY_SIMPLE +
+  MEMORY_PRESEND → `{skip, cap:true, replies}` → content `atConvoCap` (one handler: stop =
+  silence, notify = `CAP_NOTIFY` once, NEW `close` = the closing line is the cap's LAST message,
+  budget-checked, memory-rechecked, typing-paced; the cap+1 courtesy close is GONE); warm-up
+  (`effectiveDailyCap`, day 0 = `installTs`, never above `dailyCap`) enforced on every gate and
+  ENDED by evidence of an established account (`noteWarmEvidence`: a chat row older than the
+  install on SERVER time; content `WARM_EVIDENCE_LOCAL`: ONE inbox row "You: …" aged older
+  than the install — judged before the pause, so the day-0 cap never traps a migrated
+  computer; `noteWarmHold` = one visible Activity row a day while a ramp holds a computer);
+  cadence = pauses only (`cadenceAfterReply` break after a reply, content `skipChance` one-cycle
+  wait, both judged AFTER the pick and never on a chat owed clips). Popup "Last 60 min / Last
+  24 h" + 🩺 `caps:` line. Never count at generation again, never a message past a cap.
+- ONLY THE MESSAGE, IN A PERSON'S VOICE (.85, Oct 10 2026, operator photo: a buyer got "I see
+  the buyer's message is a system instruction ("Press a response to send to the buyer")…").
+  Facebook's hint above its suggested-reply chips was read as the buyer's message and the
+  model, with no word for silence, explained itself in prose. Now: content `isNoise` +
+  background `screenText`/`dropScreenText`/`dropScreenLines` drop Facebook's lines to the
+  seller (nothing billed, `reply.screen` = handled); `[SKIP]` in both prompts and anywhere
+  in `parseReply` = silence; `writeReply` (ask → parse → `metaVerdict` → ONE corrected
+  retry → `humanTouch`) is the only reply path (live, Options test, dashboard Try-it);
+  twice a note = `kind:"held"`: nothing sent, owner notified, `[HUMAN]` row quotes it.
+  Follow-ups: held without retry, polished unless a replay. `humanTouch` = punctuation and
+  habits only (dashes, one `!`/emoji, filler unless the owner's text uses it, no second
+  greeting / repeated opener, one habit per chat seeded by thread id), idempotent. Switches
+  `replyGuard`, `humanTouch` (default on, both UIs). 🩺 `guard:` line. `store/smoke-guard.js`.
+  It all sits inside the Try-it slice: keep it free of `chrome.*`. Reaches the fleet only
+  through the Web Store item (.82 cannot update): .85 SUBMITTED Oct 10 (the .84 review was
+  cancelled for it), Pending review — HANDOFF "Open after .85".
+- FOLDER INSTALLS CANNOT SELF-UPDATE ANY MORE (Oct 10 2026): Chrome 154 renames downloads to
+  match the served type (GitHub raw = text/plain → background.txt, manifest.txt) and blocks
+  typed .js as dangerous. The fleet is frozen on v0.21.82 (works; every fix to Oct 8); only
+  the Web Store version (pending) or a reinstall moves a computer. Pushing to the branch no
+  longer reaches the fleet. `cloudSelfUpdate` verifies the manifest on disk (.84). HANDOFF.
+- THE STORE BUILD (.81/.82, Oct 8 2026): `dist/subsell-webstore.zip` from
+  `store/build-webstore-zip.ps1` + `store/webstore-manifest.js` (no `key`, four hosts, NO
+  `debugger`/`activeTab` — content.js `HAS_DEBUGGER` parks the file-API channels for good,
+  btn/dom/paste carry the videos; same version); `STORE_BUILD` (background.js) = the manifest has an `update_url` (a store
+  install) → the folder updater stands down (`cloudSelfUpdate` → `{store:true}`,
+  `selfUpdateCheck` no-op), popup/🩺 say so. Unlisted item; per computer: install from the
+  link → Options → Log in → remove the old unpacked entry. `store/STORE-SUBMISSION.md` is
+  the walkthrough; Oct 10 2026: NEW item ipompokpmlhgaioihnlbnmnhendcnejo (v0.21.85 since the evening, Unlisted, pending review); the old item imhlnnlfpphelledfiiponhoeaebapmm is ARCHIVED (keep it archived — duplicates break policy). A new item's remote-code radio defaults to YES — always set No. HANDOFF has the details.
+  The teaching was never erased (verified in the row + history, Oct 8): "erased" = the
+  5-day Activity feed or a computer's own Settings page; "ignores the teaching / double
+  videos" = the computers stuck on builds older than .73/.77. `store/smoke-store.js`.
+- THE CALM COMPUTER (.80, Oct 8 2026: "opening tabs to upload the videos … we can't even
+  use the computer … we can't even close the tabs"): the heartbeat's un-minimize (.44) and
+  the tab reopen (.18) were the on-screen habits. Now `ensureMarketplaceTab` asks
+  `calmReopenDecision` (a tab a person closed stays closed 3 h, until 07:00 after a second
+  close the same day — `tabs.onRemoved` on a known Messenger tab → `tabClosed`; never while
+  a person was seen in 15 min), the un-minimize is OPT-IN (local `keepWindowsRestored ===
+  true`, Options → Power features) via `calmRestoreDecision`, `videoForeground` is refused
+  for a person, the tab-switch/cascade helpers stop for a person. A person = focus / tab
+  events the bot did not make (`noteHuman`, `botActing(ms)` before every own
+  windows/tabs update) + trusted input on the Messenger page (content `HUMAN_SEEN`, never
+  while `busy`). A minimized window keeps replying on TICK_NOW + the .67 gate. Popup row
+  "Computer"; 🩺 `calm:` line. `store/smoke-calm.js`. Never bring back a default-on
+  window/tab habit. RETENTION: `supabase/retention.sql` (pg_cron hourly: feed 5 days,
+  teach/usage 35, video 60) applied Oct 8; `deploy/supabase-heal.mjs --retention --purge`.
+  COMPUTE: Micro since Oct 8 12:20 Z (`--upgrade`, PATCH not POST).
+- THE DEAD KEY + THE SECOND DOOR (.79, Oct 7 2026: "Activity log ✗ HTTP 404 {"error":"not
+  found"}", "API key NOT set", "cloud sync frozen"): the 404 is subsell-log's — the cached
+  `configKey` matched no row (dashboard "Regenerate key" / a changed account) and was never
+  re-read. Now the key rides on every full pull (`adoptRowKey(row, user)`; select
+  `config,updated_at,config_key` — keep that order, the harnesses match on it) and carries
+  its OWNER (`configKeyUser`: the login's user id, "" for a pasted URL); a key not tied to
+  the login is re-read with one full fetch; `cloudLogin` drops a foreign key; only the
+  functions' own 404 body {"error":"not found"} is a dead key (`deadKeyAnswer` →
+  `dropConfigKey` → `configKeyDead`; 🩺 `logKey=DEAD`); the mirror looks it up once and
+  re-sends. SECOND DOOR: a login that exists but cannot refresh pulls the settings through
+  `subsell-config?key=` (`cloudPullViaKey`: THIS login's key only, 5-min pace, 20-s
+  timeout, no /token; the shared `applyPulledConfig(cfg, stamp, force, via)` keeps the wipe
+  guard; heal/seed never through the key; shut after Log out; a late answer after the login
+  came back is dropped; breadcrumb `cloudKeyDoor` — `okAt` is zeroed by ANY failure, the
+  popup claims only from it), and the chat memory reads through subsell-log `read`
+  (`memFetch({q, read})` / `memKeyDoor`: same owner rule, 2-min back-off after a
+  timeout/5xx; needs the .79 function, else `memStats.keyUnsupportedAt`, asked again
+  hourly). Both functions rewritten with NO imports (plain REST + service role, 10-s db
+  timeout → 504 "db timeout") + key-first + `read` — DEPLOYED Oct 7 23:58 Z
+  (`npx --yes supabase functions deploy <fn> --project-ref tcqunihripihroseswgy --no-verify-jwt`,
+  the owner's access token, chat switched out of Auto mode first — the classifier refuses
+  production actions in Auto). Mirror POST 25-s abort. Oct 7 21:30–23:56 Z the PROJECT (Nano
+  compute) went Unhealthy, every service down, the fleet on local copies;
+  `deploy/supabase-heal.mjs --restart` (Management API) healed it in ~4.5 min; such an outage
+  looks like "offline" waits + "✗ no answer from subsell-log in 25 s" on every computer —
+  probe PostgREST WITH the public key before blaming the code; Micro compute is the standing
+  recommendation (`--upgrade`, the owner's money). `store/smoke-keydoor.js`, `store/smoke-edgefns.js`. Never add a
+  third door: every /token call still goes through `cloudValidAuth` / `cloudLogin`.
+- LOGIN STORM (.78, Oct 7 2026: "cloud sync frozen" + "Request rate limit reached"):
+  Supabase Auth's /token budget is per INTERNET ADDRESS (150 / 5 min) and shared by
+  refreshes AND password logins; the old `cloudValidAuth` retried a failed refresh on
+  every call on every Chrome, and the dashboard's `signOut()` (default scope global)
+  ended every computer's login. Now: refresh 10 min ahead IN THE BACKGROUND (a caller
+  with a valid token never waits), one at a time (20-s timeout), a persisted wait after
+  a refusal (`cloudAuthHold`: limited 2→15 min, offline 30 s→5 min, error/409/5xx
+  1→10 min, ended — only on GoTrue's "gone" codes — 30 min→2 h), nothing sent while
+  waiting except one try per 15 s for a click (Save / Restore / Pull now);
+  popup/Settings say which wait and whether it ends by itself; a rate-limited login
+  retries itself while Settings stays open (one countdown ever: `loginGen`); Log out
+  asks first; dashboard signs out `scope: "local"`. 🩺 ` tok= auth=`.
+  `store/smoke-authcalm.js`, `store/smoke-loginretry.js`. Every /token call
+  must go through `cloudValidAuth` / `cloudLogin` — never add another.
+- VIDEO DOUBLES FIXED AT THE ROOT (.77, Oct 6 2026, from PC-dodu3's 🩺): the btn
+  channel's page shim (`pageArmFileShim`) was RENEWED, not rebuilt, when the next clip
+  armed inside its 20-s life, and handed Messenger the PREVIOUS clip again — clip 3 of
+  every set went out as a second clip 2 (`rx:o0…` on clip 3), clip 1 twice or three
+  times when no reply separated clips 1-2. Now one arm = one fresh shim with its own
+  clip, delivered once; an old shim's timer cannot unhook a new one; never a fall-
+  through to the native click (= a Windows dialog). Evidence: btn `[rearm=N]`, trace
+  ` dup:clipK`, memory `videoBlind=`. The .76 "zero reaction ⇒ unverified" rule must
+  NOT ship. Real-Chrome harness pattern: HANDOFF .77.
+- HOURS (.75): buyers are answered 24/7. `withinBusinessHours` gates a reply only when
+  `replyWindowOnly` (NEW key, default off) is on; the OLD `businessHoursEnabled` is read
+  by nothing here but is `true` on every live row and gates the builds before .75, so
+  the dashboard writes it `false` on every save (`LEGACY_GATE_OFF`) and once on open
+  (`legacyGateArmed`). The two hour fields now window the messages the BOT STARTS:
+  `withinNudgeHours` (smart follow-up) and the alarm handler, which PARKS a follow-up /
+  visit alarm due at night (`nextNudgeWindowStart`) instead of dropping it. 🩺
+  `replies=24/7 nudges=9-22`. EVIDENCE for the video complaint (do not fix blind — three
+  fixes already did): the teaching receipt carries `mem=on|off` (cloud login → can read
+  the Activity log; a `mem=off` computer re-answers and re-sends clips, the fleet line
+  names it); the Videos tab has "Where the videos went" (`videoReport`: double-served /
+  short chats, incl. the structural case — `memVideoSent` is binary per chat, so a set
+  left at 1/2 by one computer is never completed by another); the toolbar "Copy report"
+  button gathers everything support needs as text, no key. `store/smoke-hours.js`.
+- LEARNING WITHOUT CODE (.74). Teaching never needs a code change: Business tab +
+  Activity tab reach every computer in ~1 min. What .74 added — (a) NOTHING DROPPED:
+  rules are never evicted (61st refused out loud), the 120 newest graded answers are
+  kept (docs/app.js `trimCoaching`); the sheet carries every rule + the newest 30
+  answers, and `lessonFor` recalls older ones by SUBJECT (`lessonKeys`, FR/EN table
+  `LESSON_SUBJECT`) beside the buyer's message; a 👎 left unchanged teaches nothing
+  (`coachUsable`). (b) `[GAP]` token: the bot marks a reply when the owner's text had
+  no answer; `parseReply` strips it (any spelling); hidden row kind `gap` → dashboard
+  "teach these" list. (c) TRY IT box (Business tab): the dashboard fetches
+  `../background.js` and runs the slice between the comments `/* ===== (v0.21.73) THE
+  OWNER IS THE ONLY TEACHER` and `/* ---- video fetch ---- */` — **those two comments
+  are a contract, and the code between them must stay free of `chrome.*`**.
+  (d) ECONOMY: `postClaude` sends the 1-hour cache marker (falls back to 5-min on a
+  400, remembered a week); it only works when the sheet reaches the model's minimum
+  (4096 tokens on Haiku 4.5, 1024 on Sonnet 4.6); `aiUsageNote` meters the API's own
+  usage numbers (🩺 `usage:`; hidden rows kind `usage`; dashboard bill + per-model
+  estimate under the model list). Hidden Activity kinds: claim, teach, gap, usage
+  (`HIDDEN_KINDS` / `messagesOnly`). `store/smoke-learn.js` + smoke-teach §7–10.
+- TEACHING (.73): THE OWNER IS THE ONLY TEACHER. `ownerTeachingOnly` (a NEW key, default
+  on) → `buildOwnerPrompt` (background.js): the owner's sections first, in tags (info,
+  instructions, rules, corrections, prices, listings, closing goal, examples), a contract
+  ("this text is all you know; a gap is an invitation to ask at the counter, never a guess"),
+  then mechanics only — NO playbook, NO phrasebook, and an unwritten Instructions /
+  Closer-goals box is one neutral line (`settings.ownerWrote`, set by getSettings), never
+  this file's DEFAULTS text. Off = the .72 prompt byte for byte. `lessonFor` puts a graded
+  lesson whose buyer text matches the incoming message beside it in the USER turn.
+  THE CHAT'S TITLE ("Name · listing headline") is no longer read as a line of the chat:
+  content.js `labelLike` drops UNPAINTED title blocks at the read (`legacyKey` keeps
+  older dedupe keys valid — an update must never re-answer a chat); background
+  `isChatTitle` / `dropTitleLines` is the second wall. Every machine reports the code of
+  the teaching it answers with (`noteTeaching` → hidden Activity row kind "teach"); the
+  dashboard computes the same code (`teachingFingerprint`, mirrored in docs/app.js) and
+  names the computers that are behind. A dashboard save that loses the stamp race MERGES
+  (`saveMerged`: fields edited here win, lists merge item by item) instead of dropping
+  into a draft, and 👍 / Save lesson / Teach it show the real save result.
+  `store/smoke-teach.js`, `store/smoke-merge.js`. 🩺 `teaching:` line (mode, fp, sizes);
+  open chat `title=known dropped=N`. Field-unverified: judge from Activity rows.
+- CLIPS (.72): each chat has a CLIP LEDGER (`videoClips[chatId] = {s, t}`: sent /
+  handed over unconfirmed, by clip identity `clipIdsOf` — helper block above
+  `maybeSendVideo`, `store/smoke-clips.js`). The loop steps over held clips
+  (`heldAt`); a served chat that owes a NEVER-ATTEMPTED clip is topped up on the
+  buyer's next message only (`keyFlow`, needs `clipLedgerTrusted`); an unconfirmed
+  first clip later seen in the chat (DOM stop or watcher) is credited and the REST of
+  the set resumes (`noAdopt` marker) instead of the chat closing at 1 of 2; a stuck
+  last clip gets an adopt visit. An attempted-unconfirmed clip is still NEVER
+  re-dispatched. The dashboard's video list SAVES ITSELF on upload/remove and shows
+  sizes; every machine pre-downloads new clips (`prewarmDemoClips`). Switch:
+  `videoCompleteSet`. 🩺 `clips:` line. The popup's Resend also clears the ledger.
+- MEMORY (.71): the Activity log (`subsell_messages`) is READ BACK per chat before every
+  reply and video (`memThreadRows` → `memVerdict` / `memVideoSent` / `memoryLine`,
+  background.js; `store/smoke-memory.js`): a message another computer answered is
+  skipped, our own text read as the buyer's is skipped, a video any computer sent (or
+  this one before a wipe) is never re-sent (`via:"cloud"` mark; every "served
+  elsewhere" stop also sweeps this machine's own leftover tile + retry state), two
+  computers on one account settle a new message with a hidden `kind:"claim"` row
+  (earlier `created_at` wins; withdrawn on a failed model call, never written by a
+  machine whose last call failed, dead once its text row lands), and the model is
+  told what it already said (facts/openers/video, user turn only — system prompt
+  still byte-stable). The text Activity row is now written ON DELIVERY by
+  content.js, not at generation. `typingPaceMaxSec` (20) adds a length-proportional
+  typing wait from `wpmMin..wpmMax`. `threadMemory` is the switch; the popup's
+  "Resend video to OPEN chat" overrides the memories for 10 min. Needs the cloud-sync
+  login; 🩺 `memory:` line must read `reads>0 fails=0`.
+- SAVES (.70): config-safety.sql v0.21.61 blocked EVERY save on a live account from
+  Sep 22 to Sep 29 2026 — the guard trigger ran as the caller and the history table
+  had no INSERT policy, so the dashboard said "Not saved … subsell_config_history",
+  every extension push failed behind "Saved ✓", and the .69 disarm never landed.
+  Fixed SQL = SECURITY DEFINER + non-fatal snapshot. **PASTED by the owner Sep 29 2026** (history count=1 verified) — the dashboard now hands it
+  over itself on that error (copy button + SQL-editor link) and keeps refused
+  teaching as a browser draft. Never ship a trigger that can refuse a save.
+  `store/smoke-sqlguard.js`.
+- Demo LINK (.69): the current build has NO link sender (deleted .60). Links a buyer
+  still receives come from machines stuck on v0.21.47-.51 (self-updater dead there),
+  gated on `videoLinkFallback !== false` read from the SHARED account row. Fix = the
+  row: all DEFAULTS now `false`, every outgoing write (push, sync mirror, restore,
+  dashboard save) carries `LEGACY_LINK_OFF`, `disarmLegacyLinkInCloud(held)` compare-
+  and-sets the four keys into the row after a pull whose held copy is still armed
+  (stores nothing locally; the fixed row comes back through the guarded pull), and the
+  dashboard does the same on open. Unreachable: a stale machine whose cloud session
+  died (frozen copy) — needs a re-login or Load unpacked. Never ship `true` again;
+  `store/smoke-linkoff.js`.
+- Playbook prompt (.68 — since .73 ONLY when `ownerTeachingOnly` is off): owner's text
+  first with a stated authority order, Activity RULES at the top as orders, a
+  BEFORE-YOU-WRITE lookup step, the 12-move closer playbook, the phrasebook padding to
+  Haiku's 4096-token cache floor. `nowLine()` puts the clock in the USER turn only (both
+  modes). `store/smoke-prompt.js` locks this mode in.
+- The periodic alarms are `ensureAlarm()` (create-if-absent): a top-level
+  `chrome.alarms.create` re-ran on every worker wake and reset the 10-min updater
+  and remote-config alarms forever. Machines still on ≤ .50 must update ONCE by hand
+  (popup → Update now) before they can self-update again.
+- Video retry: `blindTries` must survive the pre-send rebuild or the bounded retry
+  never ends. Attach failures are `why="blind"`, not `"attach"`. There is NO link
+  fallback any more (.60/.66): a video is a file or nothing.
+- Video attach (.67): a HIDDEN page that has never played media gets every media load
+  parked by Chrome (`prerender::DeferMediaLoad`; user activation is NOT a term of it),
+  and Messenger decodes a clip before staging it. `ensureMediaGate()` (content.js, top
+  of `attachVideo`) probes the gate with a tiny WAV and primes the frame by playing a
+  silent MediaStream — proven by re-probe, never assumed. `videoMediaPrime` is the one
+  video helper that ships ON (invisible; local off switch). A MAIN-world reaction probe
+  says whether Messenger READ the clip (`rx=`); read-but-unstaged is "unverified", never
+  "none". `videoActivationPulse` (F16 key via CDP) is an OFF experiment.
+- Diagnose ONLY from a pasted 🩺 block. Read `vis=`, `gate=`, `primed=`, `rx=`, `pile=`
+  first. Channel stats read d/t/b/n/u (dispatched, tile, blind, none, unverified) +
+  `[rx:… held]` + `[picker:…]`. `persistentInput=none` = Messenger's file input not found.
+
+## Cheap work
+- Read with `grep -n` / `sed -n` ranges; the two JS files are 8k lines — never dump them.
+- `node --check <file>` before any commit. No multi-agent workflows.
+- Shell trap on the owner's PC: a Bash heredoc turns two backslashes into one, and the
+  Write tool turns a `\u` escape into the character itself. Spell such strings with
+  `String.fromCharCode(...)` or a `\p{...}` class, and grep the diff for backslashes.
+  `git stash` / a checkout rewrites the working files as CRLF (autocrlf): do not stash;
+  if it happened, turn the modified files back to LF with node before testing or zipping.

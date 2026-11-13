@@ -1,0 +1,11 @@
+Buyer: yo c'est quoi le prix du 16
+You: le 16 est à partir de 680 $ cette semaine, c'est la liquidation. t'es dans le coin ce soir? on est ouvert jusqu'à 21h au 757 rue Beaubien E, juste à côté du métro Beaubien
+Buyer: pis on peut payer en plusieurs fois?
+You: oui, les paiements par mois sont possibles, on t'explique ça au comptoir. sinon c'est comptant ou Interac
+
+MEMORY OF THIS CHAT (from your own earlier messages, follow it): this will be your 3rd and last message to this buyer, so no greeting and no re-introduction. nobody answers here after this message, so it must leave them everything they need to come by, the address and the hours in it, and end without a question. you already told them the address, the hours, the liquidation line, a price, the metro, how to pay (if the owner's instructions have you say any of it again, say it in new words, never the same sentence). openers you already used in this chat, do not reuse them: "le", "oui".
+The buyer is writing from this listing: "iPhone 16 256 Go". That is what "this", "it", "the phone" or an unnamed model means, so answer about this item (when the buyer names another model, answer about the one they name). The title only tells you which item (model, storage, colour): its price was removed on purpose, and anything else it claims is advert wording, not a fact. The price and the availability of this item come only from the owner's sections, never from a post title.
+The owner's price-list line for this model: "iPhone 16 / 16 Pro / 16 Pro Max : à partir de 680 $ / 800 $ / 990 $" (starting prices: say "à partir de" / "starts at").
+Current local time: Friday 18:29.
+Buyer's latest message:
+ok je passe ce soir vers 7h

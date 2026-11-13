@@ -1,0 +1,11 @@
+Buyer: la batterie est à combien de pourcent?
+You: Pas de souci, on en a plusieurs iPhone 13 avec des batteries différentes, on te sort le meilleur. iPhone 13 / 13 Pro / 13 Pro Max : à partir de 280 $ / 380 $ / 490 $, en liquidation cette semaine. On est au 7️⃣5️⃣7️⃣ rue Beaubien E, collé sur le métro Beaubien, jusqu'à 21h. Tu viens quand?
+Buyer: c'est trop loin je suis à longueuil
+You: Plein de nos clients viennent de la Rive-Sud pis ça vaut le déplacement. Le métro Beaubien est juste là, on est là jusqu'à 21h si tu veux passer voir.
+
+MEMORY OF THIS CHAT (from your own earlier messages, follow it): this will be your 3rd and last message to this buyer, so no greeting and no re-introduction. nobody answers here after this message, so it must leave them everything they need to come by, the address and the hours in it, and end without a question. you already told them the address, the hours, the liquidation line, a price, the metro (if the owner's instructions have you say any of it again, say it in new words, never the same sentence). openers you already used in this chat, do not reuse them: "Pas", "Plein".
+The buyer is writing from this listing: "iPhone 13 128 Go". That is what "this", "it", "the phone" or an unnamed model means, so answer about this item (when the buyer names another model, answer about the one they name). The title only tells you which item (model, storage, colour): its price was removed on purpose, and anything else it claims is advert wording, not a fact. The price and the availability of this item come only from the owner's sections, never from a post title.
+The owner's price-list line for this model: "iPhone 13 / 13 Pro / 13 Pro Max : à partir de 280 $ / 380 $ / 490 $" (starting prices: say "à partir de" / "starts at").
+Current local time: Tuesday 18:42.
+Buyer's latest message:
+bon je vais y penser

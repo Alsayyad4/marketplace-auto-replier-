@@ -22,6 +22,8 @@ FILES=(
   popup.js
   options.html
   options.js
+  myads.html
+  myads.js
   managed_schema.json
   icon16.png
   icon48.png
